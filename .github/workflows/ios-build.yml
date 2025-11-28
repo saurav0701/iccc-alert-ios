@@ -43,7 +43,10 @@ jobs:
       run: |
         echo "🏗️  Building universal binary for iOS Simulator (arm64 + x86_64)..."
         
-        # Build the app without custom build dir
+        set -e  # Exit on any error
+        set -o pipefail  # Catch errors in pipes
+        
+        # Build the app
         xcodebuild \
           -project ICCCAlert.xcodeproj \
           -scheme ICCCAlert \
@@ -60,50 +63,40 @@ jobs:
           VALID_ARCHS="arm64 x86_64" \
           2>&1 | tee build_log.txt
         
-        BUILD_EXIT=$?
-        echo ""
-        echo "Build exit code: $BUILD_EXIT"
-        
-        if [ $BUILD_EXIT -ne 0 ]; then
+        # Check if build succeeded
+        if [ ${PIPESTATUS[0]} -ne 0 ]; then
           echo "❌ Build failed"
-          cat build_log.txt | tail -50
+          echo ""
+          echo "📋 Last 100 lines of build log:"
+          tail -100 build_log.txt
           exit 1
         fi
         
+        echo "✅ Build succeeded!"
+        
         echo ""
         echo "📦 Searching for .app bundle..."
-        find ~/Library/Developer/Xcode/DerivedData -name "ICCCAlert.app" -type d 2>/dev/null
+        APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "ICCCAlert.app" -type d | head -1)
         
-        echo ""
-        echo "📁 Finding the build products..."
-        BUILD_DIR=$(find ~/Library/Developer/Xcode/DerivedData -name "Debug-iphonesimulator" -type d | head -1)
-        echo "Build directory: $BUILD_DIR"
-        
-        if [ -n "$BUILD_DIR" ]; then
-          ls -la "$BUILD_DIR"
-        fi
-        
-        BUILD_EXIT=$?
-        echo ""
-        echo "Build exit code: $BUILD_EXIT"
-        
-        if [ $BUILD_EXIT -ne 0 ]; then
-          echo "❌ arm64 build failed"
-          cat build_arm64.log | tail -50
+        if [ -z "$APP_PATH" ]; then
+          echo "❌ .app bundle not found after successful build"
           exit 1
         fi
         
-        echo ""
-        echo "📦 Searching for .app bundle..."
-        find . -name "*.app" -type d 2>/dev/null | grep -v "DerivedData"
+        echo "✅ Found .app at: $APP_PATH"
         
+        # Verify architectures
         echo ""
-        echo "📁 Build directory contents:"
-        ls -la build/ 2>/dev/null || echo "build/ directory not found"
-        
-        echo ""
-        echo "📁 DerivedData Products:"
-        find DerivedData -name "*.app" -type d 2>/dev/null || echo "No .app in DerivedData"
+        echo "🔍 Checking binary architectures..."
+        APP_BINARY="$APP_PATH/ICCCAlert"
+        if [ -f "$APP_BINARY" ]; then
+          file "$APP_BINARY"
+          lipo -info "$APP_BINARY"
+        else
+          echo "❌ Binary not found inside .app bundle"
+          ls -la "$APP_PATH"
+          exit 1
+        fi
     
     - name: Create Appetize-compatible .zip
       run: |
@@ -114,8 +107,6 @@ jobs:
         
         if [ -z "$APP_PATH" ]; then
           echo "❌ .app bundle not found"
-          echo "📁 Searching entire home directory..."
-          find ~ -name "ICCCAlert.app" -type d 2>/dev/null | head -10
           exit 1
         fi
         
@@ -136,9 +127,9 @@ jobs:
         
         # Check architectures
         echo ""
-        echo "🔍 Checking binary architectures..."
+        echo "🔍 Final architecture verification..."
         file "$APP_PATH/$APP_NAME"
-        lipo -info "$APP_PATH/$APP_NAME" || true
+        lipo -info "$APP_PATH/$APP_NAME"
         
         # Create a clean build directory
         mkdir -p ./build
@@ -186,7 +177,7 @@ jobs:
     - name: Build Success
       if: success()
       run: |
-        echo "✅ iOS app built successfully for arm64 simulator!"
+        echo "✅ iOS app built successfully for universal simulator (arm64 + x86_64)!"
         echo "📱 Appetize.io-compatible build ready"
         echo "📥 Download 'ios-simulator-appetize' artifact"
         echo ""
@@ -202,3 +193,11 @@ jobs:
       with:
         name: build-error-log
         path: build_log.txt
+        retention-days: 7
+    
+    - name: Show Compilation Errors
+      if: failure()
+      run: |
+        echo "❌ Build failed. Here are the compilation errors:"
+        echo ""
+        grep -A 5 "error:" build_log.txt || echo "No error details found in log"
