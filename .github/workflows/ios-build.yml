@@ -1,13 +1,14 @@
-name: iOS Build
+name: Build iOS App
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, develop ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
 
 jobs:
-  build:
+  build-ios:
     name: Build iOS App
     runs-on: macos-latest
     
@@ -17,88 +18,47 @@ jobs:
     
     - name: Setup Xcode
       run: |
-        sudo xcode-select -switch /Applications/Xcode_15.1.app
+        sudo xcode-select -switch /Applications/Xcode_15.4.app
         xcodebuild -version
     
     - name: Install xcodeproj gem
+      run: sudo gem install xcodeproj
+    
+    - name: List files
       run: |
-        sudo gem install xcodeproj
+        echo "📁 Project structure:"
+        ls -la
+        find ICCCAlert -type f
     
     - name: Generate Xcode Project
-      run: |
-        cat > generate_project.rb << 'RUBY'
-        require 'xcodeproj'
-        
-        project_name = 'ICCCAlert'
-        project_path = "#{project_name}.xcodeproj"
-        
-        # Create project
-        project = Xcodeproj::Project.new(project_path)
-        
-        # Create target
-        target = project.new_target(:application, project_name, :ios, '14.0')
-        
-        # Create groups
-        main_group = project.main_group.new_group(project_name)
-        
-        # Find and add all Swift files recursively
-        swift_files = Dir.glob("#{project_name}/**/*.swift")
-        
-        puts "📁 Found #{swift_files.count} Swift files:"
-        swift_files.each { |f| puts "  - #{f}" }
-        
-        swift_files.each do |file|
-          file_ref = main_group.new_reference(file)
-          target.add_file_references([file_ref])
-        end
-        
-        # Configure build settings
-        target.build_configurations.each do |config|
-          config.build_settings['PRODUCT_NAME'] = project_name
-          config.build_settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.example.iccc-alert'
-          config.build_settings['SWIFT_VERSION'] = '5.9'
-          config.build_settings['TARGETED_DEVICE_FAMILY'] = '1,2'
-          config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
-          config.build_settings['CODE_SIGN_IDENTITY'] = ''
-          config.build_settings['CODE_SIGNING_REQUIRED'] = 'NO'
-          config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
-          config.build_settings['ENABLE_BITCODE'] = 'NO'
-        end
-        
-        # Save
-        project.save
-        puts "✅ Project created: #{project_path}"
-        RUBY
-        
-        ruby generate_project.rb
+      run: ruby generate_project.rb
     
-    - name: List Project Contents
+    - name: Verify Xcode Project
       run: |
-        echo "📦 Xcode project created:"
+        echo "✅ Xcode project created:"
         ls -la *.xcodeproj
-        echo ""
-        echo "📁 Project structure:"
-        find ICCCAlert -name "*.swift"
+        xcodebuild -list -project ICCCAlert.xcodeproj
     
-    - name: Build for Simulator
+    - name: Build for iOS Simulator
       run: |
         xcodebuild \
           -project ICCCAlert.xcodeproj \
           -scheme ICCCAlert \
-          -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
+          -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' \
           -configuration Debug \
           clean build \
           CODE_SIGN_IDENTITY="" \
           CODE_SIGNING_REQUIRED=NO \
-          CODE_SIGNING_ALLOWED=NO
+          CODE_SIGNING_ALLOWED=NO \
+          | xcpretty || true
     
     - name: Build Success
       if: success()
       run: |
         echo "✅ iOS app built successfully!"
-        echo "📱 Ready for simulator testing"
+        echo "📱 Ready for TestFlight/App Store"
     
-    - name: Upload Build Log
+    - name: Upload Build Logs
       if: failure()
       uses: actions/upload-artifact@v4
       with:
@@ -106,9 +66,3 @@ jobs:
         path: |
           ~/Library/Logs/
           *.log
-
-# ✅ THIS WORKFLOW:
-# 1. Installs xcodeproj gem (Ruby library)
-# 2. Generates complete Xcode project from your Swift files
-# 3. Builds for iOS Simulator
-# 4. No code signing needed for simulator builds

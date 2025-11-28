@@ -3,25 +3,85 @@ import Foundation
 struct Event: Identifiable, Codable {
     let id: String
     let timestamp: Int64
-    let area: String
-    let areaDisplay: String
-    let type: String
-    let typeDisplay: String
-    let location: String
+    let source: String?
+    let area: String?
+    let areaDisplay: String?
+    let type: String?
+    let typeDisplay: String?
+    let groupId: String?
+    let vehicleNumber: String?
+    let vehicleTransporter: String?
+    let data: [String: AnyCodable]
     
-    init(id: String = UUID().uuidString, 
-         timestamp: Int64 = Int64(Date().timeIntervalSince1970),
-         area: String, 
-         areaDisplay: String,
-         type: String,
-         typeDisplay: String,
-         location: String) {
-        self.id = id
-        self.timestamp = timestamp
-        self.area = area
-        self.areaDisplay = areaDisplay
-        self.type = type
-        self.typeDisplay = typeDisplay
-        self.location = location
+    var date: Date {
+        Date(timeIntervalSince1970: TimeInterval(timestamp))
+    }
+    
+    var location: String {
+        if let loc = data["location"] {
+            return loc.stringValue ?? "Unknown Location"
+        }
+        return "Unknown Location"
+    }
+}
+
+// Helper to handle dynamic JSON values
+struct AnyCodable: Codable {
+    let value: Any
+    
+    init(_ value: Any) {
+        self.value = value
+    }
+    
+    var stringValue: String? {
+        return value as? String
+    }
+    
+    var intValue: Int? {
+        return value as? Int
+    }
+    
+    var doubleValue: Double? {
+        return value as? Double
+    }
+    
+    var boolValue: Bool? {
+        return value as? Bool
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        
+        if let bool = try? container.decode(Bool.self) {
+            value = bool
+        } else if let int = try? container.decode(Int.self) {
+            value = int
+        } else if let double = try? container.decode(Double.self) {
+            value = double
+        } else if let string = try? container.decode(String.self) {
+            value = string
+        } else if let array = try? container.decode([AnyCodable].self) {
+            value = array.map { $0.value }
+        } else if let dict = try? container.decode([String: AnyCodable].self) {
+            value = dict.mapValues { $0.value }
+        } else {
+            value = ""
+        }
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        
+        if let bool = value as? Bool {
+            try container.encode(bool)
+        } else if let int = value as? Int {
+            try container.encode(int)
+        } else if let double = value as? Double {
+            try container.encode(double)
+        } else if let string = value as? String {
+            try container.encode(string)
+        } else {
+            try container.encode("")
+        }
     }
 }

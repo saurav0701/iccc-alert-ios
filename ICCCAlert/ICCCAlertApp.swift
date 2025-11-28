@@ -2,33 +2,19 @@ import SwiftUI
 
 @main
 struct ICCCAlertApp: App {
+    @StateObject private var authManager = AuthManager.shared
+    @StateObject private var webSocketManager = WebSocketManager.shared
+    
     var body: some Scene {
         WindowGroup {
-            ContentView()
-        }
-    }
-}
-
-struct ContentView: View {
-    var body: some View {
-        TabView {
-            AlertsView()
-                .tabItem {
-                    Image(systemName: "bell.fill")
-                    Text("Alerts")
-                }
-            
-            ChannelsView()
-                .tabItem {
-                    Image(systemName: "list.bullet")
-                    Text("Channels")
-                }
-            
-            SettingsView()
-                .tabItem {
-                    Image(systemName: "gear")
-                    Text("Settings")
-                }
+            if authManager.isAuthenticated {
+                ContentView()
+                    .onAppear {
+                        webSocketManager.connect()
+                    }
+            } else {
+                LoginView()
+            }
         }
     }
 }
