@@ -65,27 +65,35 @@ jobs:
           exit 1
         fi
         
-        echo "📦 Looking for arm64 .app bundle..."
+        echo ""
+        echo "📦 Searching entire build directory for .app bundle..."
         find build -name "*.app" -type d
+        
+        echo ""
+        echo "📁 Full directory structure:"
+        ls -R build/ | head -100
     
     - name: Create Appetize-compatible .zip
       run: |
-        echo "🔍 Searching for .app bundle..."
+        echo "🔍 Searching for .app bundle in entire build directory..."
         
-        # Find the .app bundle
-        APP_PATH=$(find build/Build/Products/Debug-iphonesimulator -name "ICCCAlert.app" -type d | head -1)
+        # Find the .app bundle anywhere in build directory
+        APP_PATH=$(find build -name "ICCCAlert.app" -type d | head -1)
         
         if [ -z "$APP_PATH" ]; then
-          echo "❌ .app bundle not found"
-          echo "📁 Available paths:"
-          find build -type d -name "*.app"
+          echo "❌ .app bundle not found anywhere"
+          echo "📁 Complete directory listing:"
+          find build -type d
           exit 1
         fi
         
         echo "✅ Found .app at: $APP_PATH"
         
-        # Create zip in the same directory as the .app
+        # Get the directory containing the .app
         APP_DIR=$(dirname "$APP_PATH")
+        echo "📂 App directory: $APP_DIR"
+        
+        # Create zip in the same directory as the .app
         cd "$APP_DIR"
         
         echo "📦 Creating zip archive for Appetize.io..."
@@ -94,6 +102,7 @@ jobs:
         if [ -f "ICCCAlert.zip" ]; then
           ls -lh ICCCAlert.zip
           echo "✅ Appetize-compatible archive created"
+          echo "📍 Full path: $APP_DIR/ICCCAlert.zip"
           
           # Verify it's a valid zip
           unzip -t ICCCAlert.zip
@@ -107,7 +116,7 @@ jobs:
       if: success()
       with:
         name: ios-simulator-appetize
-        path: build/Build/Products/Debug-iphonesimulator/ICCCAlert.zip
+        path: build/**/ICCCAlert.zip
         retention-days: 30
     
     - name: Upload Raw .app Bundle (backup)
@@ -115,7 +124,7 @@ jobs:
       if: success()
       with:
         name: ios-app-bundle-raw
-        path: build/Build/Products/Debug-iphonesimulator/ICCCAlert.app/
+        path: build/**/ICCCAlert.app/
         retention-days: 30
     
     - name: Build Success
