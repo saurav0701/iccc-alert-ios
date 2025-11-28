@@ -39,24 +39,57 @@ jobs:
         ls -la *.xcodeproj
         xcodebuild -list -project ICCCAlert.xcodeproj
     
+    - name: List Available Simulators
+      run: |
+        xcrun simctl list devices available
+    
     - name: Build for iOS Simulator
       run: |
         xcodebuild \
           -project ICCCAlert.xcodeproj \
           -scheme ICCCAlert \
-          -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' \
+          -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
           -configuration Debug \
           clean build \
+          -derivedDataPath build \
           CODE_SIGN_IDENTITY="" \
           CODE_SIGNING_REQUIRED=NO \
-          CODE_SIGNING_ALLOWED=NO \
-          | xcpretty || true
+          CODE_SIGNING_ALLOWED=NO
+    
+    - name: Create .app Archive
+      run: |
+        APP_PATH="build/Build/Products/Debug-iphonesimulator/ICCCAlert.app"
+        if [ -d "$APP_PATH" ]; then
+          cd build/Build/Products/Debug-iphonesimulator/
+          zip -r ICCCAlert.app.zip ICCCAlert.app
+          ls -lh ICCCAlert.app.zip
+        fi
+    
+    - name: Upload Build Artifact
+      uses: actions/upload-artifact@v4
+      if: success()
+      with:
+        name: ios-simulator-build
+        path: build/Build/Products/Debug-iphonesimulator/ICCCAlert.app.zip
+        retention-days: 30
+    
+    - name: Run Unit Tests (Optional)
+      run: |
+        xcodebuild \
+          -project ICCCAlert.xcodeproj \
+          -scheme ICCCAlert \
+          -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
+          test \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=NO || true
     
     - name: Build Success
       if: success()
       run: |
-        echo "✅ iOS app built successfully!"
-        echo "📱 Ready for TestFlight/App Store"
+        echo "✅ iOS app built successfully on simulator!"
+        echo "📱 Build artifact ready for download"
+        echo "📥 Download from GitHub Actions Artifacts"
     
     - name: Upload Build Logs
       if: failure()
