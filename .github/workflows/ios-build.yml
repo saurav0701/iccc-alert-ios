@@ -41,46 +41,69 @@ jobs:
     
     - name: Build for iOS Simulator
       run: |
+        # First, list available destinations
+        echo "🔍 Finding available simulators..."
+        xcodebuild \
+          -project ICCCAlert.xcodeproj \
+          -scheme ICCCAlert \
+          -showdestinations
+        
+        echo ""
+        echo "🏗️  Building for simulator..."
         xcodebuild \
           -project ICCCAlert.xcodeproj \
           -scheme ICCCAlert \
           -destination 'generic/platform=iOS Simulator' \
           -configuration Debug \
-          clean build \
           -derivedDataPath build \
+          clean build \
+          BUILD_LIBRARY_FOR_DISTRIBUTION=NO \
           CODE_SIGN_IDENTITY="" \
           CODE_SIGNING_REQUIRED=NO \
           CODE_SIGNING_ALLOWED=NO \
           2>&1 | tee build.log
         
-        # Check for build errors
-        if grep -i "error:" build.log && ! grep -i "warning:" build.log; then
-          echo "❌ Build failed with errors"
+        BUILD_EXIT=$?
+        echo ""
+        echo "Build exit code: $BUILD_EXIT"
+        
+        # List what was actually built
+        echo ""
+        echo "📦 Looking for .app bundle..."
+        find build -name "*.app" -type d 2>/dev/null || echo "❌ No .app found"
+        find build -name "ICCCAlert*" -type f 2>/dev/null | head -10
+        
+        if [ $BUILD_EXIT -ne 0 ]; then
+          echo "❌ Build failed"
           exit 1
-        else
-          echo "✅ Build completed successfully"
         fi
     
     - name: Create .app Archive
       run: |
-        APP_PATH="build/Build/Products/Debug-iphonesimulator/ICCCAlert.app"
-        BUILD_DIR="build/Build/Products/Debug-iphonesimulator"
+        echo "🔍 Searching for .app bundle..."
         
-        echo "📁 Checking for .app..."
-        if [ -d "$APP_PATH" ]; then
-          echo "✅ Found: $APP_PATH"
-          ls -lha "$APP_PATH" | head -20
-          
-          echo "📦 Creating zip archive..."
-          cd "$BUILD_DIR"
-          zip -r ICCCAlert.app.zip ICCCAlert.app
+        # Try common locations
+        APP_PATH=$(find build -name "ICCCAlert.app" -type d | head -1)
+        
+        if [ -z "$APP_PATH" ]; then
+          echo "❌ .app bundle not found"
+          echo "📁 Build directory contents:"
+          find build -type f -name "*" | head -50
+          exit 1
+        fi
+        
+        echo "✅ Found .app at: $APP_PATH"
+        APP_DIR=$(dirname "$APP_PATH")
+        
+        echo "📦 Creating zip archive..."
+        cd "$APP_DIR"
+        zip -r ICCCAlert.app.zip ICCCAlert.app
+        
+        if [ -f "ICCCAlert.app.zip" ]; then
           ls -lh ICCCAlert.app.zip
           echo "✅ Archive created successfully"
         else
-          echo "❌ .app not found at $APP_PATH"
-          echo "📁 Contents of build directory:"
-          find build -type d -name "*.app" 2>/dev/null || echo "No .app found"
-          find build -type f -name "ICCCAlert*" 2>/dev/null | head -20
+          echo "❌ Failed to create archive"
           exit 1
         fi
     
@@ -89,7 +112,7 @@ jobs:
       if: success()
       with:
         name: ios-simulator-build
-        path: build/Build/Products/Debug-iphonesimulator/ICCCAlert.app.zip
+        path: build/**/ICCCAlert.app.zip
         retention-days: 30
     
     - name: Upload Raw .app Folder
@@ -97,7 +120,7 @@ jobs:
       if: success()
       with:
         name: ios-app-bundle
-        path: build/Build/Products/Debug-iphonesimulator/ICCCAlert.app/
+        path: build/**/ICCCAlert.app/
         retention-days: 30
     
     - name: Run Unit Tests (Optional)
