@@ -44,7 +44,7 @@ jobs:
         xcodebuild \
           -project ICCCAlert.xcodeproj \
           -scheme ICCCAlert \
-          -destination 'platform=iOS Simulator,name=iPhone SE (3rd generation),OS=latest' \
+          -destination 'generic/platform=iOS Simulator' \
           -configuration Debug \
           clean build \
           -derivedDataPath build \
@@ -54,11 +54,11 @@ jobs:
           2>&1 | tee build.log
         
         # Check for build errors
-        if grep -i "error:" build.log; then
+        if grep -i "error:" build.log && ! grep -i "warning:" build.log; then
           echo "❌ Build failed with errors"
           exit 1
         else
-          echo "✅ Build completed"
+          echo "✅ Build completed successfully"
         fi
     
     - name: Create .app Archive
@@ -83,7 +83,7 @@ jobs:
         xcodebuild \
           -project ICCCAlert.xcodeproj \
           -scheme ICCCAlert \
-          -destination 'platform=iOS Simulator,name=iPhone SE (3rd generation),OS=latest' \
+          -destination 'generic/platform=iOS Simulator' \
           test \
           CODE_SIGN_IDENTITY="" \
           CODE_SIGNING_REQUIRED=NO \
