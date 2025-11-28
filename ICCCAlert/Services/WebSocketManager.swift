@@ -1,62 +1,92 @@
 import Foundation
+import Starscream
 
 class WebSocketManager: ObservableObject {
     static let shared = WebSocketManager()
     
-    private var webSocketTask: URLSessionWebSocketTask?
-    private var eventListeners: [(Event) -> Void] = []
+    private var socket: WebSocket?
+    private let wsURL = "ws://202.140.131.90:2222/ws"
     
-    private let wsURL = URL(string: "ws://202.140.131.90:2222/ws")!
+    @Published var isConnected = false
+    @Published var events: [Event] = []
     
-    func connect() {
-        let session = URLSession(configuration: .default)
-        webSocketTask = session.webSocketTask(with: wsURL)
-        webSocketTask?.resume()
-        
-        receiveMessage()
-        print("✅ WebSocket connecting...")
+    private init() {
+        connect()
     }
     
-    private func receiveMessage() {
-        webSocketTask?.receive { [weak self] result in
-            switch result {
-            case .success(let message):
-                switch message {
-                case .string(let text):
-                    self?.handleMessage(text)
-                case .data(let data):
-                    if let text = String(data: data, encoding: .utf8) {
-                        self?.handleMessage(text)
-                    }
-                @unknown default:
-                    break
-                }
-                self?.receiveMessage()
-                
-            case .failure(let error):
-                print("❌ WebSocket error: \(error)")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-                    self?.connect()
-                }
-            }
+    func connect() {
+        guard let url = URL(string: wsURL) else {
+            print("❌ Invalid WebSocket URL")
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 30
+        
+        socket = WebSocket(request: request)
+        socket?.delegate = self
+        socket?.connect()
+        
+        print("📡 Connecting to WebSocket...")
+    }
+    
+    func disconnect() {
+        socket?.disconnect()
+        isConnected = false
+        print("📡 Disconnected from WebSocket")
+    }
+}
+
+extension WebSocketManager: WebSocketDelegate {
+    func didReceive(event: WebSocketEvent, client: WebSocketClient) {
+        switch event {
+        case .connected(let headers):
+            isConnected = true
+            print("✅ WebSocket connected")
+            print("Headers: \(headers)")
+            
+        case .disconnected(let reason, let code):
+            isConnected = false
+            print("❌ WebSocket disconnected: \(reason) with code: \(code)")
+            
+        case .text(let string):
+            print("📩 Received: \(string)")
+            handleMessage(string)
+            
+        case .binary(let data):
+            print("📩 Received binary data: \(data.count) bytes")
+            
+        case .error(let error):
+            print("❌ WebSocket error: \(error?.localizedDescription ?? "unknown")")
+            
+        case .cancelled:
+            isConnected = false
+            print("⚠️ WebSocket cancelled")
+            
+        default:
+            break
         }
     }
     
     private func handleMessage(_ text: String) {
-        guard let data = text.data(using: .utf8),
-              let event = try? JSONDecoder().decode(Event.self, from: data) else {
-            return
-        }
+        guard let data = text.data(using: .utf8) else { return }
         
-        // Notify all listeners
-        eventListeners.forEach { $0(event) }
-    }
-    
-    func addListener(_ listener: @escaping (Event) -> Void) {
-        eventListeners.append(listener)
-    }
-    
-    func removeAllListeners() {
-        eventListeners.removeAll()
+        do {
+            let decoder = JSONDecoder()
+            let event = try decoder.decode(Event.self, from: data)
+            
+            DispatchQueue.main.async {
+                self.events.insert(event, at: 0)
+                
+                // Keep only last 100 events
+                if self.events.count > 100 {
+                    self.events.removeLast()
+                }
+            }
+            
+            print("✅ Decoded event: \(event.typeDisplay ?? "unknown")")
+        } catch {
+            print("❌ Failed to decode event: \(error)")
+        }
     }
 }
