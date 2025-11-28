@@ -1,113 +1,82 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @StateObject private var authManager = AuthManager.shared
-    @StateObject private var webSocketManager = WebSocketManager.shared
-    @StateObject private var subscriptionManager = SubscriptionManager.shared
+    @ObservedObject var authManager: AuthManager
     @State private var showLogoutAlert = false
+    @State private var notificationsEnabled = true
     
     var body: some View {
         NavigationView {
-            List {
+            Form {
                 // Profile Section
-                if let user = authManager.currentUser {
-                    Section(header: Text("Profile")) {
+                Section(header: Text("Profile")) {
+                    if let user = authManager.currentUser {
                         HStack {
-                            Text("Name")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text(user.name)
+                            Image(systemName: "person.circle.fill")
+                                .font(.system(size: 50))
+                                .foregroundColor(.blue)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(user.username)
+                                    .font(.headline)
+                                Text(user.email)
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                            }
                         }
-                        
+                        .padding(.vertical, 8)
+                    }
+                }
+                
+                // Notifications Section
+                Section(header: Text("Notifications")) {
+                    Toggle("Enable Notifications", isOn: $notificationsEnabled)
+                    NavigationLink(destination: Text("Notification preferences coming soon")) {
                         HStack {
-                            Text("Phone")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text("+91 \(user.phone)")
-                        }
-                        
-                        HStack {
-                            Text("Designation")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text(user.designation)
-                        }
-                        
-                        HStack {
-                            Text("Area")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text(user.area)
-                        }
-                        
-                        HStack {
-                            Text("Working For")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text(user.workingFor)
+                            Image(systemName: "bell.badge")
+                            Text("Notification Preferences")
                         }
                     }
                 }
                 
-                // Subscription Info
-                Section(header: Text("Subscriptions")) {
-                    HStack {
-                        Text("Active Channels")
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Text("\(subscriptionManager.subscribedChannels.count)")
-                            .fontWeight(.semibold)
-                    }
-                    
-                    HStack {
-                        Text("Total Events")
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Text("\(webSocketManager.events.count)")
-                            .fontWeight(.semibold)
-                    }
-                }
-                
-                // Connection Status
-                Section(header: Text("Connection")) {
-                    HStack {
-                        Text("Status")
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(webSocketManager.isConnected ? Color.green : Color.red)
-                                .frame(width: 8, height: 8)
-                            Text(webSocketManager.isConnected ? "Connected" : "Disconnected")
-                                .foregroundColor(webSocketManager.isConnected ? .green : .red)
+                // Preferences Section
+                Section(header: Text("Preferences")) {
+                    NavigationLink(destination: Text("Channel subscriptions coming soon")) {
+                        HStack {
+                            Image(systemName: "star")
+                            Text("Manage Subscriptions")
                         }
                     }
-                    
-                    if !webSocketManager.isConnected {
-                        Button("Reconnect") {
-                            webSocketManager.connect()
+                    NavigationLink(destination: Text("Alert filters coming soon")) {
+                        HStack {
+                            Image(systemName: "line.3.horizontal.decrease.circle")
+                            Text("Alert Filters")
                         }
                     }
                 }
                 
-                // App Info
+                // App Info Section
                 Section(header: Text("About")) {
                     HStack {
                         Text("Version")
-                            .foregroundColor(.secondary)
                         Spacer()
                         Text("1.0.0")
-                    }
-                    
-                    HStack {
-                        Text("Platform")
                             .foregroundColor(.secondary)
-                        Spacer()
-                        Text("iOS")
+                    }
+                    NavigationLink(destination: Text("Privacy policy coming soon")) {
+                        HStack {
+                            Image(systemName: "lock.shield")
+                            Text("Privacy Policy")
+                        }
+                    }
+                    NavigationLink(destination: Text("Terms of service coming soon")) {
+                        HStack {
+                            Image(systemName: "doc.text")
+                            Text("Terms of Service")
+                        }
                     }
                 }
                 
-                // Logout
+                // Account Section
                 Section {
                     Button(action: {
                         showLogoutAlert = true
@@ -116,21 +85,21 @@ struct SettingsView: View {
                             Spacer()
                             Text("Logout")
                                 .foregroundColor(.red)
-                                .fontWeight(.semibold)
                             Spacer()
                         }
                     }
                 }
             }
             .navigationTitle("Settings")
-            .alert("Logout", isPresented: $showLogoutAlert) {
-                Button("Cancel", role: .cancel) { }
-                Button("Logout", role: .destructive) {
-                    webSocketManager.disconnect()
-                    authManager.logout()
-                }
-            } message: {
-                Text("Are you sure you want to logout?")
+            .alert(isPresented: $showLogoutAlert) {
+                Alert(
+                    title: Text("Logout"),
+                    message: Text("Are you sure you want to logout?"),
+                    primaryButton: .cancel(),
+                    secondaryButton: .destructive(Text("Logout")) {
+                        authManager.logout()
+                    }
+                )
             }
         }
     }
