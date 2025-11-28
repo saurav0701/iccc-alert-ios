@@ -39,15 +39,15 @@ jobs:
         ls -la *.xcodeproj
         xcodebuild -list -project ICCCAlert.xcodeproj
     
-    - name: Build for iOS Simulator (arm64)
+    - name: Build for iOS Simulator (Universal Binary)
       run: |
-        echo "🏗️  Building for arm64 simulator (Apple Silicon)..."
+        echo "🏗️  Building universal binary for iOS Simulator (arm64 + x86_64)..."
         
-        # Build the app
+        # Build the app - using generic iOS Simulator destination
         xcodebuild \
           -project ICCCAlert.xcodeproj \
           -scheme ICCCAlert \
-          -destination 'platform=iOS Simulator,name=iPhone 14 Pro,OS=latest' \
+          -destination 'generic/platform=iOS Simulator' \
           -configuration Debug \
           -sdk iphonesimulator \
           -derivedDataPath ./DerivedData \
@@ -56,7 +56,9 @@ jobs:
           CODE_SIGN_IDENTITY="" \
           CODE_SIGNING_REQUIRED=NO \
           CODE_SIGNING_ALLOWED=NO \
-          ONLY_ACTIVE_ARCH=YES \
+          ONLY_ACTIVE_ARCH=NO \
+          ARCHS="arm64 x86_64" \
+          VALID_ARCHS="arm64 x86_64" \
           CONFIGURATION_BUILD_DIR=./build \
           2>&1 | tee build_arm64.log
         
