@@ -11,4 +11,4 @@ class AlertsViewModel: ObservableObject {
             .receive(on: DispatchQueue.main)
             .assign(to: &$events)
     }
-}
+}   
