@@ -64,10 +64,24 @@ jobs:
     - name: Create .app Archive
       run: |
         APP_PATH="build/Build/Products/Debug-iphonesimulator/ICCCAlert.app"
+        BUILD_DIR="build/Build/Products/Debug-iphonesimulator"
+        
+        echo "📁 Checking for .app..."
         if [ -d "$APP_PATH" ]; then
-          cd build/Build/Products/Debug-iphonesimulator/
+          echo "✅ Found: $APP_PATH"
+          ls -lha "$APP_PATH" | head -20
+          
+          echo "📦 Creating zip archive..."
+          cd "$BUILD_DIR"
           zip -r ICCCAlert.app.zip ICCCAlert.app
           ls -lh ICCCAlert.app.zip
+          echo "✅ Archive created successfully"
+        else
+          echo "❌ .app not found at $APP_PATH"
+          echo "📁 Contents of build directory:"
+          find build -type d -name "*.app" 2>/dev/null || echo "No .app found"
+          find build -type f -name "ICCCAlert*" 2>/dev/null | head -20
+          exit 1
         fi
     
     - name: Upload Build Artifact
@@ -76,6 +90,14 @@ jobs:
       with:
         name: ios-simulator-build
         path: build/Build/Products/Debug-iphonesimulator/ICCCAlert.app.zip
+        retention-days: 30
+    
+    - name: Upload Raw .app Folder
+      uses: actions/upload-artifact@v4
+      if: success()
+      with:
+        name: ios-app-bundle
+        path: build/Build/Products/Debug-iphonesimulator/ICCCAlert.app/
         retention-days: 30
     
     - name: Run Unit Tests (Optional)
