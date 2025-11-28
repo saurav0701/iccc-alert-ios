@@ -39,10 +39,6 @@ jobs:
         ls -la *.xcodeproj
         xcodebuild -list -project ICCCAlert.xcodeproj
     
-    - name: List Available Simulators
-      run: |
-        xcrun simctl list devices available
-    
     - name: Build for iOS Simulator
       run: |
         xcodebuild \
