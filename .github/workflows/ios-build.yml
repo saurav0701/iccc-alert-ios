@@ -42,12 +42,15 @@ jobs:
     - name: Build for iOS Simulator (arm64)
       run: |
         echo "🏗️  Building for arm64 simulator (Apple Silicon)..."
+        
+        # Build the app
         xcodebuild \
           -project ICCCAlert.xcodeproj \
           -scheme ICCCAlert \
           -destination 'platform=iOS Simulator,name=iPhone 14 Pro,OS=latest' \
           -configuration Debug \
-          -derivedDataPath build \
+          -sdk iphonesimulator \
+          -derivedDataPath ./DerivedData \
           -arch arm64 \
           clean build \
           BUILD_LIBRARY_FOR_DISTRIBUTION=NO \
@@ -55,57 +58,101 @@ jobs:
           CODE_SIGNING_REQUIRED=NO \
           CODE_SIGNING_ALLOWED=NO \
           ONLY_ACTIVE_ARCH=YES \
+          CONFIGURATION_BUILD_DIR=./build \
           2>&1 | tee build_arm64.log
         
         BUILD_EXIT=$?
+        echo ""
         echo "Build exit code: $BUILD_EXIT"
         
         if [ $BUILD_EXIT -ne 0 ]; then
           echo "❌ arm64 build failed"
+          cat build_arm64.log | tail -50
           exit 1
         fi
         
         echo ""
-        echo "📦 Searching entire build directory for .app bundle..."
-        find build -name "*.app" -type d
+        echo "📦 Searching for .app bundle..."
+        find . -name "*.app" -type d 2>/dev/null | grep -v "DerivedData"
         
         echo ""
-        echo "📁 Full directory structure:"
-        ls -R build/ | head -100
+        echo "📁 Build directory contents:"
+        ls -la build/ 2>/dev/null || echo "build/ directory not found"
+        
+        echo ""
+        echo "📁 DerivedData Products:"
+        find DerivedData -name "*.app" -type d 2>/dev/null || echo "No .app in DerivedData"
     
     - name: Create Appetize-compatible .zip
       run: |
-        echo "🔍 Searching for .app bundle in entire build directory..."
+        echo "🔍 Searching for .app bundle..."
         
-        # Find the .app bundle anywhere in build directory
-        APP_PATH=$(find build -name "ICCCAlert.app" -type d | head -1)
+        # Try multiple possible locations
+        APP_PATH=""
+        
+        # Check explicit build directory first
+        if [ -d "build/ICCCAlert.app" ]; then
+          APP_PATH="build/ICCCAlert.app"
+        fi
+        
+        # Check DerivedData
+        if [ -z "$APP_PATH" ]; then
+          APP_PATH=$(find DerivedData -name "ICCCAlert.app" -type d 2>/dev/null | head -1)
+        fi
+        
+        # Check current directory
+        if [ -z "$APP_PATH" ]; then
+          APP_PATH=$(find . -name "ICCCAlert.app" -type d -not -path "*/DerivedData/*" 2>/dev/null | head -1)
+        fi
         
         if [ -z "$APP_PATH" ]; then
-          echo "❌ .app bundle not found anywhere"
-          echo "📁 Complete directory listing:"
-          find build -type d
+          echo "❌ .app bundle not found in any expected location"
+          echo ""
+          echo "📁 Searching entire workspace:"
+          find . -name "*.app" -type d 2>/dev/null || echo "No .app found anywhere"
+          echo ""
+          echo "📁 DerivedData structure:"
+          ls -R DerivedData/ 2>/dev/null | head -100 || echo "DerivedData not accessible"
+          echo ""
+          echo "📁 Current directory:"
+          ls -la
           exit 1
         fi
         
         echo "✅ Found .app at: $APP_PATH"
         
+        # Verify it's a valid .app bundle
+        if [ ! -d "$APP_PATH" ]; then
+          echo "❌ Found path is not a directory"
+          exit 1
+        fi
+        
+        echo ""
+        echo "📋 .app bundle contents:"
+        ls -la "$APP_PATH"
+        
         # Get the directory containing the .app
         APP_DIR=$(dirname "$APP_PATH")
-        echo "📂 App directory: $APP_DIR"
+        APP_NAME=$(basename "$APP_PATH")
         
-        # Create zip in the same directory as the .app
+        echo "📂 App directory: $APP_DIR"
+        echo "📱 App name: $APP_NAME"
+        
+        # Create zip from the parent directory
         cd "$APP_DIR"
         
+        echo ""
         echo "📦 Creating zip archive for Appetize.io..."
-        zip -r -y ICCCAlert.zip ICCCAlert.app
+        zip -r -y ICCCAlert.zip "$APP_NAME"
         
         if [ -f "ICCCAlert.zip" ]; then
+          echo "✅ Zip created"
           ls -lh ICCCAlert.zip
-          echo "✅ Appetize-compatible archive created"
           echo "📍 Full path: $APP_DIR/ICCCAlert.zip"
           
-          # Verify it's a valid zip
-          unzip -t ICCCAlert.zip
+          echo ""
+          echo "🔍 Verifying zip contents..."
+          unzip -l ICCCAlert.zip | head -20
         else
           echo "❌ Failed to create archive"
           exit 1
@@ -116,7 +163,10 @@ jobs:
       if: success()
       with:
         name: ios-simulator-appetize
-        path: build/**/ICCCAlert.zip
+        path: |
+          build/ICCCAlert.zip
+          DerivedData/**/ICCCAlert.zip
+          **/ICCCAlert.zip
         retention-days: 30
     
     - name: Upload Raw .app Bundle (backup)
@@ -124,7 +174,10 @@ jobs:
       if: success()
       with:
         name: ios-app-bundle-raw
-        path: build/**/ICCCAlert.app/
+        path: |
+          build/ICCCAlert.app/
+          DerivedData/**/ICCCAlert.app/
+          **/ICCCAlert.app/
         retention-days: 30
     
     - name: Build Success
