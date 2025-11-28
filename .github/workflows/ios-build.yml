@@ -43,14 +43,13 @@ jobs:
       run: |
         echo "🏗️  Building universal binary for iOS Simulator (arm64 + x86_64)..."
         
-        # Build the app - using generic iOS Simulator destination
+        # Build the app without custom build dir
         xcodebuild \
           -project ICCCAlert.xcodeproj \
           -scheme ICCCAlert \
           -destination 'generic/platform=iOS Simulator' \
           -configuration Debug \
           -sdk iphonesimulator \
-          -derivedDataPath ./DerivedData \
           clean build \
           BUILD_LIBRARY_FOR_DISTRIBUTION=NO \
           CODE_SIGN_IDENTITY="" \
@@ -59,8 +58,30 @@ jobs:
           ONLY_ACTIVE_ARCH=NO \
           ARCHS="arm64 x86_64" \
           VALID_ARCHS="arm64 x86_64" \
-          CONFIGURATION_BUILD_DIR=./build \
-          2>&1 | tee build_arm64.log
+          2>&1 | tee build_log.txt
+        
+        BUILD_EXIT=$?
+        echo ""
+        echo "Build exit code: $BUILD_EXIT"
+        
+        if [ $BUILD_EXIT -ne 0 ]; then
+          echo "❌ Build failed"
+          cat build_log.txt | tail -50
+          exit 1
+        fi
+        
+        echo ""
+        echo "📦 Searching for .app bundle..."
+        find ~/Library/Developer/Xcode/DerivedData -name "ICCCAlert.app" -type d 2>/dev/null
+        
+        echo ""
+        echo "📁 Finding the build products..."
+        BUILD_DIR=$(find ~/Library/Developer/Xcode/DerivedData -name "Debug-iphonesimulator" -type d | head -1)
+        echo "Build directory: $BUILD_DIR"
+        
+        if [ -n "$BUILD_DIR" ]; then
+          ls -la "$BUILD_DIR"
+        fi
         
         BUILD_EXIT=$?
         echo ""
@@ -86,74 +107,61 @@ jobs:
     
     - name: Create Appetize-compatible .zip
       run: |
-        echo "🔍 Searching for .app bundle..."
+        echo "🔍 Locating built .app bundle..."
         
-        # Try multiple possible locations
-        APP_PATH=""
-        
-        # Check explicit build directory first
-        if [ -d "build/ICCCAlert.app" ]; then
-          APP_PATH="build/ICCCAlert.app"
-        fi
-        
-        # Check DerivedData
-        if [ -z "$APP_PATH" ]; then
-          APP_PATH=$(find DerivedData -name "ICCCAlert.app" -type d 2>/dev/null | head -1)
-        fi
-        
-        # Check current directory
-        if [ -z "$APP_PATH" ]; then
-          APP_PATH=$(find . -name "ICCCAlert.app" -type d -not -path "*/DerivedData/*" 2>/dev/null | head -1)
-        fi
+        # Find the .app in DerivedData
+        APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "ICCCAlert.app" -type d | head -1)
         
         if [ -z "$APP_PATH" ]; then
-          echo "❌ .app bundle not found in any expected location"
-          echo ""
-          echo "📁 Searching entire workspace:"
-          find . -name "*.app" -type d 2>/dev/null || echo "No .app found anywhere"
-          echo ""
-          echo "📁 DerivedData structure:"
-          ls -R DerivedData/ 2>/dev/null | head -100 || echo "DerivedData not accessible"
-          echo ""
-          echo "📁 Current directory:"
-          ls -la
+          echo "❌ .app bundle not found"
+          echo "📁 Searching entire home directory..."
+          find ~ -name "ICCCAlert.app" -type d 2>/dev/null | head -10
           exit 1
         fi
         
         echo "✅ Found .app at: $APP_PATH"
         
-        # Verify it's a valid .app bundle
-        if [ ! -d "$APP_PATH" ]; then
-          echo "❌ Found path is not a directory"
+        # Check if the app has an executable
+        APP_NAME="ICCCAlert"
+        if [ ! -f "$APP_PATH/$APP_NAME" ]; then
+          echo "❌ Executable not found inside .app bundle"
+          echo "📋 Contents of .app:"
+          ls -la "$APP_PATH"
           exit 1
         fi
         
-        echo ""
+        echo "✅ Executable verified"
         echo "📋 .app bundle contents:"
-        ls -la "$APP_PATH"
+        ls -lah "$APP_PATH"
         
-        # Get the directory containing the .app
-        APP_DIR=$(dirname "$APP_PATH")
-        APP_NAME=$(basename "$APP_PATH")
+        # Check architectures
+        echo ""
+        echo "🔍 Checking binary architectures..."
+        file "$APP_PATH/$APP_NAME"
+        lipo -info "$APP_PATH/$APP_NAME" || true
         
-        echo "📂 App directory: $APP_DIR"
-        echo "📱 App name: $APP_NAME"
+        # Create a clean build directory
+        mkdir -p ./build
         
-        # Create zip from the parent directory
-        cd "$APP_DIR"
+        # Copy .app to build directory
+        echo ""
+        echo "📦 Copying .app to build directory..."
+        cp -R "$APP_PATH" ./build/
+        
+        # Create zip from build directory
+        cd ./build
         
         echo ""
         echo "📦 Creating zip archive for Appetize.io..."
-        zip -r -y ICCCAlert.zip "$APP_NAME"
+        zip -r -y ICCCAlert.zip ICCCAlert.app
         
         if [ -f "ICCCAlert.zip" ]; then
-          echo "✅ Zip created"
+          echo "✅ Zip created successfully"
           ls -lh ICCCAlert.zip
-          echo "📍 Full path: $APP_DIR/ICCCAlert.zip"
           
           echo ""
           echo "🔍 Verifying zip contents..."
-          unzip -l ICCCAlert.zip | head -20
+          unzip -l ICCCAlert.zip | head -30
         else
           echo "❌ Failed to create archive"
           exit 1
@@ -164,10 +172,7 @@ jobs:
       if: success()
       with:
         name: ios-simulator-appetize
-        path: |
-          build/ICCCAlert.zip
-          DerivedData/**/ICCCAlert.zip
-          **/ICCCAlert.zip
+        path: build/ICCCAlert.zip
         retention-days: 30
     
     - name: Upload Raw .app Bundle (backup)
@@ -175,10 +180,7 @@ jobs:
       if: success()
       with:
         name: ios-app-bundle-raw
-        path: |
-          build/ICCCAlert.app/
-          DerivedData/**/ICCCAlert.app/
-          **/ICCCAlert.app/
+        path: build/ICCCAlert.app/
         retention-days: 30
     
     - name: Build Success
@@ -199,4 +201,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: build-error-log
-        path: build_arm64.log
+        path: build_log.txt
