@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @ObservedObject var authManager: AuthManager
+    let authManager: AuthManager
     @State private var showLogoutAlert = false
     @State private var notificationsEnabled = true
     
@@ -16,14 +16,35 @@ struct SettingsView: View {
                                 .font(.system(size: 50))
                                 .foregroundColor(.blue)
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(user.username)
+                                Text(user.name)
                                     .font(.headline)
-                                Text(user.email)
+                                Text(user.phone)
                                     .font(.subheadline)
                                     .foregroundColor(.secondary)
                             }
                         }
                         .padding(.vertical, 8)
+                        
+                        HStack {
+                            Text("Designation")
+                            Spacer()
+                            Text(user.designation)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        HStack {
+                            Text("Area")
+                            Spacer()
+                            Text(user.area)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        HStack {
+                            Text("Working For")
+                            Spacer()
+                            Text(user.workingFor)
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
                 

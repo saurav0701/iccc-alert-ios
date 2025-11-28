@@ -75,7 +75,11 @@ struct ChannelsView: View {
                         Button("Retry") {
                             viewModel.fetchChannels()
                         }
-                        .buttonStyle(.borderedProminent)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {

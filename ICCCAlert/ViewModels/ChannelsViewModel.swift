@@ -9,6 +9,7 @@ class ChannelsViewModel: ObservableObject {
     
     let authManager: AuthManager
     private var cancellables = Set<AnyCancellable>()
+    private let baseURL = "https://iccc-backend.onrender.com"
     
     init(authManager: AuthManager) {
         self.authManager = authManager
@@ -23,7 +24,13 @@ class ChannelsViewModel: ObservableObject {
         isLoading = true
         error = nil
         
-        var request = URLRequest(url: URL(string: "https://iccc-backend.onrender.com/api/channels")!)
+        guard let url = URL(string: "\(baseURL)/api/channels") else {
+            error = "Invalid URL"
+            isLoading = false
+            return
+        }
+        
+        var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         
