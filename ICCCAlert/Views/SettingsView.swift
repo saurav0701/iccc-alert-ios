@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct SettingsView: View {
-    let authManager: AuthManager
+    @EnvironmentObject var authManager: AuthManager
     @State private var showLogoutAlert = false
     @State private var notificationsEnabled = true
     
@@ -40,9 +40,9 @@ struct SettingsView: View {
                         }
                         
                         HStack {
-                            Text("Working For")
+                            Text("Organisation")
                             Spacer()
-                            Text(user.workingFor)
+                            Text(user.organisation)
                                 .foregroundColor(.secondary)
                         }
                     }
@@ -123,5 +123,12 @@ struct SettingsView: View {
                 )
             }
         }
+    }
+}
+
+struct SettingsView_Previews: PreviewProvider {
+    static var previews: some View {
+        SettingsView()
+            .environmentObject(AuthManager.shared)
     }
 }
