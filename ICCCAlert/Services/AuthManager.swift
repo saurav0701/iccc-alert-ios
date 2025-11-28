@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 class AuthManager: ObservableObject {
     static let shared = AuthManager()
@@ -6,7 +7,11 @@ class AuthManager: ObservableObject {
     @Published var isAuthenticated = false
     @Published var currentUser: User?
     
-    private let baseURL = "http://202.140.131.90:8890"
+    private let baseURL = "https://iccc-backend.onrender.com"
+    
+    var token: String? {
+        return UserDefaults.standard.string(forKey: "auth_token")
+    }
     
     private init() {
         checkAuthStatus()

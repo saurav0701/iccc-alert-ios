@@ -2,12 +2,17 @@ import SwiftUI
 
 @main
 struct ICCCAlertApp: App {
-    @StateObject private var authManager = AuthManager()
+    @StateObject private var authManager = AuthManager.shared
     
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environmentObject(authManager)
+            if authManager.isAuthenticated {
+                ContentView()
+                    .environmentObject(authManager)
+            } else {
+                LoginView()
+                    .environmentObject(authManager)
+            }
         }
     }
 }

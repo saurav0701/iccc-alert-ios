@@ -1,9 +1,10 @@
 import Foundation
-import UIKit  // ← ADD THIS LINE
+import UIKit
 
 class WebSocketManager: ObservableObject {
     @Published var isConnected = false
     @Published var connectionError: String?
+    @Published var events: [Event] = []
     
     private var webSocketTask: URLSessionWebSocketTask?
     private var session: URLSession?
@@ -71,9 +72,18 @@ class WebSocketManager: ObservableObject {
     private func handleMessage(_ message: URLSessionWebSocketTask.Message) {
         switch message {
         case .string(let text):
-            print("WebSocket received: \(text)")
+            if let data = text.data(using: .utf8),
+               let event = try? JSONDecoder().decode(Event.self, from: data) {
+                DispatchQueue.main.async {
+                    self.events.insert(event, at: 0)
+                }
+            }
         case .data(let data):
-            print("WebSocket received data: \(data)")
+            if let event = try? JSONDecoder().decode(Event.self, from: data) {
+                DispatchQueue.main.async {
+                    self.events.insert(event, at: 0)
+                }
+            }
         @unknown default:
             break
         }

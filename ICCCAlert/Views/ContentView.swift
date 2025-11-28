@@ -1,19 +1,21 @@
 import SwiftUI
 
 struct ContentView: View {
+    @EnvironmentObject var authManager: AuthManager
+    
     var body: some View {
         TabView {
-            AlertsView()
+            AlertsView(authManager: authManager)
                 .tabItem {
                     Label("Alerts", systemImage: "bell.fill")
                 }
             
-            ChannelsView()
+            ChannelsView(authManager: authManager)
                 .tabItem {
                     Label("Channels", systemImage: "list.bullet")
                 }
             
-            SettingsView()
+            SettingsView(authManager: authManager)
                 .tabItem {
                     Label("Settings", systemImage: "gear")
                 }

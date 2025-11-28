@@ -12,14 +12,41 @@ struct Event: Identifiable, Codable {
     let vehicleNumber: String?
     let vehicleTransporter: String?
     let data: [String: AnyCodable]
+    var isRead: Bool = false
+    
+    // Computed properties for compatibility with views
+    var title: String {
+        return typeDisplay ?? type ?? "Alert"
+    }
+    
+    var message: String {
+        if let desc = data["description"]?.stringValue {
+            return desc
+        }
+        return location
+    }
+    
+    var channelName: String? {
+        return areaDisplay ?? area
+    }
+    
+    var priority: String? {
+        return data["priority"]?.stringValue ?? "normal"
+    }
+    
+    var createdAt: String {
+        let date = Date(timeIntervalSince1970: TimeInterval(timestamp))
+        let formatter = ISO8601DateFormatter()
+        return formatter.string(from: date)
+    }
     
     var date: Date {
         Date(timeIntervalSince1970: TimeInterval(timestamp))
     }
     
     var location: String {
-        if let loc = data["location"] {
-            return loc.stringValue ?? "Unknown Location"
+        if let loc = data["location"]?.stringValue {
+            return loc
         }
         return "Unknown Location"
     }

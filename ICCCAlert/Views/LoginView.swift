@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct LoginView: View {
-    @StateObject private var authManager = AuthManager.shared
+    @EnvironmentObject var authManager: AuthManager
     @State private var phone = ""
     @State private var otp = ""
     @State private var otpSent = false
