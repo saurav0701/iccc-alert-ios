@@ -22,14 +22,30 @@ utils_group = main_group.new_group('Utils')
 
 puts "📁 Adding Swift files..."
 
+# Track filenames to detect duplicates
+seen_filenames = {}
+
 # Add all Swift files
 swift_files = Dir.glob("#{project_name}/**/*.swift")
-puts "Found #{swift_files.count} Swift files:"
-swift_files.each { |f| puts "  - #{f}" }
+puts "Found #{swift_files.count} Swift files"
 
 swift_files.each do |file|
+  filename = File.basename(file)
   relative_path = file.sub("#{project_name}/", "")
   group_name = File.dirname(relative_path)
+  
+  # Check for duplicates - prefer ViewModels over Models for ViewModels
+  if seen_filenames[filename]
+    puts "⚠️  Duplicate file detected: #{filename}"
+    puts "   Already added: #{seen_filenames[filename]}"
+    puts "   Skipping: #{file}"
+    
+    # Skip if it's in Models and we already have it in ViewModels
+    if group_name == 'Models' && seen_filenames[filename].include?('ViewModels')
+      puts "   → Keeping ViewModels version"
+      next
+    end
+  end
   
   group = case group_name
   when 'Models' then models_group
@@ -42,6 +58,8 @@ swift_files.each do |file|
   
   file_ref = group.new_reference(file)
   target.add_file_references([file_ref])
+  seen_filenames[filename] = file
+  puts "  ✓ Added: #{file}"
 end
 
 # Add Info.plist
@@ -52,7 +70,10 @@ assets_path = "#{project_name}/Assets.xcassets"
 if Dir.exist?(assets_path)
   assets = main_group.new_reference(assets_path)
   target.resources_build_phase.add_file_reference(assets)
+  puts "  ✓ Added: Assets.xcassets"
 end
+
+puts "\n⚙️  Configuring build settings..."
 
 # Configure build settings
 target.build_configurations.each do |config|
@@ -74,4 +95,9 @@ end
 
 # Save project
 project.save
-puts "✅ Xcode project generated: #{project_path}"
+puts "\n✅ Xcode project generated: #{project_path}"
+puts "📋 Summary:"
+puts "   - Total Swift files: #{seen_filenames.count}"
+puts "   - Target: #{project_name}"
+puts "   - Bundle ID: com.iccc.alert"
+puts "   - Deployment Target: iOS 14.0"
