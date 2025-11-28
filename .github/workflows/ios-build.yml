@@ -51,7 +51,6 @@ jobs:
           -configuration Debug \
           -sdk iphonesimulator \
           -derivedDataPath ./DerivedData \
-          -arch arm64 \
           clean build \
           BUILD_LIBRARY_FOR_DISTRIBUTION=NO \
           CODE_SIGN_IDENTITY="" \
