@@ -3,8 +3,12 @@ import SwiftUI
 struct ChannelsView: View {
     var body: some View {
         NavigationView {
-            Text("Channels View - Coming Soon")
-                .navigationTitle("Channels")
+            List {
+                Text("Sijua - Crowd Detection")
+                Text("Kusunda - Intrusion Detection")
+                Text("Barora - Vehicle Detection")
+            }
+            .navigationTitle("Channels")
         }
     }
 }

@@ -4,22 +4,31 @@ import SwiftUI
 struct ICCCAlertApp: App {
     var body: some Scene {
         WindowGroup {
-            TabView {
-                AlertsView()
-                    .tabItem {
-                        Label("Alerts", systemImage: "bell.fill")
-                    }
-                
-                Text("Channels")
-                    .tabItem {
-                        Label("Channels", systemImage: "list.bullet")
-                    }
-                
-                SettingsView()
-                    .tabItem {
-                        Label("Settings", systemImage: "gear")
-                    }
-            }
+            ContentView()
+        }
+    }
+}
+
+struct ContentView: View {
+    var body: some View {
+        TabView {
+            AlertsView()
+                .tabItem {
+                    Image(systemName: "bell.fill")
+                    Text("Alerts")
+                }
+            
+            ChannelsView()
+                .tabItem {
+                    Image(systemName: "list.bullet")
+                    Text("Channels")
+                }
+            
+            SettingsView()
+                .tabItem {
+                    Image(systemName: "gear")
+                    Text("Settings")
+                }
         }
     }
 }
