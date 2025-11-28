@@ -1,92 +1,170 @@
 import SwiftUI
 
 struct ChannelsView: View {
-    @StateObject private var viewModel = ChannelsViewModel()
-    @StateObject private var subscriptionManager = SubscriptionManager.shared
+    @StateObject private var viewModel: ChannelsViewModel
     @State private var searchText = ""
+    @State private var selectedCategory: String? = nil
+    
+    let authManager: AuthManager
+    
+    init(authManager: AuthManager) {
+        self.authManager = authManager
+        _viewModel = StateObject(wrappedValue: ChannelsViewModel(authManager: authManager))
+    }
     
     var filteredChannels: [Channel] {
-        if searchText.isEmpty {
-            return viewModel.allChannels
-        } else {
-            return viewModel.allChannels.filter {
-                $0.description.localizedCaseInsensitiveContains(searchText) ||
-                $0.areaDisplay.localizedCaseInsensitiveContains(searchText) ||
-                $0.eventTypeDisplay.localizedCaseInsensitiveContains(searchText)
-            }
+        var channels = viewModel.channels
+        
+        if let category = selectedCategory {
+            channels = channels.filter { $0.category == category }
         }
+        
+        if !searchText.isEmpty {
+            channels = channels.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+        }
+        
+        return channels
     }
     
     var body: some View {
         NavigationView {
-            List {
-                // Subscribed Channels Section
-                if !subscriptionManager.subscribedChannels.isEmpty {
-                    Section(header: Text("Subscribed (\(subscriptionManager.subscribedChannels.count))")) {
-                        ForEach(subscriptionManager.subscribedChannels) { channel in
-                            ChannelRowView(
-                                channel: channel,
-                                isSubscribed: true,
-                                onToggle: {
-                                    subscriptionManager.unsubscribe(from: channel.id)
-                                }
-                            )
+            VStack(spacing: 0) {
+                // Custom Search Bar (iOS 14 compatible)
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.gray)
+                    TextField("Search channels", text: $searchText)
+                        .textFieldStyle(PlainTextFieldStyle())
+                    if !searchText.isEmpty {
+                        Button(action: { searchText = "" }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.gray)
                         }
                     }
                 }
+                .padding(8)
+                .background(Color(.systemGray6))
+                .cornerRadius(10)
+                .padding()
                 
-                // All Channels Section
-                Section(header: Text("All Channels (\(filteredChannels.count))")) {
-                    ForEach(filteredChannels) { channel in
-                        let isSubscribed = subscriptionManager.isSubscribed(channelId: channel.id)
-                        ChannelRowView(
-                            channel: channel,
-                            isSubscribed: isSubscribed,
-                            onToggle: {
-                                if isSubscribed {
-                                    subscriptionManager.unsubscribe(from: channel.id)
-                                } else {
-                                    subscriptionManager.subscribe(to: channel)
-                                }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        FilterChip(title: "All", isSelected: selectedCategory == nil) {
+                            selectedCategory = nil
+                        }
+                        ForEach(viewModel.categories, id: \.self) { category in
+                            FilterChip(title: category, isSelected: selectedCategory == category) {
+                                selectedCategory = category
                             }
-                        )
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+                .padding(.bottom)
+                
+                if viewModel.isLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let error = viewModel.error {
+                    VStack(spacing: 16) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 50))
+                            .foregroundColor(.orange)
+                        Text(error)
+                            .multilineTextAlignment(.center)
+                        Button("Retry") {
+                            viewModel.fetchChannels()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    List(filteredChannels) { channel in
+                        NavigationLink(
+                            destination: ChannelDetailView(
+                                channel: channel,
+                                authManager: authManager
+                            )
+                        ) {
+                            ChannelRowView(channel: channel)
+                        }
                     }
                 }
             }
             .navigationTitle("Channels")
-            .searchable(text: $searchText, prompt: "Search channels")
+            .navigationBarTitleDisplayMode(.large)
+        }
+        .onAppear {
+            viewModel.fetchChannels()
+        }
+    }
+}
+
+struct FilterChip: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.subheadline)
+                .fontWeight(isSelected ? .semibold : .regular)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(isSelected ? Color.blue : Color(.systemGray6))
+                .foregroundColor(isSelected ? .white : .primary)
+                .cornerRadius(20)
         }
     }
 }
 
 struct ChannelRowView: View {
     let channel: Channel
-    let isSubscribed: Bool
-    let onToggle: () -> Void
     
     var body: some View {
-        HStack {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: categoryIcon(for: channel.category))
+                .font(.system(size: 24))
+                .foregroundColor(.blue)
+                .frame(width: 40, height: 40)
+                .background(Color.blue.opacity(0.1))
+                .cornerRadius(8)
+            
             VStack(alignment: .leading, spacing: 4) {
-                Text(channel.areaDisplay)
+                Text(channel.name)
                     .font(.headline)
-                
-                Text(channel.eventTypeDisplay)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
+                if let description = channel.description {
+                    Text(description)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                }
+                Text(channel.category)
+                    .font(.caption)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.blue.opacity(0.1))
+                    .foregroundColor(.blue)
+                    .cornerRadius(4)
             }
-            
             Spacer()
-            
-            Button(action: onToggle) {
-                Image(systemName: isSubscribed ? "checkmark.circle.fill" : "circle")
-                    .font(.title2)
-                    .foregroundColor(isSubscribed ? .green : .gray)
-            }
-            .buttonStyle(BorderlessButtonStyle())
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundColor(.gray)
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            onToggle()
+        .padding(.vertical, 8)
+    }
+    
+    private func categoryIcon(for category: String) -> String {
+        switch category.lowercased() {
+        case "technology": return "laptopcomputer"
+        case "sports": return "sportscourt"
+        case "news": return "newspaper"
+        case "entertainment": return "tv"
+        case "business": return "briefcase"
+        case "health": return "heart"
+        default: return "bell"
         }
     }
 }

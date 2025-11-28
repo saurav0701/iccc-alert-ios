@@ -1,104 +1,205 @@
 import SwiftUI
 
 struct AlertsView: View {
-    @StateObject private var viewModel = AlertsViewModel()
-    @StateObject private var webSocketManager = WebSocketManager.shared
+    @StateObject private var viewModel: AlertsViewModel
+    @StateObject private var webSocketManager: WebSocketManager
+    @State private var selectedFilter: AlertFilter = .all
+    
+    init(authManager: AuthManager) {
+        _viewModel = StateObject(wrappedValue: AlertsViewModel(authManager: authManager))
+        _webSocketManager = StateObject(wrappedValue: WebSocketManager(authManager: authManager))
+    }
+    
+    var filteredAlerts: [Event] {
+        switch selectedFilter {
+        case .all:
+            return viewModel.alerts
+        case .unread:
+            return viewModel.alerts.filter { !$0.isRead }
+        case .important:
+            return viewModel.alerts.filter { $0.priority == "high" }
+        }
+    }
     
     var body: some View {
         NavigationView {
-            Group {
-                if viewModel.events.isEmpty {
-                    VStack(spacing: 20) {
+            VStack(spacing: 0) {
+                // Filter Picker
+                Picker("Filter", selection: $selectedFilter) {
+                    Text("All").tag(AlertFilter.all)
+                    Text("Unread").tag(AlertFilter.unread)
+                    Text("Important").tag(AlertFilter.important)
+                }
+                .pickerStyle(SegmentedPickerStyle())
+                .padding()
+                
+                // Connection Status
+                if !webSocketManager.isConnected {
+                    HStack {
+                        Image(systemName: "wifi.slash")
+                        Text("Disconnected")
+                            .font(.caption)
+                        Spacer()
+                        Button("Reconnect") {
+                            webSocketManager.connect()
+                        }
+                        .font(.caption)
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(Color.orange.opacity(0.2))
+                }
+                
+                // Alerts List
+                if viewModel.isLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let error = viewModel.error {
+                    VStack(spacing: 16) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 50))
+                            .foregroundColor(.orange)
+                        Text(error)
+                            .multilineTextAlignment(.center)
+                        Button("Retry") {
+                            viewModel.fetchAlerts()
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if filteredAlerts.isEmpty {
+                    VStack(spacing: 16) {
                         Image(systemName: "bell.slash")
-                            .font(.system(size: 60))
+                            .font(.system(size: 50))
                             .foregroundColor(.gray)
-                        
-                        Text("No Alerts Yet")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                        
-                        Text("Subscribe to channels to receive real-time alerts")
+                        Text("No alerts")
+                            .font(.headline)
+                        Text("You're all caught up!")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 40)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    List(viewModel.events) { event in
-                        AlertRowView(event: event)
+                    List {
+                        ForEach(filteredAlerts) { alert in
+                            AlertRowView(alert: alert) {
+                                viewModel.markAsRead(alert)
+                            }
+                        }
                     }
                 }
             }
             .navigationTitle("Alerts")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(webSocketManager.isConnected ? Color.green : Color.red)
-                            .frame(width: 8, height: 8)
+                    Button(action: {
+                        viewModel.markAllAsRead()
+                    }) {
+                        Text("Mark All Read")
+                            .font(.subheadline)
+                    }
+                }
+            }
+        }
+        .onAppear {
+            viewModel.fetchAlerts()
+            webSocketManager.connect()
+        }
+        .onDisappear {
+            webSocketManager.disconnect()
+        }
+    }
+}
+
+enum AlertFilter {
+    case all
+    case unread
+    case important
+}
+
+struct AlertRowView: View {
+    let alert: Event
+    let onTap: () -> Void
+    
+    var body: some View {
+        Button(action: onTap) {
+            HStack(alignment: .top, spacing: 12) {
+                // Priority Indicator
+                Circle()
+                    .fill(priorityColor)
+                    .frame(width: 12, height: 12)
+                    .padding(.top, 4)
+                
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text(alert.title)
+                            .font(.headline)
+                            .foregroundColor(.primary)
+                        Spacer()
+                        if !alert.isRead {
+                            Circle()
+                                .fill(Color.blue)
+                                .frame(width: 8, height: 8)
+                        }
+                    }
+                    
+                    Text(alert.message)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                    
+                    HStack {
+                        Text(alert.channelName ?? "General")
+                            .font(.caption)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.blue.opacity(0.1))
+                            .foregroundColor(.blue)
+                            .cornerRadius(4)
                         
-                        Text(webSocketManager.isConnected ? "Connected" : "Disconnected")
+                        Spacer()
+                        
+                        Text(timeAgo(from: alert.createdAt))
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
                 }
             }
+            .padding(.vertical, 8)
         }
-    }
-}
-
-struct AlertRowView: View {
-    let event: Event
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                // Event Type Badge
-                Text(event.type?.uppercased() ?? "??")
-                    .font(.caption)
-                    .fontWeight(.bold)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(eventColor)
-                    .cornerRadius(6)
-                
-                Spacer()
-                
-                Text(event.date, style: .time)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            
-            Text(event.areaDisplay ?? "Unknown Area")
-                .font(.headline)
-            
-            Text(event.typeDisplay ?? "Unknown Event")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-            
-            Text(event.location)
-                .font(.caption)
-                .foregroundColor(.gray)
-            
-            Text(event.date, style: .date)
-                .font(.caption)
-                .foregroundColor(.gray)
-        }
-        .padding(.vertical, 4)
+        .buttonStyle(PlainButtonStyle())
     }
     
-    var eventColor: Color {
-        switch event.type {
-        case "cd": return Color.orange
-        case "id": return Color.red
-        case "vd": return Color.blue
-        case "pd": return Color.green
-        case "ct": return Color.purple
-        case "sh": return Color.orange
-        case "off-route": return Color.orange
-        case "tamper": return Color.red
-        default: return Color.gray
+    private var priorityColor: Color {
+        switch alert.priority?.lowercased() {
+        case "high":
+            return .red
+        case "medium":
+            return .orange
+        default:
+            return .green
+        }
+    }
+    
+    private func timeAgo(from dateString: String) -> String {
+        let formatter = ISO8601DateFormatter()
+        guard let date = formatter.date(from: dateString) else {
+            return dateString
+        }
+        
+        let now = Date()
+        let interval = now.timeIntervalSince(date)
+        
+        if interval < 60 {
+            return "Just now"
+        } else if interval < 3600 {
+            let minutes = Int(interval / 60)
+            return "\(minutes)m ago"
+        } else if interval < 86400 {
+            let hours = Int(interval / 3600)
+            return "\(hours)h ago"
+        } else {
+            let days = Int(interval / 86400)
+            return "\(days)d ago"
         }
     }
 }
