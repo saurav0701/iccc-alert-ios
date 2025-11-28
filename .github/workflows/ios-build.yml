@@ -50,7 +50,16 @@ jobs:
           -derivedDataPath build \
           CODE_SIGN_IDENTITY="" \
           CODE_SIGNING_REQUIRED=NO \
-          CODE_SIGNING_ALLOWED=NO
+          CODE_SIGNING_ALLOWED=NO \
+          2>&1 | tee build.log
+        
+        # Check for build errors
+        if grep -i "error:" build.log; then
+          echo "❌ Build failed with errors"
+          exit 1
+        else
+          echo "✅ Build completed"
+        fi
     
     - name: Create .app Archive
       run: |
@@ -86,6 +95,13 @@ jobs:
         echo "✅ iOS app built successfully on simulator!"
         echo "📱 Build artifact ready for download"
         echo "📥 Download from GitHub Actions Artifacts"
+    
+    - name: Upload Build Log on Failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-error-log
+        path: build.log
     
     - name: Upload Build Logs
       if: failure()
