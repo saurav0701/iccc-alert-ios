@@ -165,16 +165,17 @@ struct SyncStateInfo: Codable {
 // MARK: - Auth Models
 
 struct User: Codable {
-    let id: String
+    let id: Int  // ✅ Changed from String to Int to match backend
     let name: String
     let phone: String
     let area: String?
     let designation: String?
     let organisation: String?
-    let createdAt: String?  // Make optional
+    let createdAt: String
+    let updatedAt: String?
     
     enum CodingKeys: String, CodingKey {
-        case id, name, phone, area, designation, organisation, createdAt
+        case id, name, phone, area, designation, organisation, createdAt, updatedAt
     }
 }
 
@@ -185,7 +186,7 @@ struct LoginRequest: Codable {
 
 struct OTPVerificationRequest: Codable {
     let phone: String
-    let otp: String
+    let otp: String  // ✅ Kept as String
     let deviceId: String
 }
 
