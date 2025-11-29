@@ -5,20 +5,27 @@ struct ContentView: View {
     
     var body: some View {
         TabView {
-            AlertsView(authManager: authManager)
+            AlertsView()
                 .tabItem {
-                    Label("Alerts", systemImage: "bell.fill")
+                    Label("Alerts", systemImage: "exclamationmark.triangle.fill")
                 }
             
-            ChannelsView(authManager: authManager)
+            ChannelsView()
                 .tabItem {
                     Label("Channels", systemImage: "list.bullet")
                 }
             
-            SettingsView(authManager: authManager)
+            SettingsView()  // ✅ Fixed - no parameter needed
                 .tabItem {
                     Label("Settings", systemImage: "gear")
                 }
         }
+    }
+}
+
+struct ContentView_Previews: PreviewProvider {
+    static var previews: some View {
+        ContentView()
+            .environmentObject(AuthManager.shared)
     }
 }
