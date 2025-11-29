@@ -9,7 +9,6 @@ struct ICCCAlertApp: App {
     @Environment(\.scenePhase) var scenePhase
     
     init() {
-        // Configure appearance
         setupAppearance()
     }
     
@@ -21,7 +20,6 @@ struct ICCCAlertApp: App {
                     .environmentObject(webSocketService)
                     .environmentObject(subscriptionManager)
                     .onAppear {
-                        // Connect WebSocket when app appears
                         connectWebSocket()
                     }
             } else {
@@ -47,7 +45,6 @@ struct ICCCAlertApp: App {
         switch phase {
         case .active:
             print("📱 App became active")
-            // Reconnect if disconnected
             if authManager.isAuthenticated && !webSocketService.isConnected {
                 webSocketService.connect()
             }
@@ -57,7 +54,6 @@ struct ICCCAlertApp: App {
             
         case .background:
             print("📱 App moved to background")
-            // Save state before going to background
             subscriptionManager.forceSave()
             ChannelSyncState.shared.forceSave()
             
@@ -69,7 +65,6 @@ struct ICCCAlertApp: App {
     // MARK: - Appearance Setup
     
     private func setupAppearance() {
-        // Navigation bar appearance
         let navBarAppearance = UINavigationBarAppearance()
         navBarAppearance.configureWithOpaqueBackground()
         navBarAppearance.backgroundColor = .systemBackground
@@ -80,7 +75,6 @@ struct ICCCAlertApp: App {
         UINavigationBar.appearance().scrollEdgeAppearance = navBarAppearance
         UINavigationBar.appearance().compactAppearance = navBarAppearance
         
-        // Tab bar appearance
         let tabBarAppearance = UITabBarAppearance()
         tabBarAppearance.configureWithOpaqueBackground()
         tabBarAppearance.backgroundColor = .systemBackground
@@ -92,9 +86,9 @@ struct ICCCAlertApp: App {
     }
 }
 
-// MARK: - ContentView with WebSocket Stats
+// MARK: - Main Content View
 
-struct ContentView: View {
+struct MainContentView: View {
     @EnvironmentObject var authManager: AuthManager
     @EnvironmentObject var webSocketService: WebSocketService
     @EnvironmentObject var subscriptionManager: SubscriptionManager
@@ -221,80 +215,5 @@ struct StatRow: View {
                 .fontWeight(.semibold)
                 .foregroundColor(.blue)
         }
-    }
-}
-
-// MARK: - Alerts View (Updated)
-
-struct AlertsView: View {
-    @EnvironmentObject var subscriptionManager: SubscriptionManager
-    @State private var selectedFilter: AlertFilter = .all
-    
-    enum AlertFilter {
-        case all, unread, recent
-    }
-    
-    var allEvents: [Event] {
-        subscriptionManager.channelEvents.values.flatMap { $0 }.sorted { $0.timestamp > $1.timestamp }
-    }
-    
-    var filteredEvents: [Event] {
-        switch selectedFilter {
-        case .all:
-            return allEvents
-        case .unread:
-            // Show events from channels with unread counts
-            let unreadChannels = Set(subscriptionManager.unreadCounts.filter { $0.value > 0 }.keys)
-            return allEvents.filter { event in
-                let channelId = "\(event.area ?? "")_\(event.type ?? "")"
-                return unreadChannels.contains(channelId)
-            }
-        case .recent:
-            let oneHourAgo = Date().addingTimeInterval(-3600)
-            return allEvents.filter { $0.date > oneHourAgo }
-        }
-    }
-    
-    var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                // Filter Picker
-                Picker("Filter", selection: $selectedFilter) {
-                    Text("All").tag(AlertFilter.all)
-                    Text("Unread").tag(AlertFilter.unread)
-                    Text("Recent").tag(AlertFilter.recent)
-                }
-                .pickerStyle(SegmentedPickerStyle())
-                .padding()
-                
-                if filteredEvents.isEmpty {
-                    VStack(spacing: 16) {
-                        Image(systemName: "bell.slash")
-                            .font(.system(size: 50))
-                            .foregroundColor(.gray)
-                        Text("No alerts")
-                            .font(.headline)
-                        Text("You're all caught up!")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    List(filteredEvents) { event in
-                        EventRowView(event: event)
-                    }
-                }
-            }
-            .navigationTitle("Alerts")
-        }
-    }
-}
-
-struct ContentView_Previews: PreviewProvider {
-    static var previews: some View {
-        ContentView()
-            .environmentObject(AuthManager.shared)
-            .environmentObject(WebSocketService.shared)
-            .environmentObject(SubscriptionManager.shared)
     }
 }
