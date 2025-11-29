@@ -1,35 +1,81 @@
 import SwiftUI
 
 struct ChannelsView: View {
-    @StateObject private var viewModel: ChannelsViewModel
+    @StateObject private var subscriptionManager = SubscriptionManager.shared
+    @StateObject private var webSocketService = WebSocketService.shared
     @State private var searchText = ""
     @State private var selectedCategory: String? = nil
+    @State private var showingAddChannel = false
     
-    let authManager: AuthManager
+    var availableChannels: [Channel] {
+        SubscriptionManager.getAllAvailableChannels()
+    }
     
-    init(authManager: AuthManager) {
-        self.authManager = authManager
-        _viewModel = StateObject(wrappedValue: ChannelsViewModel(authManager: authManager))
+    var categories: [String] {
+        Array(Set(availableChannels.map { $0.eventTypeDisplay })).sorted()
     }
     
     var filteredChannels: [Channel] {
-        var channels = viewModel.channels
+        var channels = availableChannels
         
+        // Apply category filter
         if let category = selectedCategory {
-            channels = channels.filter { $0.category == category }
+            channels = channels.filter { $0.eventTypeDisplay == category }
         }
         
+        // Apply search filter
         if !searchText.isEmpty {
-            channels = channels.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+            channels = channels.filter {
+                $0.areaDisplay.localizedCaseInsensitiveContains(searchText) ||
+                $0.eventTypeDisplay.localizedCaseInsensitiveContains(searchText)
+            }
         }
         
-        return channels
+        // Mark subscribed channels
+        let subscribedIds = Set(subscriptionManager.subscribedChannels.map { $0.id })
+        return channels.map { channel in
+            var updated = channel
+            updated.isSubscribed = subscribedIds.contains(channel.id)
+            return updated
+        }
     }
     
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
-                // Custom Search Bar (iOS 14 compatible)
+                // Connection Status Banner
+                if !webSocketService.isConnected {
+                    HStack {
+                        Image(systemName: "wifi.slash")
+                        Text(webSocketService.connectionStatus)
+                            .font(.caption)
+                        Spacer()
+                        Button("Reconnect") {
+                            webSocketService.connect()
+                        }
+                        .font(.caption)
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(Color.orange.opacity(0.2))
+                } else {
+                    HStack {
+                        Image(systemName: "wifi")
+                            .foregroundColor(.green)
+                        Text("Connected")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                        Spacer()
+                        Text("\(subscriptionManager.subscribedChannels.count) subscribed")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(Color.green.opacity(0.1))
+                }
+                
+                // Search Bar
                 HStack {
                     Image(systemName: "magnifyingglass")
                         .foregroundColor(.gray)
@@ -47,12 +93,13 @@ struct ChannelsView: View {
                 .cornerRadius(10)
                 .padding()
                 
+                // Category Filter
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
                         FilterChip(title: "All", isSelected: selectedCategory == nil) {
                             selectedCategory = nil
                         }
-                        ForEach(viewModel.categories, id: \.self) { category in
+                        ForEach(categories, id: \.self) { category in
                             FilterChip(title: category, isSelected: selectedCategory == category) {
                                 selectedCategory = category
                             }
@@ -62,33 +109,23 @@ struct ChannelsView: View {
                 }
                 .padding(.bottom)
                 
-                if viewModel.isLoading {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let error = viewModel.error {
+                // Channels List
+                if filteredChannels.isEmpty {
                     VStack(spacing: 16) {
-                        Image(systemName: "exclamationmark.triangle")
+                        Image(systemName: "bell.slash")
                             .font(.system(size: 50))
-                            .foregroundColor(.orange)
-                        Text(error)
-                            .multilineTextAlignment(.center)
-                        Button("Retry") {
-                            viewModel.fetchChannels()
-                        }
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 10)
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(8)
+                            .foregroundColor(.gray)
+                        Text("No channels found")
+                            .font(.headline)
+                        Text("Try adjusting your search or filters")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List(filteredChannels) { channel in
                         NavigationLink(
-                            destination: ChannelDetailView(
-                                channel: channel,
-                                authManager: authManager
-                            )
+                            destination: ChannelDetailView(channel: channel)
                         ) {
                             ChannelRowView(channel: channel)
                         }
@@ -97,9 +134,28 @@ struct ChannelsView: View {
             }
             .navigationTitle("Channels")
             .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    HStack {
+                        // Stats badge
+                        if subscriptionManager.subscribedChannels.count > 0 {
+                            Text("\(subscriptionManager.getTotalEventCount())")
+                                .font(.caption)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.blue)
+                                .foregroundColor(.white)
+                                .clipShape(Capsule())
+                        }
+                    }
+                }
+            }
         }
         .onAppear {
-            viewModel.fetchChannels()
+            // Connect WebSocket if not connected
+            if !webSocketService.isConnected {
+                webSocketService.connect()
+            }
         }
     }
 }
@@ -125,34 +181,84 @@ struct FilterChip: View {
 
 struct ChannelRowView: View {
     let channel: Channel
+    @StateObject private var subscriptionManager = SubscriptionManager.shared
+    
+    var unreadCount: Int {
+        subscriptionManager.getUnreadCount(channelId: channel.id)
+    }
+    
+    var lastEvent: Event? {
+        subscriptionManager.getLastEvent(channelId: channel.id)
+    }
     
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: categoryIcon(for: channel.category))
-                .font(.system(size: 24))
-                .foregroundColor(.blue)
-                .frame(width: 40, height: 40)
-                .background(Color.blue.opacity(0.1))
-                .cornerRadius(8)
-            
-            VStack(alignment: .leading, spacing: 4) {
-                Text(channel.name)
-                    .font(.headline)
-                if let description = channel.description {
-                    Text(description)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .lineLimit(2)
-                }
-                Text(channel.category)
-                    .font(.caption)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.blue.opacity(0.1))
-                    .foregroundColor(.blue)
-                    .cornerRadius(4)
+            // Channel Icon
+            ZStack {
+                Circle()
+                    .fill(iconColor.opacity(0.2))
+                    .frame(width: 50, height: 50)
+                
+                Text(iconText)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(iconColor)
             }
-            Spacer()
+            
+            // Channel Info
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(channel.areaDisplay)
+                        .font(.headline)
+                    
+                    if channel.isSubscribed {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                    }
+                    
+                    Spacer()
+                    
+                    if unreadCount > 0 {
+                        Text("\(unreadCount)")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.red)
+                            .foregroundColor(.white)
+                            .clipShape(Capsule())
+                    }
+                }
+                
+                Text(channel.eventTypeDisplay)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                
+                if let event = lastEvent {
+                    Text(event.location)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+                
+                HStack {
+                    Text(channel.eventTypeDisplay)
+                        .font(.caption)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(iconColor.opacity(0.1))
+                        .foregroundColor(iconColor)
+                        .cornerRadius(4)
+                    
+                    if let event = lastEvent {
+                        Spacer()
+                        Text(timeAgo(from: event.date))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+            
             Image(systemName: "chevron.right")
                 .font(.caption)
                 .foregroundColor(.gray)
@@ -160,15 +266,73 @@ struct ChannelRowView: View {
         .padding(.vertical, 8)
     }
     
-    private func categoryIcon(for category: String) -> String {
-        switch category.lowercased() {
-        case "technology": return "laptopcomputer"
-        case "sports": return "sportscourt"
-        case "news": return "newspaper"
-        case "entertainment": return "tv"
-        case "business": return "briefcase"
-        case "health": return "heart"
-        default: return "bell"
+    private var iconText: String {
+        let type = channel.eventType.uppercased()
+        if type.count <= 2 {
+            return type
         }
+        return String(type.prefix(2))
+    }
+    
+    private var iconColor: Color {
+        switch channel.eventType.lowercased() {
+        case "cd": return Color(hex: "FF5722")
+        case "id": return Color(hex: "F44336")
+        case "ct": return Color(hex: "E91E63")
+        case "sh": return Color(hex: "FF9800")
+        case "vd": return Color(hex: "2196F3")
+        case "pd": return Color(hex: "4CAF50")
+        case "vc": return Color(hex: "FFC107")
+        case "ii": return Color(hex: "9C27B0")
+        case "ls": return Color(hex: "00BCD4")
+        case "off-route": return Color(hex: "FF5722")
+        case "tamper": return Color(hex: "F44336")
+        default: return Color(hex: "9E9E9E")
+        }
+    }
+    
+    private func timeAgo(from date: Date) -> String {
+        let now = Date()
+        let interval = now.timeIntervalSince(date)
+        
+        if interval < 60 {
+            return "Just now"
+        } else if interval < 3600 {
+            let minutes = Int(interval / 60)
+            return "\(minutes)m ago"
+        } else if interval < 86400 {
+            let hours = Int(interval / 3600)
+            return "\(hours)h ago"
+        } else {
+            let days = Int(interval / 86400)
+            return "\(days)d ago"
+        }
+    }
+}
+
+// Helper for hex colors
+extension Color {
+    init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&int)
+        let a, r, g, b: UInt64
+        switch hex.count {
+        case 3: // RGB (12-bit)
+            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
+        case 6: // RGB (24-bit)
+            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
+        case 8: // ARGB (32-bit)
+            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+        default:
+            (a, r, g, b) = (255, 0, 0, 0)
+        }
+        self.init(
+            .sRGB,
+            red: Double(r) / 255,
+            green: Double(g) / 255,
+            blue: Double(b) / 255,
+            opacity: Double(a) / 255
+        )
     }
 }
