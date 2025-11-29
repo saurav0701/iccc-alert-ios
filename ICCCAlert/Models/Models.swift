@@ -171,7 +171,11 @@ struct User: Codable {
     let area: String?
     let designation: String?
     let organisation: String?
-    let createdAt: String
+    let createdAt: String?  // Make optional
+    
+    enum CodingKeys: String, CodingKey {
+        case id, name, phone, area, designation, organisation, createdAt
+    }
 }
 
 struct LoginRequest: Codable {
