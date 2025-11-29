@@ -2,7 +2,7 @@ import SwiftUI
 
 struct RegistrationView: View {
     @EnvironmentObject var authManager: AuthManager
-    @Environment(\.dismiss) var dismiss
+    @Environment(\.presentationMode) var presentationMode  // iOS 14 compatible
     
     @State private var name = ""
     @State private var phone = ""
@@ -55,13 +55,9 @@ struct RegistrationView: View {
                 .padding()
             }
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-            }
+            .navigationBarItems(leading: Button("Cancel") {
+                presentationMode.wrappedValue.dismiss()
+            })
         }
     }
     
@@ -92,6 +88,11 @@ struct RegistrationView: View {
                     TextField("10-digit phone", text: $phone)
                         .keyboardType(.phonePad)
                         .textContentType(.telephoneNumber)
+                        .onChange(of: phone) { newValue in
+                            if newValue.count > 10 {
+                                phone = String(newValue.prefix(10))
+                            }
+                        }
                 }
                 .padding()
                 .background(Color(.systemGray6))
@@ -133,7 +134,7 @@ struct RegistrationView: View {
                         Text(org).tag(org)
                     }
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(SegmentedPickerStyle())
             }
             
             Button(action: register) {
@@ -171,6 +172,11 @@ struct RegistrationView: View {
                     .padding()
                     .background(Color(.systemGray6))
                     .cornerRadius(10)
+                    .onChange(of: otp) { newValue in
+                        if newValue.count > 6 {
+                            otp = String(newValue.prefix(6))
+                        }
+                    }
             }
             
             Button(action: verifyOTP) {
@@ -235,7 +241,7 @@ struct RegistrationView: View {
         authManager.verifyRegistrationOTP(phone: phone, otp: otp) { success, message in
             isLoading = false
             if success {
-                dismiss()
+                presentationMode.wrappedValue.dismiss()
             } else {
                 errorMessage = message
             }
