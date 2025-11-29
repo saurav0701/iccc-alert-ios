@@ -2,22 +2,33 @@ import SwiftUI
 
 struct AlertsView: View {
     @StateObject private var viewModel: AlertsViewModel
-    @StateObject private var webSocketManager: WebSocketManager
+    @StateObject private var webSocketService = WebSocketService.shared
+    @StateObject private var subscriptionManager = SubscriptionManager.shared
     @State private var selectedFilter: AlertFilter = .all
     
     init(authManager: AuthManager) {
         _viewModel = StateObject(wrappedValue: AlertsViewModel(authManager: authManager))
-        _webSocketManager = StateObject(wrappedValue: WebSocketManager(authManager: authManager))
     }
     
     var filteredAlerts: [Event] {
+        // Get all events from subscribed channels
+        var allEvents: [Event] = []
+        for channel in subscriptionManager.subscribedChannels {
+            let events = subscriptionManager.getEvents(channelId: channel.id)
+            allEvents.append(contentsOf: events)
+        }
+        
+        // Sort by timestamp (newest first)
+        allEvents.sort { $0.timestamp > $1.timestamp }
+        
+        // Apply filter
         switch selectedFilter {
         case .all:
-            return viewModel.alerts
+            return allEvents
         case .unread:
-            return viewModel.alerts.filter { !$0.isRead }
+            return allEvents.filter { !$0.isRead }
         case .important:
-            return viewModel.alerts.filter { $0.priority == "high" }
+            return allEvents.filter { $0.priority == "high" }
         }
     }
     
@@ -34,55 +45,58 @@ struct AlertsView: View {
                 .padding()
                 
                 // Connection Status
-                if !webSocketManager.isConnected {
+                if !webSocketService.isConnected {
                     HStack {
                         Image(systemName: "wifi.slash")
                         Text("Disconnected")
                             .font(.caption)
                         Spacer()
                         Button("Reconnect") {
-                            webSocketManager.connect()
+                            webSocketService.connect()
                         }
                         .font(.caption)
                     }
                     .padding(.horizontal)
                     .padding(.vertical, 8)
                     .background(Color.orange.opacity(0.2))
+                } else {
+                    HStack {
+                        Image(systemName: "wifi")
+                            .foregroundColor(.green)
+                        Text(webSocketService.connectionStatus)
+                            .font(.caption)
+                            .foregroundColor(.green)
+                        Spacer()
+                        Text("\(webSocketService.processedCount) events")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(Color.green.opacity(0.1))
                 }
                 
                 // Alerts List
-                if viewModel.isLoading {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let error = viewModel.error {
-                    VStack(spacing: 16) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.system(size: 50))
-                            .foregroundColor(.orange)
-                        Text(error)
-                            .multilineTextAlignment(.center)
-                        Button("Retry") {
-                            viewModel.fetchAlerts()
-                        }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if filteredAlerts.isEmpty {
+                if filteredAlerts.isEmpty {
                     VStack(spacing: 16) {
                         Image(systemName: "bell.slash")
                             .font(.system(size: 50))
                             .foregroundColor(.gray)
                         Text("No alerts")
                             .font(.headline)
-                        Text("You're all caught up!")
+                        Text(subscriptionManager.subscribedChannels.isEmpty ? 
+                             "Subscribe to channels to receive alerts" : 
+                             "You're all caught up!")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List {
                         ForEach(filteredAlerts) { alert in
                             AlertRowView(alert: alert) {
-                                viewModel.markAsRead(alert)
+                                markAsRead(alert)
                             }
                         }
                     }
@@ -92,20 +106,32 @@ struct AlertsView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: {
-                        viewModel.markAllAsRead()
+                        markAllAsRead()
                     }) {
                         Text("Mark All Read")
                             .font(.subheadline)
                     }
+                    .disabled(filteredAlerts.filter { !$0.isRead }.isEmpty)
                 }
             }
         }
         .onAppear {
-            viewModel.fetchAlerts()
-            webSocketManager.connect()
+            // Connect WebSocket if not connected
+            if !webSocketService.isConnected {
+                webSocketService.connect()
+            }
         }
-        .onDisappear {
-            webSocketManager.disconnect()
+    }
+    
+    private func markAsRead(_ alert: Event) {
+        // Mark event as read in subscription manager
+        guard let channelId = alert.channelName else { return }
+        subscriptionManager.markAsRead(channelId: channelId)
+    }
+    
+    private func markAllAsRead() {
+        for channel in subscriptionManager.subscribedChannels {
+            subscriptionManager.markAsRead(channelId: channel.id)
         }
     }
 }
@@ -158,7 +184,7 @@ struct AlertRowView: View {
                         
                         Spacer()
                         
-                        Text(timeAgo(from: alert.createdAt))
+                        Text(timeAgo(from: alert.date))
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -180,12 +206,7 @@ struct AlertRowView: View {
         }
     }
     
-    private func timeAgo(from dateString: String) -> String {
-        let formatter = ISO8601DateFormatter()
-        guard let date = formatter.date(from: dateString) else {
-            return dateString
-        }
-        
+    private func timeAgo(from date: Date) -> String {
         let now = Date()
         let interval = now.timeIntervalSince(date)
         
