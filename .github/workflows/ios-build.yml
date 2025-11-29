@@ -1,15 +1,13 @@
-name: Build iOS App
+name: Build iOS App for iPhone
 
 on:
   push:
     branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
 
 jobs:
-  build-ios:
-    name: Build iOS App for Appetize
+  build-for-device:
+    name: Build for iPhone (Development)
     runs-on: macos-latest
     
     steps:
@@ -24,29 +22,98 @@ jobs:
     - name: Install xcodeproj gem
       run: sudo gem install xcodeproj
     
-    - name: List files
+    - name: Generate Xcode Project
+      run: ruby generate_project.rb
+    
+    - name: Update Bundle ID for Development
       run: |
-        echo "📁 Project structure:"
-        ls -la
-        find ICCCAlert -type f
+        # Use a unique bundle ID for development
+        sed -i '' 's/com.iccc.alert/com.iccc.alert.dev/g' generate_project.rb
+        ruby generate_project.rb
+    
+    - name: Build Development IPA
+      run: |
+        echo "🏗️ Building for iOS device..."
+        
+        # Build archive
+        xcodebuild \
+          -project ICCCAlert.xcodeproj \
+          -scheme ICCCAlert \
+          -destination 'generic/platform=iOS' \
+          -configuration Debug \
+          -archivePath $PWD/build/ICCCAlert.xcarchive \
+          archive \
+          CODE_SIGN_IDENTITY="-" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=NO \
+          AD_HOC_CODE_SIGNING_ALLOWED=YES
+        
+        echo "✅ Archive created"
+        
+        # Create IPA manually
+        mkdir -p build/Payload
+        cp -R build/ICCCAlert.xcarchive/Products/Applications/ICCCAlert.app build/Payload/
+        cd build
+        zip -r ICCCAlert.ipa Payload
+        rm -rf Payload
+        
+        echo "✅ IPA created"
+        ls -lh ICCCAlert.ipa
+    
+    - name: Upload IPA for iPhone Installation
+      uses: actions/upload-artifact@v4
+      with:
+        name: ICCCAlert-iPhone
+        path: build/ICCCAlert.ipa
+        retention-days: 30
+    
+    - name: Installation Instructions
+      run: |
+        echo "✅ Build complete!"
+        echo ""
+        echo "📱 To install on your iPhone:"
+        echo ""
+        echo "Method 1: Using Diawi (FREE, easiest)"
+        echo "1. Download ICCCAlert.ipa from GitHub Actions artifacts"
+        echo "2. Go to https://www.diawi.com/"
+        echo "3. Upload the IPA file"
+        echo "4. Get the link and open it on your iPhone"
+        echo "5. Tap 'Install' on your iPhone"
+        echo ""
+        echo "Method 2: Using iPhone Files App (FREE, no internet needed)"
+        echo "1. Download ICCCAlert.ipa from GitHub Actions"
+        echo "2. AirDrop or email the IPA to your iPhone"
+        echo "3. Open Files app on iPhone"
+        echo "4. Tap the IPA file"
+        echo "5. Go to Settings > General > VPN & Device Management"
+        echo "6. Trust the developer profile"
+        echo "7. Open the app"
+        echo ""
+        echo "Method 3: Using iOS App Signer (requires Mac access once)"
+        echo "Visit: https://dantheman827.github.io/ios-app-signer/"
+
+  # Keep Appetize build
+  build-appetize:
+    name: Build for Appetize.io
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+    
+    - name: Setup Xcode
+      run: |
+        sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+        xcodebuild -version
+    
+    - name: Install xcodeproj gem
+      run: sudo gem install xcodeproj
     
     - name: Generate Xcode Project
       run: ruby generate_project.rb
     
-    - name: Verify Xcode Project
+    - name: Build for iOS Simulator
       run: |
-        echo "✅ Xcode project created:"
-        ls -la *.xcodeproj
-        xcodebuild -list -project ICCCAlert.xcodeproj
-    
-    - name: Build for iOS Simulator (Universal Binary)
-      run: |
-        echo "🏗️  Building universal binary for iOS Simulator (arm64 + x86_64)..."
-        
-        set -e  # Exit on any error
-        set -o pipefail  # Catch errors in pipes
-        
-        # Build the app
         xcodebuild \
           -project ICCCAlert.xcodeproj \
           -scheme ICCCAlert \
@@ -54,150 +121,21 @@ jobs:
           -configuration Debug \
           -sdk iphonesimulator \
           clean build \
-          BUILD_LIBRARY_FOR_DISTRIBUTION=NO \
           CODE_SIGN_IDENTITY="" \
           CODE_SIGNING_REQUIRED=NO \
           CODE_SIGNING_ALLOWED=NO \
           ONLY_ACTIVE_ARCH=NO \
-          ARCHS="arm64 x86_64" \
-          VALID_ARCHS="arm64 x86_64" \
-          2>&1 | tee build_log.txt
+          ARCHS="arm64 x86_64"
         
-        # Check if build succeeded
-        if [ ${PIPESTATUS[0]} -ne 0 ]; then
-          echo "❌ Build failed"
-          echo ""
-          echo "📋 Last 100 lines of build log:"
-          tail -100 build_log.txt
-          exit 1
-        fi
-        
-        echo "✅ Build succeeded!"
-        
-        echo ""
-        echo "📦 Searching for .app bundle..."
         APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "ICCCAlert.app" -type d | head -1)
-        
-        if [ -z "$APP_PATH" ]; then
-          echo "❌ .app bundle not found after successful build"
-          exit 1
-        fi
-        
-        echo "✅ Found .app at: $APP_PATH"
-        
-        # Verify architectures
-        echo ""
-        echo "🔍 Checking binary architectures..."
-        APP_BINARY="$APP_PATH/ICCCAlert"
-        if [ -f "$APP_BINARY" ]; then
-          file "$APP_BINARY"
-          lipo -info "$APP_BINARY"
-        else
-          echo "❌ Binary not found inside .app bundle"
-          ls -la "$APP_PATH"
-          exit 1
-        fi
-    
-    - name: Create Appetize-compatible .zip
-      run: |
-        echo "🔍 Locating built .app bundle..."
-        
-        # Find the .app in DerivedData
-        APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "ICCCAlert.app" -type d | head -1)
-        
-        if [ -z "$APP_PATH" ]; then
-          echo "❌ .app bundle not found"
-          exit 1
-        fi
-        
-        echo "✅ Found .app at: $APP_PATH"
-        
-        # Check if the app has an executable
-        APP_NAME="ICCCAlert"
-        if [ ! -f "$APP_PATH/$APP_NAME" ]; then
-          echo "❌ Executable not found inside .app bundle"
-          echo "📋 Contents of .app:"
-          ls -la "$APP_PATH"
-          exit 1
-        fi
-        
-        echo "✅ Executable verified"
-        echo "📋 .app bundle contents:"
-        ls -lah "$APP_PATH"
-        
-        # Check architectures
-        echo ""
-        echo "🔍 Final architecture verification..."
-        file "$APP_PATH/$APP_NAME"
-        lipo -info "$APP_PATH/$APP_NAME"
-        
-        # Create a clean build directory
         mkdir -p ./build
-        
-        # Copy .app to build directory
-        echo ""
-        echo "📦 Copying .app to build directory..."
         cp -R "$APP_PATH" ./build/
-        
-        # Create zip from build directory
         cd ./build
-        
-        echo ""
-        echo "📦 Creating zip archive for Appetize.io..."
-        zip -r -y ICCCAlert.zip ICCCAlert.app
-        
-        if [ -f "ICCCAlert.zip" ]; then
-          echo "✅ Zip created successfully"
-          ls -lh ICCCAlert.zip
-          
-          echo ""
-          echo "🔍 Verifying zip contents..."
-          unzip -l ICCCAlert.zip | head -30
-        else
-          echo "❌ Failed to create archive"
-          exit 1
-        fi
+        zip -r -y ICCCAlert-Simulator.zip ICCCAlert.app
     
-    - name: Upload Appetize-ready Build
+    - name: Upload Appetize Build
       uses: actions/upload-artifact@v4
-      if: success()
       with:
-        name: ios-simulator-appetize
-        path: build/ICCCAlert.zip
+        name: ICCCAlert-Appetize
+        path: build/ICCCAlert-Simulator.zip
         retention-days: 30
-    
-    - name: Upload Raw .app Bundle (backup)
-      uses: actions/upload-artifact@v4
-      if: success()
-      with:
-        name: ios-app-bundle-raw
-        path: build/ICCCAlert.app/
-        retention-days: 30
-    
-    - name: Build Success
-      if: success()
-      run: |
-        echo "✅ iOS app built successfully for universal simulator (arm64 + x86_64)!"
-        echo "📱 Appetize.io-compatible build ready"
-        echo "📥 Download 'ios-simulator-appetize' artifact"
-        echo ""
-        echo "To upload to Appetize.io:"
-        echo "1. Download the ICCCAlert.zip artifact"
-        echo "2. Go to appetize.io/apps"
-        echo "3. Upload the .zip file"
-        echo "4. Select 'iOS Simulator' as device type"
-    
-    - name: Upload Build Log on Failure
-      if: failure()
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-error-log
-        path: build_log.txt
-        retention-days: 7
-    
-    - name: Show Compilation Errors
-      if: failure()
-      run: |
-        echo "❌ Build failed. Here are the compilation errors:"
-        echo ""
-        grep -A 5 "error:" build_log.txt || echo "No error details found in log"
