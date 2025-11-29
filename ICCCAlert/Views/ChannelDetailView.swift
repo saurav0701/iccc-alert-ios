@@ -56,14 +56,14 @@ struct ChannelDetailView: View {
                         Image(systemName: "bell.badge.fill")
                         Text("\(pendingEventsCount) new event\(pendingEventsCount == 1 ? "" : "s")")
                             .font(.subheadline)
-                            .fontWeight(.semibold)
+                            .font(.system(size: 14, weight: .semibold))
                         Spacer()
                         Button("View") {
                             showNewEventsBanner = false
                             pendingEventsCount = 0
                         }
                         .font(.subheadline)
-                        .fontWeight(.semibold)
+                        .font(.system(size: 14, weight: .semibold))
                     }
                     .padding()
                     .background(Color.blue)
@@ -123,7 +123,7 @@ struct ChannelDetailView: View {
                         .foregroundColor(.secondary)
                     Spacer()
                     Text(channel.areaDisplay)
-                        .fontWeight(.semibold)
+                        .font(.system(size: 17, weight: .semibold))
                 }
                 
                 HStack {
@@ -131,7 +131,7 @@ struct ChannelDetailView: View {
                         .foregroundColor(.secondary)
                     Spacer()
                     Text(channel.eventTypeDisplay)
-                        .fontWeight(.semibold)
+                        .font(.system(size: 17, weight: .semibold))
                 }
                 
                 if isSubscribed {
@@ -144,7 +144,7 @@ struct ChannelDetailView: View {
                                 .fill(Color.green)
                                 .frame(width: 8, height: 8)
                             Text("Subscribed")
-                                .fontWeight(.semibold)
+                                .font(.system(size: 17, weight: .semibold))
                                 .foregroundColor(.green)
                         }
                     }
@@ -168,7 +168,7 @@ struct ChannelDetailView: View {
                 Button(action: toggleSubscription) {
                     Text(isSubscribed ? "Unsubscribe" : "Subscribe")
                         .font(.subheadline)
-                        .fontWeight(.semibold)
+                        .font(.system(size: 14, weight: .semibold))
                         .padding(.horizontal, 16)
                         .padding(.vertical, 8)
                         .background(isSubscribed ? Color.red.opacity(0.1) : Color.blue)
@@ -338,7 +338,7 @@ struct EventRowView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(event.typeDisplay ?? event.type ?? "Event")
                     .font(.subheadline)
-                    .fontWeight(.semibold)
+                    .font(.system(size: 15, weight: .semibold))
                 
                 Text(event.location)
                     .font(.caption)
