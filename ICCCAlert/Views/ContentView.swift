@@ -5,17 +5,17 @@ struct ContentView: View {
     
     var body: some View {
         TabView {
-            AlertsView()
+            AlertsView(authManager: authManager)  // ✅ Pass authManager
                 .tabItem {
                     Label("Alerts", systemImage: "exclamationmark.triangle.fill")
                 }
             
-            ChannelsView()
+            ChannelsView(authManager: authManager)  // ✅ Pass authManager
                 .tabItem {
                     Label("Channels", systemImage: "list.bullet")
                 }
             
-            SettingsView()  // ✅ Fixed - no parameter needed
+            SettingsView()  // ✅ This one uses @EnvironmentObject
                 .tabItem {
                     Label("Settings", systemImage: "gear")
                 }
