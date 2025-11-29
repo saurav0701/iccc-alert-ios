@@ -1,11 +1,12 @@
 import Foundation
 import Security
+import UIKit
 
 /// Manages persistent client ID stored in iOS Keychain
 /// This survives app reinstalls, similar to Android's ANDROID_ID behavior
 class KeychainClientID {
     
-    private static let service = "com.iccc.alert.clientid"
+    static let service = "com.iccc.alert.clientid"
     private static let account = "websocket_client_id"
     
     /// Get or create a persistent client ID
@@ -31,7 +32,7 @@ class KeychainClientID {
     }
     
     /// Retrieve client ID from Keychain
-    private static func retrieveFromKeychain() -> String? {
+    static func retrieveFromKeychain() -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -202,28 +203,3 @@ class ServerManagedClientID {
         return status == errSecSuccess
     }
 }
-
-// MARK: - Usage Examples
-
-/*
- 
- // RECOMMENDED: Use Keychain-backed client ID (survives reinstalls)
- let clientId = KeychainClientID.getOrCreateClientID()
- 
- // ALTERNATIVE: Use server-managed client ID (most robust)
- ServerManagedClientID.getOrRequestClientID(phoneNumber: "+1234567890") { clientId in
-     if let clientId = clientId {
-         // Use client ID for WebSocket connection
-         webSocketService.connect(with: clientId)
-     }
- }
- 
- // For debugging: Check if client ID exists
- if KeychainClientID.hasClientID() {
-     print("Client ID already exists")
- }
- 
- // For debugging: Reset client ID (orphans old consumers)
- let newId = KeychainClientID.resetClientID()
- 
- */

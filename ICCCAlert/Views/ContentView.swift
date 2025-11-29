@@ -2,23 +2,33 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var authManager: AuthManager
+    @State private var selectedTab = 0
     
     var body: some View {
-        TabView {
-            AlertsView(authManager: authManager)  // ✅ Pass authManager
+        TabView(selection: $selectedTab) {
+            AlertsView(authManager: authManager)
                 .tabItem {
-                    Label("Alerts", systemImage: "exclamationmark.triangle.fill")
+                    Label("Alerts", systemImage: selectedTab == 0 ? "exclamationmark.triangle.fill" : "exclamationmark.triangle")
                 }
+                .tag(0)
             
-            ChannelsView(authManager: authManager)  // ✅ Pass authManager
+            ChannelsView()
                 .tabItem {
-                    Label("Channels", systemImage: "list.bullet")
+                    Label("Channels", systemImage: selectedTab == 1 ? "list.bullet.rectangle.fill" : "list.bullet.rectangle")
                 }
+                .tag(1)
             
-            SettingsView()  // ✅ This one uses @EnvironmentObject
+            StatsView()
                 .tabItem {
-                    Label("Settings", systemImage: "gear")
+                    Label("Stats", systemImage: selectedTab == 2 ? "chart.bar.fill" : "chart.bar")
                 }
+                .tag(2)
+            
+            SettingsView()
+                .tabItem {
+                    Label("Settings", systemImage: selectedTab == 3 ? "gear.circle.fill" : "gear")
+                }
+                .tag(3)
         }
     }
 }

@@ -86,44 +86,6 @@ struct ICCCAlertApp: App {
     }
 }
 
-// MARK: - Main Content View
-
-struct MainContentView: View {
-    @EnvironmentObject var authManager: AuthManager
-    @EnvironmentObject var webSocketService: WebSocketService
-    @EnvironmentObject var subscriptionManager: SubscriptionManager
-    
-    @State private var selectedTab = 0
-    
-    var body: some View {
-        TabView(selection: $selectedTab) {
-            AlertsView()
-                .tabItem {
-                    Label("Alerts", systemImage: selectedTab == 0 ? "exclamationmark.triangle.fill" : "exclamationmark.triangle")
-                }
-                .tag(0)
-            
-            ChannelsView()
-                .tabItem {
-                    Label("Channels", systemImage: selectedTab == 1 ? "list.bullet.rectangle.fill" : "list.bullet.rectangle")
-                }
-                .tag(1)
-            
-            StatsView()
-                .tabItem {
-                    Label("Stats", systemImage: selectedTab == 2 ? "chart.bar.fill" : "chart.bar")
-                }
-                .tag(2)
-            
-            SettingsView()
-                .tabItem {
-                    Label("Settings", systemImage: selectedTab == 3 ? "gear.circle.fill" : "gear")
-                }
-                .tag(3)
-        }
-    }
-}
-
 // MARK: - Stats View
 
 struct StatsView: View {

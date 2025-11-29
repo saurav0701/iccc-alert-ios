@@ -28,21 +28,21 @@ struct SettingsView: View {
                         HStack {
                             Text("Designation")
                             Spacer()
-                            Text(user.designation)
+                            Text(user.designation ?? "N/A")
                                 .foregroundColor(.secondary)
                         }
                         
                         HStack {
                             Text("Area")
                             Spacer()
-                            Text(user.area)
+                            Text(user.area ?? "N/A")
                                 .foregroundColor(.secondary)
                         }
                         
                         HStack {
                             Text("Organisation")
                             Spacer()
-                            Text(user.organisation)
+                            Text(user.organisation ?? "N/A")
                                 .foregroundColor(.secondary)
                         }
                     }
