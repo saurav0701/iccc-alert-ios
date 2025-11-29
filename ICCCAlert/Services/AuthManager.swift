@@ -104,16 +104,56 @@ class AuthManager: ObservableObject {
                     return
                 }
                 
+                // 🔍 DEBUG: Print the raw response
+                if let jsonString = String(data: data, encoding: .utf8) {
+                    print("🔍 RAW RESPONSE: \(jsonString)")
+                }
+                
                 if httpResponse.statusCode == 200 {
-                    // Parse the nested response structure: { message, data: { token, expiresAt, user } }
-                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                       let dataDict = json["data"] as? [String: Any],
-                       let responseData = try? JSONSerialization.data(withJSONObject: dataDict),
-                       let authResponse = try? JSONDecoder().decode(AuthResponse.self, from: responseData) {
-                        self.saveAuthData(authResponse)
-                        completion(true, "Login successful")
+                    // Parse the nested response structure
+                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                        print("🔍 JSON KEYS: \(json.keys)")
+                        
+                        if let dataDict = json["data"] as? [String: Any] {
+                            print("🔍 DATA DICT KEYS: \(dataDict.keys)")
+                            print("🔍 DATA DICT: \(dataDict)")
+                            
+                            // Try to decode with detailed error
+                            if let responseData = try? JSONSerialization.data(withJSONObject: dataDict) {
+                                do {
+                                    let authResponse = try JSONDecoder().decode(AuthResponse.self, from: responseData)
+                                    print("✅ Successfully decoded AuthResponse")
+                                    self.saveAuthData(authResponse)
+                                    completion(true, "Login successful")
+                                } catch {
+                                    print("❌ Decoding error: \(error)")
+                                    if let decodingError = error as? DecodingError {
+                                        switch decodingError {
+                                        case .keyNotFound(let key, let context):
+                                            print("❌ Key '\(key.stringValue)' not found: \(context.debugDescription)")
+                                        case .typeMismatch(let type, let context):
+                                            print("❌ Type mismatch for type \(type): \(context.debugDescription)")
+                                        case .valueNotFound(let type, let context):
+                                            print("❌ Value not found for type \(type): \(context.debugDescription)")
+                                        case .dataCorrupted(let context):
+                                            print("❌ Data corrupted: \(context.debugDescription)")
+                                        @unknown default:
+                                            print("❌ Unknown decoding error")
+                                        }
+                                    }
+                                    completion(false, "Invalid response format: \(error.localizedDescription)")
+                                }
+                            } else {
+                                print("❌ Failed to convert dataDict to Data")
+                                completion(false, "Invalid response format")
+                            }
+                        } else {
+                            print("❌ 'data' key not found or not a dictionary")
+                            print("❌ Available keys: \(json.keys)")
+                            completion(false, "Invalid response format")
+                        }
                     } else {
-                        print("Failed to parse auth response")
+                        print("❌ Failed to parse JSON")
                         completion(false, "Invalid response format")
                     }
                 } else {
