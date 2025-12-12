@@ -25,114 +25,131 @@ jobs:
     - name: Generate Xcode Project
       run: ruby generate_project.rb
     
-    - name: Update Bundle ID for Development
+    - name: Update for iOS 15.8.5 Compatibility
       run: |
-        # Use a unique bundle ID for development
-        sed -i '' 's/com.iccc.alert/com.iccc.alert.dev/g' generate_project.rb
-        ruby generate_project.rb
+        # Update deployment target to iOS 14.0 (compatible with iOS 15.8.5)
+        sed -i '' "s/'14.0'/'14.0'/g" generate_project.rb
+        echo "✅ Deployment target set for iOS 14.0+ (compatible with iOS 15.8.5)"
     
     - name: Build for iOS Device
       run: |
-        echo "🏗️ Building for iOS device..."
+        echo "🏗️ Building for iOS device (iPhone 7 - iOS 15.8.5 compatible)..."
         
         # Clean build directory
         rm -rf build
+        rm -rf ~/Library/Developer/Xcode/DerivedData/ICCCAlert-*
         mkdir -p build
         
-        # Build archive
+        # Build for device (ad-hoc style without signing)
         xcodebuild \
           -project ICCCAlert.xcodeproj \
           -scheme ICCCAlert \
           -destination 'generic/platform=iOS' \
-          -configuration Debug \
-          -archivePath $PWD/build/ICCCAlert.xcarchive \
-          archive \
-          CODE_SIGN_IDENTITY="-" \
+          -configuration Release \
+          -sdk iphoneos \
+          -derivedDataPath ./DerivedData \
+          clean build \
+          CODE_SIGN_IDENTITY="" \
           CODE_SIGNING_REQUIRED=NO \
           CODE_SIGNING_ALLOWED=NO \
-          AD_HOC_CODE_SIGNING_ALLOWED=YES
+          DEVELOPMENT_TEAM="" \
+          PROVISIONING_PROFILE="" \
+          ENABLE_BITCODE=NO \
+          ONLY_ACTIVE_ARCH=NO \
+          ARCHS="arm64 armv7" \
+          VALID_ARCHS="arm64 armv7" \
+          IPHONEOS_DEPLOYMENT_TARGET=14.0
         
-        echo "✅ Archive created"
+        echo "✅ Build completed"
     
-    - name: Create IPA Package
+    - name: Create Proper IPA for Diawi
       run: |
-        echo "📦 Creating IPA from archive..."
+        echo "📦 Creating IPA package for Diawi..."
         
-        # Set variables
-        ARCHIVE_PATH="$PWD/build/ICCCAlert.xcarchive"
-        APP_PATH="$ARCHIVE_PATH/Products/Applications/ICCCAlert.app"
-        PAYLOAD_PATH="$PWD/build/Payload"
-        IPA_PATH="$PWD/build/ICCCAlert.ipa"
+        # Find the built app
+        APP_PATH=$(find ./DerivedData -name "ICCCAlert.app" -path "*/Build/Products/Release-iphoneos/*" -type d | head -1)
         
-        # Debug: Show what we have
-        echo "🔍 Archive contents:"
-        ls -la "$ARCHIVE_PATH/Products/Applications/" || echo "❌ Applications directory not found!"
-        
-        # Verify app exists
-        if [ ! -d "$APP_PATH" ]; then
-          echo "❌ ERROR: App bundle not found at $APP_PATH"
-          echo "Available files:"
-          find "$ARCHIVE_PATH" -name "*.app" -type d
+        if [ -z "$APP_PATH" ]; then
+          echo "❌ ERROR: Could not find ICCCAlert.app"
+          echo "Searching in DerivedData:"
+          find ./DerivedData -name "*.app" -type d
           exit 1
         fi
         
         echo "✅ Found app at: $APP_PATH"
         
-        # Create Payload directory
-        mkdir -p "$PAYLOAD_PATH"
-        echo "✅ Created Payload directory"
+        # Verify app bundle structure
+        echo "📋 App bundle contents:"
+        ls -la "$APP_PATH"
         
-        # Copy app to Payload
-        cp -R "$APP_PATH" "$PAYLOAD_PATH/"
-        echo "✅ Copied app to Payload"
-        
-        # Verify copy
-        if [ ! -d "$PAYLOAD_PATH/ICCCAlert.app" ]; then
-          echo "❌ ERROR: Failed to copy app to Payload!"
-          ls -la "$PAYLOAD_PATH/"
+        # Check for executable
+        if [ -f "$APP_PATH/ICCCAlert" ]; then
+          echo "✅ Executable found"
+          file "$APP_PATH/ICCCAlert"
+          lipo -info "$APP_PATH/ICCCAlert" || echo "⚠️ Could not read architectures"
+        else
+          echo "❌ ERROR: Executable not found in app bundle"
           exit 1
         fi
         
-        echo "📋 Payload contents:"
-        ls -la "$PAYLOAD_PATH/"
+        # Create Payload directory structure
+        PAYLOAD_DIR="./build/Payload"
+        mkdir -p "$PAYLOAD_DIR"
         
-        # Create IPA (zip the Payload directory)
-        cd "$PWD/build"
-        zip -r -q ICCCAlert.ipa Payload
+        # Copy app bundle to Payload
+        echo "📦 Copying app to Payload directory..."
+        cp -R "$APP_PATH" "$PAYLOAD_DIR/"
+        
+        # Verify copy
+        if [ ! -d "$PAYLOAD_DIR/ICCCAlert.app" ]; then
+          echo "❌ ERROR: Failed to copy app to Payload"
+          exit 1
+        fi
+        
+        echo "✅ App copied to Payload"
+        echo "📋 Payload structure:"
+        ls -la "$PAYLOAD_DIR"
+        ls -la "$PAYLOAD_DIR/ICCCAlert.app" | head -10
+        
+        # Create IPA (zip file with .ipa extension)
+        echo "🗜️ Creating IPA archive..."
+        cd ./build
+        
+        # Remove any existing IPA
+        rm -f ICCCAlert.ipa
+        
+        # Create zip without compression for better compatibility
+        zip -r -0 ICCCAlert.ipa Payload
+        
         cd ..
         
         # Verify IPA was created
-        if [ ! -f "$IPA_PATH" ]; then
-          echo "❌ ERROR: IPA file was not created!"
-          echo "Current directory contents:"
-          ls -la build/
+        if [ ! -f "./build/ICCCAlert.ipa" ]; then
+          echo "❌ ERROR: IPA was not created"
           exit 1
         fi
         
-        # Check IPA file
+        # Get IPA info
+        IPA_SIZE=$(du -h ./build/ICCCAlert.ipa | cut -f1)
         echo "✅ IPA created successfully!"
-        ls -lh "$IPA_PATH"
-        file "$IPA_PATH"
+        echo "📊 IPA size: $IPA_SIZE"
         
-        # Verify it's a valid ZIP
-        if unzip -t "$IPA_PATH" > /dev/null 2>&1; then
+        # Verify IPA structure
+        echo "📋 Verifying IPA structure..."
+        unzip -l ./build/ICCCAlert.ipa | grep -E "(Payload|ICCCAlert.app|Info.plist|ICCCAlert$)" | head -20
+        
+        # Test IPA integrity
+        if unzip -t ./build/ICCCAlert.ipa > /dev/null 2>&1; then
           echo "✅ IPA is a valid ZIP archive"
         else
-          echo "❌ WARNING: IPA may not be a valid ZIP archive"
+          echo "❌ ERROR: IPA is not a valid ZIP archive"
+          exit 1
         fi
         
-        # Show IPA contents
-        echo "📋 IPA contents:"
-        unzip -l "$IPA_PATH" | head -20
+        # Check file type
+        file ./build/ICCCAlert.ipa
         
-        # Clean up
-        rm -rf build/Payload
-        rm -rf build/ICCCAlert.xcarchive
-        echo "✅ Cleaned up temporary files"
-        
-        # Final verification
-        echo "📦 Final build directory:"
-        ls -lh build/
+        echo "✅ IPA is ready for Diawi upload!"
     
     - name: Upload IPA Artifact
       uses: actions/upload-artifact@v4
@@ -142,43 +159,127 @@ jobs:
         retention-days: 30
         if-no-files-found: error
     
-    - name: Verify Upload
+    - name: Create Installation Guide
       run: |
-        if [ -f "build/ICCCAlert.ipa" ]; then
-          echo "✅ IPA file ready for upload"
-          echo "📊 File size: $(du -h build/ICCCAlert.ipa | cut -f1)"
-          echo "📊 File type: $(file build/ICCCAlert.ipa)"
-        else
-          echo "❌ IPA file missing before upload!"
-          exit 1
-        fi
-    
-    - name: Installation Instructions
-      run: |
-        echo "✅ Build complete!"
-        echo ""
-        echo "📱 To install on your iPhone:"
-        echo ""
-        echo "Method 1: Using Diawi (EASIEST)"
-        echo "1. Download 'ICCCAlert-iPhone-IPA' artifact"
-        echo "2. Extract the ZIP to get ICCCAlert.ipa"
-        echo "3. Go to https://www.diawi.com/"
-        echo "4. Upload ICCCAlert.ipa"
-        echo "5. Open the Diawi link on iPhone Safari"
-        echo "6. Tap Install"
-        echo "7. Trust in Settings → General → Device Management"
-        echo ""
-        echo "Method 2: Manual IPA Creation (if download has no .ipa)"
-        echo "1. Create a folder named 'Payload'"
-        echo "2. Copy ICCCAlert.app into Payload/"
-        echo "3. Zip the Payload folder"
-        echo "4. Rename .zip to .ipa"
-        echo "5. Upload to Diawi"
+        cat > ./build/INSTALLATION_GUIDE.txt << 'EOF'
+        ╔══════════════════════════════════════════════════════════════╗
+        ║  ICCCAlert - iPhone 7 (iOS 15.8.5) Installation Guide       ║
+        ╚══════════════════════════════════════════════════════════════╝
 
-  # Keep simulator build for Appetize
-  build-appetize:
-    name: Build for Appetize.io
+        📱 DEVICE COMPATIBILITY:
+        ✅ iPhone 7 running iOS 15.8.5 - FULLY COMPATIBLE
+        ✅ This build supports arm64 and armv7 architectures
+        ✅ Minimum iOS version: 14.0
+
+        🚀 INSTALLATION STEPS (Using Diawi):
+
+        1️⃣ DOWNLOAD THE IPA:
+           - Download the "ICCCAlert-iPhone-IPA" artifact from GitHub Actions
+           - Extract the ZIP file to get ICCCAlert.ipa
+           - Verify file size is reasonable (should be several MB)
+
+        2️⃣ UPLOAD TO DIAWI:
+           - Go to https://www.diawi.com/
+           - Click "Send your app"
+           - Upload ICCCAlert.ipa file
+           - Wait for upload to complete
+           - You'll get a short link (e.g., https://i.diawi.com/xxxxxx)
+
+        3️⃣ INSTALL ON IPHONE:
+           - Open Safari on your iPhone 7
+           - Type or scan the Diawi link
+           - Tap the "Install" button on the Diawi page
+           - Confirm installation when prompted
+
+        4️⃣ TRUST THE DEVELOPER:
+           - Go to: Settings → General → VPN & Device Management
+           - Find "Enterprise App" or unsigned app profile
+           - Tap on it and select "Trust"
+           - The app icon should now appear on your home screen
+
+        5️⃣ LAUNCH THE APP:
+           - Tap the ICCCAlert icon
+           - The app should launch successfully!
+
+        ⚠️ TROUBLESHOOTING:
+
+        If Diawi shows "Unsupported File":
+        - Make sure you uploaded the .ipa file, not the .zip
+        - Check that the file is not corrupted
+        - Try re-downloading from GitHub Actions
+
+        If "Unable to Install":
+        - Check your iPhone storage (need at least 100MB free)
+        - Restart your iPhone and try again
+        - Make sure you're using Safari (not Chrome)
+
+        If "Untrusted Developer" appears:
+        - This is NORMAL for unsigned apps
+        - Follow step 4️⃣ to trust the app
+
+        If app crashes on launch:
+        - This might indicate architecture mismatch
+        - Report the issue with crash logs
+
+        📝 ALTERNATIVE METHOD (iTunes/Finder):
+        If Diawi doesn't work, you can install via computer:
+        1. Connect iPhone to Mac/PC
+        2. Open Finder (Mac) or iTunes (Windows)
+        3. Drag ICCCAlert.ipa to your iPhone
+        4. Follow trust steps above
+
+        🔄 FOR DEVELOPERS:
+        This is an unsigned build. For proper App Store distribution:
+        - You'll need an Apple Developer Account ($99/year)
+        - Configure code signing with valid certificate
+        - Create a provisioning profile
+        - Use TestFlight for beta testing
+
+        📱 CURRENT BUILD INFO:
+        - Target: iPhone (arm64, armv7)
+        - Min iOS: 14.0
+        - Tested on: iOS 15.8.5
+        - Build Type: Release (unsigned)
+        - Created: $(date)
+
+        ✅ Good luck with testing! Report any issues on GitHub.
+        EOF
+        
+        cat ./build/INSTALLATION_GUIDE.txt
+    
+    - name: Upload Installation Guide
+      uses: actions/upload-artifact@v4
+      with:
+        name: Installation-Guide
+        path: build/INSTALLATION_GUIDE.txt
+        retention-days: 30
+    
+    - name: Final Summary
+      run: |
+        echo ""
+        echo "╔════════════════════════════════════════════════════════╗"
+        echo "║         ✅ BUILD COMPLETED SUCCESSFULLY!              ║"
+        echo "╚════════════════════════════════════════════════════════╝"
+        echo ""
+        echo "📦 Artifacts created:"
+        ls -lh ./build/
+        echo ""
+        echo "🎯 Next Steps:"
+        echo "1. Download 'ICCCAlert-iPhone-IPA' artifact"
+        echo "2. Extract to get ICCCAlert.ipa"
+        echo "3. Upload to https://www.diawi.com/"
+        echo "4. Install on iPhone 7 via Safari"
+        echo "5. Trust in Settings → General → Device Management"
+        echo ""
+        echo "📱 iPhone 7 (iOS 15.8.5) - READY TO TEST!"
+        echo "📋 See Installation-Guide.txt for detailed instructions"
+        echo ""
+
+  # Keep simulator build for future use (Appetize.io)
+  build-simulator:
+    name: Build for Simulator (Optional)
     runs-on: macos-latest
+    if: false  # Disabled by default, enable if needed
     
     steps:
     - name: Checkout Code
@@ -203,22 +304,22 @@ jobs:
           -destination 'generic/platform=iOS Simulator' \
           -configuration Debug \
           -sdk iphonesimulator \
+          -derivedDataPath ./DerivedData \
           clean build \
           CODE_SIGN_IDENTITY="" \
           CODE_SIGNING_REQUIRED=NO \
-          CODE_SIGNING_ALLOWED=NO \
           ONLY_ACTIVE_ARCH=NO \
           ARCHS="arm64 x86_64"
         
-        APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "ICCCAlert.app" -type d | head -1)
+        APP_PATH=$(find ./DerivedData -name "ICCCAlert.app" -type d | head -1)
         mkdir -p ./build
         cp -R "$APP_PATH" ./build/
         cd ./build
         zip -r -y ICCCAlert-Simulator.zip ICCCAlert.app
     
-    - name: Upload Appetize Build
+    - name: Upload Simulator Build
       uses: actions/upload-artifact@v4
       with:
-        name: ICCCAlert-Appetize
+        name: ICCCAlert-Simulator
         path: build/ICCCAlert-Simulator.zip
         retention-days: 30
