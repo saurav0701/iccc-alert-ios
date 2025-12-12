@@ -1,0 +1,143 @@
+name: Find My Team ID
+
+on:
+  workflow_dispatch:
+
+jobs:
+  find-team-id:
+    name: Discover Apple Team ID
+    runs-on: macos-latest
+    
+    steps:
+    - name: Find Team ID
+      env:
+        APPLE_ID: ${{ secrets.APPLE_ID }}
+        APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
+      run: |
+        echo "════════════════════════════════════════════════════════"
+        echo "🔍 Finding your Apple Team ID..."
+        echo "════════════════════════════════════════════════════════"
+        echo ""
+        
+        if [ -z "$APPLE_ID" ] || [ -z "$APP_SPECIFIC_PASSWORD" ]; then
+          echo "❌ ERROR: APPLE_ID or APP_SPECIFIC_PASSWORD not set!"
+          exit 1
+        fi
+        
+        echo "Apple ID: $APPLE_ID"
+        echo ""
+        
+        # Install fastlane
+        sudo gem install fastlane -NV
+        
+        # Create a simple Fastfile to list teams
+        mkdir -p fastlane
+        cat > fastlane/Fastfile << 'FASTFILE_EOF'
+        default_platform(:ios)
+        
+        platform :ios do
+          lane :list_teams do
+            # This will show all teams associated with your Apple ID
+            teams = CredentialsManager::AccountManager.new(
+              user: ENV["APPLE_ID"],
+              password: ENV["FASTLANE_PASSWORD"]
+            ).teams rescue nil
+            
+            if teams && teams.any?
+              puts ""
+              puts "════════════════════════════════════════════════════════"
+              puts "✅ FOUND YOUR TEAM(S):"
+              puts "════════════════════════════════════════════════════════"
+              teams.each do |team|
+                puts ""
+                puts "Team Name: #{team['name']}"
+                puts "Team ID:   #{team['teamId']}"
+                puts "Type:      #{team['type']}"
+                puts "─" * 56
+              end
+              puts ""
+              puts "📝 WHAT TO DO NEXT:"
+              puts "1. Copy the Team ID from above"
+              puts "2. Go to: GitHub repo → Settings → Secrets → Actions"
+              puts "3. Add new secret: TEAM_ID = (paste your Team ID)"
+              puts "4. Run the main build workflow again"
+              puts ""
+              puts "💡 If you see multiple teams:"
+              puts "   - For FREE signing, use the one with Type: 'Individual'"
+              puts "   - That's your Personal Team"
+              puts ""
+              puts "════════════════════════════════════════════════════════"
+            else
+              puts ""
+              puts "⚠️  Could not retrieve teams directly."
+              puts "    Trying alternative method..."
+              puts ""
+            end
+          end
+        end
+        FASTFILE_EOF
+        
+        # Set up environment
+        export FASTLANE_PASSWORD="$APP_SPECIFIC_PASSWORD"
+        export FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD="$APP_SPECIFIC_PASSWORD"
+        export FASTLANE_DONT_STORE_PASSWORD=1
+        export FASTLANE_SESSION=""
+        
+        echo "🔐 Authenticating with Apple..."
+        echo ""
+        
+        cd fastlane
+        fastlane list_teams 2>&1 || {
+          echo ""
+          echo "════════════════════════════════════════════════════════"
+          echo "📋 ALTERNATIVE METHOD - Check the error message above!"
+          echo "════════════════════════════════════════════════════════"
+          echo ""
+          echo "Look for lines that mention:"
+          echo '  - "Multiple teams found"'
+          echo '  - Team IDs like: "ABC1234XYZ" or "12345ABCDE"'
+          echo '  - Personal Team or Individual Team'
+          echo ""
+          echo "Your Team ID is in the error output above! ☝️"
+          echo ""
+          echo "════════════════════════════════════════════════════════"
+        }
+        
+        echo ""
+        echo "════════════════════════════════════════════════════════"
+        echo "🎯 HOW TO GET TEAM ID MANUALLY (if above didn't work):"
+        echo "════════════════════════════════════════════════════════"
+        echo ""
+        echo "Method 1: Apple Developer Website"
+        echo "  1. Go to: https://developer.apple.com/account"
+        echo "  2. Sign in with: $APPLE_ID"
+        echo "  3. Look at top right - click your name/profile"
+        echo "  4. Your Team ID will be shown there"
+        echo "     (Usually format: ABC1234XYZ or 12345ABCDE)"
+        echo ""
+        echo "Method 2: Using Mac (if you have one)"
+        echo "  1. Open Xcode"
+        echo "  2. Go to: Xcode → Preferences → Accounts"
+        echo "  3. Add your Apple ID if not there"
+        echo "  4. Select your Apple ID"
+        echo "  5. Click 'Manage Certificates'"
+        echo "  6. Team ID shown next to your name"
+        echo ""
+        echo "Method 3: Via Keychain (Mac only)"
+        echo "  1. Open Xcode"
+        echo "  2. Try to build any iOS project"
+        echo "  3. In build settings, your Team will show with ID"
+        echo ""
+        echo "════════════════════════════════════════════════════════"
+        echo ""
+        echo "📝 ONCE YOU HAVE YOUR TEAM ID:"
+        echo ""
+        echo "1. Go to your GitHub repository"
+        echo "2. Settings → Secrets and variables → Actions"
+        echo "3. Click 'New repository secret'"
+        echo "4. Name: TEAM_ID"
+        echo "5. Value: (your Team ID - example: ABC1234XYZ)"
+        echo "6. Click 'Add secret'"
+        echo "7. Run the main build workflow again!"
+        echo ""
+        echo "════════════════════════════════════════════════════════"
