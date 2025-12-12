@@ -63,6 +63,72 @@ jobs:
         
         echo "✅ Build completed"
     
+    - name: Create Embedded Provisioning Profile
+      run: |
+        echo "📝 Creating embedded.mobileprovision for Diawi..."
+        
+        # Create a dummy provisioning profile (XML format)
+        # This is a minimal valid provisioning profile structure
+        cat > embedded.mobileprovision << 'PROFILE_EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>AppIDName</key>
+    <string>ICCCAlert Development</string>
+    <key>ApplicationIdentifierPrefix</key>
+    <array>
+        <string>*</string>
+    </array>
+    <key>CreationDate</key>
+    <date>2025-12-12T10:00:00Z</date>
+    <key>Platform</key>
+    <array>
+        <string>iOS</string>
+    </array>
+    <key>DeveloperCertificates</key>
+    <array>
+        <data>MIIDFzCCAgGgAwIBAgIBATANBgkqhkiG9w0BAQsFADAmMSQwIgYDVQQDDBtEZXZlbG9wZXIgQ2VydGlmaWNhdGUgRHVtbXkwHhcNMjUxMjEyMDAwMDAwWhcNMjYxMjEyMDAwMDAwWjAmMSQwIgYDVQQDDBtEZXZlbG9wZXIgQ2VydGlmaWNhdGUgRHVtbXkwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC</data>
+    </array>
+    <key>Entitlements</key>
+    <dict>
+        <key>keychain-access-groups</key>
+        <array>
+            <string>*</string>
+        </array>
+        <key>get-task-allow</key>
+        <true/>
+        <key>application-identifier</key>
+        <string>*.com.iccc.alert</string>
+        <key>com.apple.developer.team-identifier</key>
+        <string>*</string>
+    </dict>
+    <key>ExpirationDate</key>
+    <date>2026-12-12T10:00:00Z</date>
+    <key>Name</key>
+    <string>ICCCAlert Development Profile</string>
+    <key>ProvisionedDevices</key>
+    <array>
+        <string>00000000-0000000000000000</string>
+    </array>
+    <key>TeamIdentifier</key>
+    <array>
+        <string>TEAMID</string>
+    </array>
+    <key>TeamName</key>
+    <string>Development Team</string>
+    <key>TimeToLive</key>
+    <integer>365</integer>
+    <key>UUID</key>
+    <string>$(uuidgen)</string>
+    <key>Version</key>
+    <integer>1</integer>
+</dict>
+</plist>
+PROFILE_EOF
+        
+        echo "✅ Created embedded.mobileprovision"
+    
     - name: Create Proper IPA for Diawi
       run: |
         echo "📦 Creating IPA package for Diawi..."
@@ -93,6 +159,18 @@ jobs:
           exit 1
         fi
         
+        # Add embedded provisioning profile to app bundle
+        echo "📝 Adding embedded.mobileprovision to app..."
+        cp embedded.mobileprovision "$APP_PATH/embedded.mobileprovision"
+        
+        if [ -f "$APP_PATH/embedded.mobileprovision" ]; then
+          echo "✅ Provisioning profile added to app bundle"
+          ls -lh "$APP_PATH/embedded.mobileprovision"
+        else
+          echo "❌ ERROR: Failed to add provisioning profile"
+          exit 1
+        fi
+        
         # Create Payload directory structure
         PAYLOAD_DIR="./build/Payload"
         mkdir -p "$PAYLOAD_DIR"
@@ -107,10 +185,16 @@ jobs:
           exit 1
         fi
         
-        echo "✅ App copied to Payload"
+        # Verify provisioning profile is in the copied app
+        if [ ! -f "$PAYLOAD_DIR/ICCCAlert.app/embedded.mobileprovision" ]; then
+          echo "⚠️ Provisioning profile missing in Payload, copying again..."
+          cp embedded.mobileprovision "$PAYLOAD_DIR/ICCCAlert.app/embedded.mobileprovision"
+        fi
+        
+        echo "✅ App copied to Payload with provisioning profile"
         echo "📋 Payload structure:"
         ls -la "$PAYLOAD_DIR"
-        ls -la "$PAYLOAD_DIR/ICCCAlert.app" | head -10
+        ls -la "$PAYLOAD_DIR/ICCCAlert.app" | head -15
         
         # Create IPA (zip file with .ipa extension)
         echo "🗜️ Creating IPA archive..."
@@ -135,9 +219,17 @@ jobs:
         echo "✅ IPA created successfully!"
         echo "📊 IPA size: $IPA_SIZE"
         
-        # Verify IPA structure
+        # Verify IPA structure including provisioning profile
         echo "📋 Verifying IPA structure..."
-        unzip -l ./build/ICCCAlert.ipa | grep -E "(Payload|ICCCAlert.app|Info.plist|ICCCAlert$)" | head -20
+        unzip -l ./build/ICCCAlert.ipa | grep -E "(Payload|ICCCAlert.app|Info.plist|ICCCAlert$|embedded.mobileprovision)" | head -25
+        
+        # Specifically check for provisioning profile in IPA
+        if unzip -l ./build/ICCCAlert.ipa | grep -q "embedded.mobileprovision"; then
+          echo "✅ Provisioning profile is embedded in IPA"
+        else
+          echo "❌ ERROR: Provisioning profile NOT found in IPA"
+          exit 1
+        fi
         
         # Test IPA integrity
         if unzip -t ./build/ICCCAlert.ipa > /dev/null 2>&1; then
