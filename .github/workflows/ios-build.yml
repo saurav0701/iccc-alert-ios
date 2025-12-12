@@ -67,65 +67,63 @@ jobs:
       run: |
         echo "📝 Creating embedded.mobileprovision for Diawi..."
         
-        # Create a dummy provisioning profile (XML format)
-        # This is a minimal valid provisioning profile structure
-        cat > embedded.mobileprovision << 'PROFILE_EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>AppIDName</key>
-    <string>ICCCAlert Development</string>
-    <key>ApplicationIdentifierPrefix</key>
-    <array>
-        <string>*</string>
-    </array>
-    <key>CreationDate</key>
-    <date>2025-12-12T10:00:00Z</date>
-    <key>Platform</key>
-    <array>
-        <string>iOS</string>
-    </array>
-    <key>DeveloperCertificates</key>
-    <array>
-        <data>MIIDFzCCAgGgAwIBAgIBATANBgkqhkiG9w0BAQsFADAmMSQwIgYDVQQDDBtEZXZlbG9wZXIgQ2VydGlmaWNhdGUgRHVtbXkwHhcNMjUxMjEyMDAwMDAwWhcNMjYxMjEyMDAwMDAwWjAmMSQwIgYDVQQDDBtEZXZlbG9wZXIgQ2VydGlmaWNhdGUgRHVtbXkwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC</data>
-    </array>
-    <key>Entitlements</key>
-    <dict>
-        <key>keychain-access-groups</key>
-        <array>
-            <string>*</string>
-        </array>
-        <key>get-task-allow</key>
-        <true/>
-        <key>application-identifier</key>
-        <string>*.com.iccc.alert</string>
-        <key>com.apple.developer.team-identifier</key>
-        <string>*</string>
-    </dict>
-    <key>ExpirationDate</key>
-    <date>2026-12-12T10:00:00Z</date>
-    <key>Name</key>
-    <string>ICCCAlert Development Profile</string>
-    <key>ProvisionedDevices</key>
-    <array>
-        <string>00000000-0000000000000000</string>
-    </array>
-    <key>TeamIdentifier</key>
-    <array>
-        <string>TEAMID</string>
-    </array>
-    <key>TeamName</key>
-    <string>Development Team</string>
-    <key>TimeToLive</key>
-    <integer>365</integer>
-    <key>UUID</key>
-    <string>$(uuidgen)</string>
-    <key>Version</key>
-    <integer>1</integer>
-</dict>
-</plist>
-PROFILE_EOF
+        cat > embedded.mobileprovision << 'EOF'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>AppIDName</key>
+            <string>ICCCAlert Development</string>
+            <key>ApplicationIdentifierPrefix</key>
+            <array>
+                <string>TEAMID12345</string>
+            </array>
+            <key>CreationDate</key>
+            <date>2025-12-12T10:00:00Z</date>
+            <key>Platform</key>
+            <array>
+                <string>iOS</string>
+            </array>
+            <key>DeveloperCertificates</key>
+            <array>
+                <data>MIIDFzCCAgGgAwIBAgIBATANBgkqhkiG9w0BAQ==</data>
+            </array>
+            <key>Entitlements</key>
+            <dict>
+                <key>keychain-access-groups</key>
+                <array>
+                    <string>TEAMID12345.*</string>
+                </array>
+                <key>get-task-allow</key>
+                <true/>
+                <key>application-identifier</key>
+                <string>TEAMID12345.com.iccc.alert</string>
+                <key>com.apple.developer.team-identifier</key>
+                <string>TEAMID12345</string>
+            </dict>
+            <key>ExpirationDate</key>
+            <date>2026-12-12T10:00:00Z</date>
+            <key>Name</key>
+            <string>ICCCAlert Development Profile</string>
+            <key>ProvisionedDevices</key>
+            <array>
+                <string>00000000-0000000000000000</string>
+            </array>
+            <key>TeamIdentifier</key>
+            <array>
+                <string>TEAMID12345</string>
+            </array>
+            <key>TeamName</key>
+            <string>Development Team</string>
+            <key>TimeToLive</key>
+            <integer>365</integer>
+            <key>UUID</key>
+            <string>12345678-1234-1234-1234-123456789012</string>
+            <key>Version</key>
+            <integer>1</integer>
+        </dict>
+        </plist>
+        EOF
         
         echo "✅ Created embedded.mobileprovision"
     
