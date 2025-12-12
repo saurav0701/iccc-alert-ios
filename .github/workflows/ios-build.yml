@@ -66,7 +66,7 @@ jobs:
         end
         EOF
         
-        # Create Fastfile - SIMPLIFIED VERSION
+        # Create Fastfile - WITHOUT device registration to avoid auth issues
         cat > fastlane/Fastfile << 'EOF'
         default_platform(:ios)
 
@@ -74,8 +74,7 @@ jobs:
           desc "Build and sign the app with free provisioning"
           lane :build_free do
             
-            # Skip device registration if TEAM_ID is not set
-            # We'll register it manually via Xcode on Mac instead
+            puts "🔐 Authenticating with Apple..."
             
             # Get certificates (creates if needed)
             cert(
@@ -84,6 +83,8 @@ jobs:
               development: true
             )
 
+            puts "📄 Getting provisioning profile..."
+            
             # Get provisioning profile (creates if needed)
             sigh(
               username: ENV["APPLE_ID"],
@@ -94,6 +95,8 @@ jobs:
               skip_certificate_verification: false
             )
 
+            puts "🏗️ Building IPA..."
+            
             # Build the app
             gym(
               project: "ICCCAlert.xcodeproj",
@@ -109,27 +112,8 @@ jobs:
                 iCloudContainerEnvironment: "Development"
               }
             )
-          end
-          
-          desc "Just get your Team ID"
-          lane :get_team_id do
-            puts "🔍 Fetching your Team ID..."
             
-            # This will list all teams associated with your Apple ID
-            # and help you find your personal Team ID
-            teams = CredentialsManager::AccountManager.new(
-              user: ENV["APPLE_ID"]
-            ).teams
-            
-            puts "\n✅ Found these teams for #{ENV['APPLE_ID']}:"
-            teams.each do |team|
-              puts "   Team Name: #{team['name']}"
-              puts "   Team ID: #{team['teamId']}"
-              puts "   Type: #{team['type']}"
-              puts ""
-            end
-            
-            puts "Add your Team ID as a GitHub Secret: TEAM_ID"
+            puts "✅ Build complete!"
           end
         end
         EOF
@@ -143,45 +127,105 @@ jobs:
         IPHONE_UDID: ${{ secrets.IPHONE_UDID }}
         TEAM_ID: ${{ secrets.TEAM_ID }}
       run: |
+        echo "🔍 Checking required secrets..."
+        echo ""
+        
+        HAS_ERROR=0
+        
         if [ -z "$APPLE_ID" ]; then
           echo "❌ ERROR: APPLE_ID secret not set!"
-          echo "Please add your Apple ID email in GitHub Secrets"
-          exit 1
+          echo "   → Go to GitHub repo Settings → Secrets → Actions"
+          echo "   → Add APPLE_ID = your@email.com"
+          HAS_ERROR=1
+        else
+          echo "✅ APPLE_ID is set: $APPLE_ID"
         fi
         
         if [ -z "$APP_SPECIFIC_PASSWORD" ]; then
+          echo ""
           echo "❌ ERROR: APP_SPECIFIC_PASSWORD secret not set!"
           echo ""
-          echo "📝 How to create App-Specific Password:"
-          echo "1. Go to https://appleid.apple.com/"
-          echo "2. Sign in"
-          echo "3. Security section → App-Specific Passwords"
-          echo "4. Click '+' or 'Generate Password'"
-          echo "5. Name it 'GitHub Fastlane'"
-          echo "6. Copy the password (format: xxxx-xxxx-xxxx-xxxx)"
-          echo "7. Add it as APP_SPECIFIC_PASSWORD in GitHub Secrets"
-          exit 1
-        fi
-        
-        if [ -z "$IPHONE_UDID" ]; then
-          echo "⚠️ WARNING: IPHONE_UDID secret not set!"
-          echo "We'll continue but device won't be auto-registered"
+          echo "   📝 How to generate App-Specific Password:"
+          echo "   1. Go to https://appleid.apple.com/"
+          echo "   2. Sign in with your Apple ID"
+          echo "   3. In Security section, find 'App-Specific Passwords'"
+          echo "   4. Click 'Generate Password' or '+'"
+          echo "   5. Name it 'GitHub Fastlane'"
+          echo "   6. Copy the password (format: xxxx-xxxx-xxxx-xxxx)"
+          echo "   7. Go to GitHub repo Settings → Secrets → Actions"
+          echo "   8. Add APP_SPECIFIC_PASSWORD = (paste password here)"
           echo ""
-          echo "📝 How to get iPhone UDID:"
-          echo "Mac: Connect iPhone → Open Finder → Click iPhone → Click serial number to show UDID"
-          echo "Copy UDID and add as IPHONE_UDID in GitHub Secrets"
+          HAS_ERROR=1
+        else
+          echo "✅ APP_SPECIFIC_PASSWORD is set"
         fi
         
         if [ -z "$TEAM_ID" ]; then
-          echo "⚠️ WARNING: TEAM_ID secret not set!"
-          echo "This is REQUIRED for signing. We'll try to fetch it..."
+          echo ""
+          echo "❌ ERROR: TEAM_ID secret not set!"
+          echo ""
+          echo "   📝 How to find your Team ID:"
+          echo "   Method 1 - Using this workflow:"
+          echo "   1. First, set APPLE_ID and APP_SPECIFIC_PASSWORD"
+          echo "   2. Run this workflow - it will FAIL but show your Team ID in error"
+          echo "   3. Look for 'Multiple teams found' or similar error"
+          echo "   4. Copy the Team ID from error message"
+          echo ""
+          echo "   Method 2 - Using Apple Developer portal:"
+          echo "   1. Go to https://developer.apple.com/account"
+          echo "   2. Sign in"
+          echo "   3. Click on your name in top right"
+          echo "   4. Your Team ID is shown there"
+          echo ""
+          echo "   Then add it:"
+          echo "   → GitHub repo Settings → Secrets → Actions"
+          echo "   → Add TEAM_ID = YOUR_TEAM_ID"
+          echo ""
+          HAS_ERROR=1
+        else
+          echo "✅ TEAM_ID is set: $TEAM_ID"
         fi
         
-        echo "✅ Credentials validated"
-        echo "Apple ID: $APPLE_ID"
-        if [ -n "$IPHONE_UDID" ]; then
-          echo "UDID: ${IPHONE_UDID:0:10}..."
+        if [ -z "$IPHONE_UDID" ]; then
+          echo ""
+          echo "⚠️ WARNING: IPHONE_UDID not set (optional but recommended)"
+          echo ""
+          echo "   📝 How to get iPhone UDID:"
+          echo "   Method 1 - Using iPhone directly:"
+          echo "   1. On iPhone, open Settings"
+          echo "   2. Go to General → About"
+          echo "   3. Scroll down and tap on 'Serial Number' multiple times"
+          echo "   4. It will switch to show UDID"
+          echo "   5. Long press to copy"
+          echo ""
+          echo "   Method 2 - Using iTunes/Finder (if you have access to Mac):"
+          echo "   1. Connect iPhone to computer"
+          echo "   2. Open iTunes or Finder"
+          echo "   3. Select iPhone"
+          echo "   4. Click on Serial Number - it will show UDID"
+          echo ""
+          echo "   Then add it:"
+          echo "   → GitHub repo Settings → Secrets → Actions"
+          echo "   → Add IPHONE_UDID = your-iphone-udid"
+          echo ""
+          echo "   Note: Without UDID, you can still build but need to add device manually later"
+          echo ""
+        else
+          echo "✅ IPHONE_UDID is set: ${IPHONE_UDID:0:10}..."
         fi
+        
+        echo ""
+        echo "════════════════════════════════════════════════════════"
+        
+        if [ $HAS_ERROR -eq 1 ]; then
+          echo "❌ Missing required secrets - please add them and re-run"
+          echo "════════════════════════════════════════════════════════"
+          exit 1
+        fi
+        
+        echo "✅ All required secrets are configured!"
+        echo "════════════════════════════════════════════════════════"
+        echo ""
         
         # Setup environment
         echo "APPLE_ID=$APPLE_ID" >> $GITHUB_ENV
@@ -189,14 +233,11 @@ jobs:
         echo "FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD=$APP_SPECIFIC_PASSWORD" >> $GITHUB_ENV
         echo "FASTLANE_DONT_STORE_PASSWORD=1" >> $GITHUB_ENV
         echo "FASTLANE_SESSION=" >> $GITHUB_ENV
+        echo "TEAM_ID=$TEAM_ID" >> $GITHUB_ENV
         
         if [ -n "$IPHONE_UDID" ]; then
           echo "IPHONE_UDID=$IPHONE_UDID" >> $GITHUB_ENV
-          echo "IPHONE_NAME=iPhone7-Test" >> $GITHUB_ENV
-        fi
-        
-        if [ -n "$TEAM_ID" ]; then
-          echo "TEAM_ID=$TEAM_ID" >> $GITHUB_ENV
+          echo "IPHONE_NAME=iPhone7-Device" >> $GITHUB_ENV
         fi
     
     - name: Create Keychain
@@ -209,66 +250,58 @@ jobs:
         
         echo "✅ Keychain created and unlocked"
     
-    - name: Get Team ID (if not set)
-      if: ${{ !secrets.TEAM_ID }}
-      continue-on-error: true
-      run: |
-        echo "🔍 Attempting to get your Team ID..."
-        cd fastlane
-        fastlane get_team_id || {
-          echo ""
-          echo "════════════════════════════════════════════════════════"
-          echo "⚠️ Could not fetch Team ID automatically"
-          echo "════════════════════════════════════════════════════════"
-          echo ""
-          echo "📝 Manual Method to Get Team ID:"
-          echo ""
-          echo "On your Mac:"
-          echo "1. Open Xcode"
-          echo "2. Open your ICCCAlert project"
-          echo "3. Select the project in left sidebar"
-          echo "4. Go to 'Signing & Capabilities' tab"
-          echo "5. Check 'Automatically manage signing'"
-          echo "6. Select 'Personal Team' in Team dropdown"
-          echo "7. Your Team ID will appear next to team name"
-          echo "   (Format: ABC1234XYZ or similar)"
-          echo ""
-          echo "8. Add this as GitHub Secret: TEAM_ID = YOUR_TEAM_ID"
-          echo ""
-          exit 1
-        }
-    
     - name: Build with Fastlane
-      if: ${{ secrets.TEAM_ID }}
       run: |
         echo "🏗️ Starting build with FREE code signing..."
+        echo "This will:"
+        echo "  1. Authenticate with Apple using your credentials"
+        echo "  2. Create/download development certificate"
+        echo "  3. Create/download provisioning profile"
+        echo "  4. Build and sign the IPA"
+        echo ""
+        
         cd fastlane
         fastlane build_free || {
           echo ""
           echo "════════════════════════════════════════════════════════"
-          echo "⚠️ BUILD FAILED - Common Issues:"
+          echo "⚠️ BUILD FAILED"
           echo "════════════════════════════════════════════════════════"
-          echo "1. ❌ Wrong App-Specific Password"
-          echo "   → Generate NEW password at appleid.apple.com"
-          echo "   → Update APP_SPECIFIC_PASSWORD secret"
           echo ""
-          echo "2. ❌ 2FA not enabled on Apple ID"
-          echo "   → Go to appleid.apple.com → Security"
+          echo "Common issues and solutions:"
+          echo ""
+          echo "1. ❌ 'Invalid username and password combination'"
+          echo "   → Your APP_SPECIFIC_PASSWORD is wrong or expired"
+          echo "   → Generate a NEW one at https://appleid.apple.com/"
+          echo "   → Update APP_SPECIFIC_PASSWORD secret in GitHub"
+          echo ""
+          echo "2. ❌ 'Multiple teams found' or similar Team ID error"
+          echo "   → The error message will show your Team ID"
+          echo "   → Copy it and add as TEAM_ID secret in GitHub"
+          echo "   → Format usually looks like: ABC1234XYZ"
+          echo ""
+          echo "3. ❌ '2FA not enabled' or authentication error"
+          echo "   → Go to https://appleid.apple.com/"
+          echo "   → Sign in → Security section"
           echo "   → Enable Two-Factor Authentication"
+          echo "   → Then generate app-specific password"
           echo ""
-          echo "3. ❌ Wrong Apple ID"
-          echo "   → Check APPLE_ID secret is your actual Apple ID email"
+          echo "4. ❌ 'No such file or directory' - project errors"
+          echo "   → Make sure generate_project.rb exists and runs"
+          echo "   → Check previous steps for errors"
           echo ""
-          echo "4. ❌ Wrong TEAM_ID"
-          echo "   → Check TEAM_ID in GitHub Secrets"
-          echo "   → Get it from Xcode (see instructions above)"
+          echo "════════════════════════════════════════════════════════"
+          echo "💡 TIP: Read the error message above carefully!"
+          echo "     It often contains the exact solution (like your Team ID)"
+          echo "════════════════════════════════════════════════════════"
           echo ""
           exit 1
         }
     
     - name: Verify IPA
-      if: ${{ secrets.TEAM_ID }}
       run: |
+        echo "🔍 Verifying the signed IPA..."
+        echo ""
+        
         if [ -f "./build/ICCCAlert-Signed.ipa" ]; then
           echo "✅ Signed IPA created successfully!"
           ls -lh ./build/ICCCAlert-Signed.ipa
@@ -278,21 +311,42 @@ jobs:
           echo "📋 IPA Contents:"
           unzip -l ./build/ICCCAlert-Signed.ipa | grep -E "(Payload|embedded.mobileprovision|ICCCAlert)" | head -20
           
+          echo ""
+          
           # Check for provisioning profile
           if unzip -l ./build/ICCCAlert-Signed.ipa | grep -q "embedded.mobileprovision"; then
-            echo "✅ Provisioning profile is embedded"
+            echo "✅ Provisioning profile is embedded in IPA"
+            
+            # Extract and show some info about the profile
+            unzip -p ./build/ICCCAlert-Signed.ipa "Payload/ICCCAlert.app/embedded.mobileprovision" > /tmp/profile.mobileprovision 2>/dev/null || true
+            if [ -f "/tmp/profile.mobileprovision" ]; then
+              echo ""
+              echo "📄 Provisioning Profile Info:"
+              security cms -D -i /tmp/profile.mobileprovision > /tmp/profile.plist 2>/dev/null || true
+              if [ -f "/tmp/profile.plist" ]; then
+                echo "   Team ID: $(/usr/libexec/PlistBuddy -c "Print :TeamIdentifier:0" /tmp/profile.plist 2>/dev/null || echo 'N/A')"
+                echo "   Creation Date: $(/usr/libexec/PlistBuddy -c "Print :CreationDate" /tmp/profile.plist 2>/dev/null || echo 'N/A')"
+                echo "   Expiration Date: $(/usr/libexec/PlistBuddy -c "Print :ExpirationDate" /tmp/profile.plist 2>/dev/null || echo 'N/A')"
+              fi
+            fi
           else
-            echo "⚠️ Warning: No provisioning profile found"
+            echo "⚠️ Warning: No provisioning profile found in IPA"
           fi
+          
+          echo ""
+          echo "✅ IPA is ready for download and installation!"
         else
-          echo "❌ ERROR: IPA was not created"
+          echo "❌ ERROR: IPA file was not created"
+          echo ""
           echo "Checking build directory:"
-          ls -la ./build/ || echo "Build directory doesn't exist"
+          ls -la ./build/ 2>/dev/null || echo "Build directory doesn't exist"
+          echo ""
+          echo "Something went wrong during the build process."
+          echo "Check the 'Build with Fastlane' step above for errors."
           exit 1
         fi
     
     - name: Upload Signed IPA
-      if: ${{ secrets.TEAM_ID }}
       uses: actions/upload-artifact@v4
       with:
         name: ICCCAlert-Signed-IPA
@@ -300,135 +354,245 @@ jobs:
         retention-days: 30
     
     - name: Create Installation Guide
-      if: ${{ secrets.TEAM_ID }}
       run: |
         cat > ./build/INSTALLATION_INSTRUCTIONS.txt << 'EOF'
         ╔══════════════════════════════════════════════════════════════╗
-        ║  ICCCAlert - FREE Signed IPA Installation Guide              ║
+        ║       ICCCAlert - Installation Guide for iPhone 7            ║
+        ║              (FREE 7-Day Signing - No Mac Needed!)           ║
         ╚══════════════════════════════════════════════════════════════╝
 
-        🎉 CONGRATULATIONS! Your app is properly signed!
+        🎉 CONGRATULATIONS! Your app is signed and ready!
 
-        This IPA is signed with your FREE Apple ID and will work for 7 DAYS.
-
-        ════════════════════════════════════════════════════════════════
-
-        📱 INSTALLATION METHOD 1: Using Mac Finder (EASIEST!)
-
-        1. Download the "ICCCAlert-Signed-IPA" artifact from GitHub Actions
-        2. Extract to get: ICCCAlert-Signed.ipa
-        3. Connect your iPhone 7 to your Mac via USB
-        4. Open Finder
-        5. Click on your iPhone in the sidebar (under "Locations")
-        6. Drag ICCCAlert-Signed.ipa onto the iPhone window
-        7. Wait for installation to complete
-        8. Done! ✅
+        This IPA is signed with your FREE Apple ID for 7 DAYS.
 
         ════════════════════════════════════════════════════════════════
 
-        📱 INSTALLATION METHOD 2: Using Xcode
+        📱 INSTALLATION METHOD 1: Diawi (NO MAC NEEDED!) ⭐ RECOMMENDED
 
-        1. Open Xcode on your Mac
-        2. Go to Window → Devices and Simulators
-        3. Select your iPhone 7 from the list
-        4. Click the "+" button under "Installed Apps"
-        5. Select ICCCAlert-Signed.ipa
-        6. Wait for installation
-        7. Done! ✅
+        Perfect if you don't have a Mac! Install directly via iPhone Safari.
+
+        1. Download the IPA:
+           → Go to GitHub Actions page
+           → Click on your completed workflow run
+           → Scroll to "Artifacts" section at bottom
+           → Download "ICCCAlert-Signed-IPA"
+           → Extract the ZIP to get ICCCAlert-Signed.ipa
+
+        2. Upload to Diawi:
+           → Go to https://www.diawi.com/ on any computer
+           → Drag and drop ICCCAlert-Signed.ipa onto the page
+           → Wait 30-60 seconds for upload to complete
+           → You'll get a link like: https://i.diawi.com/XXXXXX
+           → COPY THIS LINK!
+
+        3. Install on iPhone 7:
+           → Open Safari browser on your iPhone 7 (must be Safari!)
+           → Type or paste the Diawi link: i.diawi.com/XXXXXX
+           → Tap "Install" button
+           → Confirm installation when prompted
+           → Wait for app to download and install
+           → Done! ✅
 
         ════════════════════════════════════════════════════════════════
 
-        🔓 TRUST THE CERTIFICATE (REQUIRED!)
+        📱 INSTALLATION METHOD 2: AltStore (Advanced)
+
+        If Diawi doesn't work, try AltStore:
+
+        1. Install AltStore on your computer:
+           → Windows: https://altstore.io/
+           → Follow installation instructions
+
+        2. Install AltStore on iPhone:
+           → Connect iPhone to computer
+           → Follow AltStore setup wizard
+           → Install AltStore app on iPhone
+
+        3. Install your IPA:
+           → Open AltStore app on iPhone
+           → Tap "+" icon
+           → Select ICCCAlert-Signed.ipa from computer
+           → Wait for installation
+           → Done! ✅
+
+        ════════════════════════════════════════════════════════════════
+
+        📱 INSTALLATION METHOD 3: Sideloadly (Advanced)
+
+        Another option without Mac:
+
+        1. Download Sideloadly:
+           → Go to https://sideloadly.io/
+           → Download for Windows or Mac
+
+        2. Install your IPA:
+           → Connect iPhone 7 to computer
+           → Open Sideloadly
+           → Drag ICCCAlert-Signed.ipa into Sideloadly
+           → Enter your Apple ID credentials
+           → Click Start
+           → Wait for installation
+           → Done! ✅
+
+        ════════════════════════════════════════════════════════════════
+
+        🔓 TRUST THE CERTIFICATE (CRITICAL - REQUIRED FOR ALL METHODS!)
 
         After installation, you MUST trust the developer certificate:
 
-        1. On your iPhone 7, open Settings
-        2. Go to: General → VPN & Device Management
-        3. Under "Developer App", find your Apple ID
-        4. Tap on it
-        5. Tap "Trust [Your Apple ID]"
-        6. Confirm by tapping "Trust" again
-        7. Done! Now launch the app from home screen
+        ⚠️ If you skip this step, the app will NOT open!
+
+        1. On your iPhone 7, open Settings app
+        2. Navigate to: General → VPN & Device Management
+           (On older iOS: General → Profiles & Device Management)
+        3. Under "Developer App" section, find your Apple ID email
+        4. Tap on your Apple ID
+        5. Tap the blue "Trust [Your Apple ID]" button
+        6. Confirm by tapping "Trust" again in popup
+        7. Done! The app is now trusted
+
+        Now you can launch ICCCAlert from your home screen! 🎉
 
         ════════════════════════════════════════════════════════════════
 
-        ✅ YOUR APP IS NOW WORKING!
+        ✅ APP IS NOW WORKING!
 
-        You can now test:
-        ✅ WebSocket connections
-        ✅ All app features  
-        ✅ Real device performance
+        You can now fully test:
+        ✅ WebSocket real-time connections
+        ✅ All app features and UI
+        ✅ Performance on real iPhone 7
         ✅ iOS 15.8.5 compatibility
+        ✅ Network connectivity
+        ✅ Push notifications (if configured)
 
         ════════════════════════════════════════════════════════════════
 
-        ⏰ AFTER 7 DAYS:
+        ⏰ CERTIFICATE EXPIRATION (7 Days)
 
-        Your certificate will expire after 7 days. This is normal for free signing!
+        Your free code signing certificate expires after 7 DAYS.
+        This is a limitation of free Apple Developer accounts.
 
-        To renew:
-        1. Go to GitHub Actions
-        2. Click "Actions" tab
-        3. Select "Build iOS App with FREE Code Signing"
-        4. Click "Run workflow" → "Run workflow"
-        5. Wait for build to complete
-        6. Download new IPA
-        7. Reinstall on iPhone (takes 2 minutes!)
+        What happens after 7 days:
+        → The app will stop launching
+        → You'll see "Unable to Verify App" error
+        → This is completely normal!
 
-        💡 TIP: Set a calendar reminder for 6 days from now
+        How to renew (takes 3 minutes):
+        1. Go to your GitHub repository
+        2. Click "Actions" tab at top
+        3. Click "Build iOS App with FREE Code Signing"
+        4. Click "Run workflow" button (right side)
+        5. Click green "Run workflow" button
+        6. Wait 5-10 minutes for build
+        7. Download new IPA from artifacts
+        8. Reinstall using same method (Diawi, etc.)
+        9. Trust certificate again in Settings
+        10. Done! Another 7 days! 🔄
+
+        💡 PRO TIP: Set a phone reminder for 6 days from today
+                   to rebuild before the certificate expires!
 
         ════════════════════════════════════════════════════════════════
 
-        ⚠️ TROUBLESHOOTING:
+        ⚠️ TROUBLESHOOTING COMMON ISSUES:
 
-        "Unable to verify app":
+        ❌ "Unable to Install App" or "Cannot Connect to [domain]"
+        Solution:
+        → Make sure you're using Safari browser (not Chrome!)
+        → Try clearing Safari cache: Settings → Safari → Clear History
+        → Restart your iPhone and try again
+        → Make sure iPhone has good internet connection
+
+        ❌ "Untrusted Developer" or "Unable to Verify App"
+        Solution:
+        → You MUST trust the certificate! (see steps above)
         → Go to Settings → General → Device Management
-        → Trust your Apple ID (see steps above)
-        → If still failing, delete app and reinstall
+        → Find your Apple ID and tap Trust
 
-        "This app cannot be installed":
-        → Make sure you're using the SIGNED IPA from GitHub Actions
-        → Try restarting your iPhone
-        → Check that bundle ID matches in Xcode
+        ❌ "This app cannot be installed because its integrity could not be verified"
+        Solution:
+        → Delete the app if it's partially installed
+        → Restart iPhone
+        → Try installing again
+        → Make sure you downloaded the SIGNED IPA from GitHub Actions
 
-        App crashes on launch:
-        → Connect iPhone to Mac
-        → Open Xcode → Window → Devices
-        → View crash logs under "View Device Logs"
-        → Share logs with developer
+        ❌ App installs but crashes immediately on launch
+        Solution:
+        → Make sure you trusted the certificate (see steps above)
+        → Check iOS version (needs iOS 15.8.5)
+        → Try deleting app and reinstalling
+        → Check GitHub Actions logs for build errors
 
-        "Untrusted Developer":
-        → You MUST trust the certificate (see steps above)
-        → This is required for all free Apple ID signed apps
+        ❌ Diawi link shows "Not Found" or expired
+        Solution:
+        → Diawi links expire after 24 hours
+        → Upload the IPA to Diawi again to get new link
+        → Install immediately after getting link
+
+        ❌ Can't find "VPN & Device Management" in Settings
+        Solution:
+        → This section only appears AFTER you install the app
+        → Install the app first, then look for this setting
+        → On some iOS versions it's called "Profiles & Device Management"
 
         ════════════════════════════════════════════════════════════════
 
         💰 COST BREAKDOWN:
 
-        Current Setup (FREE):
-        - Apple ID: $0
-        - Code Signing: $0 (7-day certificates)
-        - GitHub Actions: $0 (free tier)
-        - Installation: $0 (direct via Mac)
+        Your Current Setup:
+        ┌────────────────────────────────────┐
+        │ Apple ID:          FREE ($0)       │
+        │ Code Signing:      FREE ($0)       │
+        │ GitHub Actions:    FREE ($0)       │
+        │ Diawi hosting:     FREE ($0)       │
+        │ Installation:      FREE ($0)       │
+        ├────────────────────────────────────┤
+        │ TOTAL:             $0 / year! 🎉   │
+        └────────────────────────────────────┘
 
-        Total: $0 per year! 🎉
+        Alternative (Paid):
+        ┌────────────────────────────────────┐
+        │ Apple Developer Program: $99/year  │
+        │ Benefits:                          │
+        │   • 1-year certificates            │
+        │   • TestFlight beta testing        │
+        │   • App Store publishing           │
+        │   • Advanced capabilities          │
+        └────────────────────────────────────┘
 
-        Paid Option (if you need it):
-        - Apple Developer Program: $99/year
-        - Benefits: 1-year certificates, TestFlight, App Store publishing
+        For testing and personal use, FREE signing is perfect! ✅
 
         ════════════════════════════════════════════════════════════════
 
-        🎉 ENJOY YOUR APP!
+        📚 ADDITIONAL RESOURCES:
 
-        Your app is now running on your iPhone 7!
-        Questions? Check the GitHub Actions logs for details.
+        Diawi Help: https://www.diawi.com/
+        AltStore: https://altstore.io/
+        Sideloadly: https://sideloadly.io/
+        
+        Apple Developer: https://developer.apple.com/
+        GitHub Actions Logs: Check your repository's Actions tab
+
+        ════════════════════════════════════════════════════════════════
+
+        🎉 ENJOY YOUR APP ON iPHONE 7!
+
+        Your ICCCAlert app is now running on real hardware!
+        Test everything, find bugs, and iterate quickly.
+
+        Remember: Rebuild every 6 days to keep it working!
+
+        Questions or issues? Check the GitHub Actions logs for details.
+
+        ════════════════════════════════════════════════════════════════
         EOF
         
+        echo ""
+        echo "📄 Installation guide created!"
+        echo ""
         cat ./build/INSTALLATION_INSTRUCTIONS.txt
     
     - name: Upload Installation Guide
-      if: ${{ secrets.TEAM_ID }}
       uses: actions/upload-artifact@v4
       with:
         name: Installation-Instructions
@@ -436,27 +600,38 @@ jobs:
         retention-days: 30
     
     - name: Success Summary
-      if: ${{ secrets.TEAM_ID }}
       run: |
         echo ""
         echo "╔════════════════════════════════════════════════════════╗"
-        echo "║     🎉 SUCCESS! YOUR APP IS SIGNED AND READY! 🎉      ║"
+        echo "║          🎉 SUCCESS! IPA IS SIGNED & READY! 🎉         ║"
         echo "╚════════════════════════════════════════════════════════╝"
         echo ""
-        echo "📦 Download these artifacts:"
-        echo "   1. ICCCAlert-Signed-IPA (the signed app)"
-        echo "   2. Installation-Instructions (installation guide)"
+        echo "📦 DOWNLOAD THESE ARTIFACTS:"
+        echo "   1. ICCCAlert-Signed-IPA ← Your signed app!"
+        echo "   2. Installation-Instructions ← How to install"
         echo ""
-        echo "⏰ Valid for: 7 days"
-        echo "💰 Cost: FREE!"
-        echo "📱 Ready to install on your iPhone 7 via Mac!"
+        echo "⏰ Certificate valid for: 7 days"
+        echo "💰 Total cost: FREE ($0)!"
+        echo "📱 Ready for iPhone 7 (iOS 15.8.5)"
         echo ""
-        echo "🚀 Next steps on your Mac:"
-        echo "   1. Download the IPA artifact"
-        echo "   2. Connect iPhone 7 via USB"
-        echo "   3. Open Finder"
-        echo "   4. Drag IPA onto iPhone"
-        echo "   5. Trust certificate in iPhone Settings"
-        echo "   6. Launch and test!"
+        echo "🚀 NEXT STEPS (No Mac Needed!):"
+        echo ""
+        echo "   1. Scroll down to 'Artifacts' section below"
+        echo "   2. Download 'ICCCAlert-Signed-IPA' (click to download)"
+        echo "   3. Extract ZIP file to get the .ipa file"
+        echo "   4. Go to https://www.diawi.com/ on any device"
+        echo "   5. Upload the .ipa file to Diawi"
+        echo "   6. Get the Diawi link (i.diawi.com/XXXXX)"
+        echo "   7. Open that link in Safari on your iPhone 7"
+        echo "   8. Tap 'Install' and wait"
+        echo "   9. Go to Settings → General → Device Management"
+        echo "  10. Trust your Apple ID certificate"
+        echo "  11. Launch ICCCAlert from home screen"
+        echo "  12. Test your WebSocket connections! ✅"
+        echo ""
+        echo "📖 Full instructions in 'Installation-Instructions' artifact"
+        echo ""
+        echo "💡 Remember: Rebuild in 6 days to renew certificate!"
         echo ""
         echo "════════════════════════════════════════════════════════"
+        echo ""
