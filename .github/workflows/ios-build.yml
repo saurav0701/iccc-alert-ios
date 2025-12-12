@@ -35,6 +35,10 @@ jobs:
       run: |
         echo "🏗️ Building for iOS device..."
         
+        # Clean build directory
+        rm -rf build
+        mkdir -p build
+        
         # Build archive
         xcodebuild \
           -project ICCCAlert.xcodeproj \
@@ -49,16 +53,45 @@ jobs:
           AD_HOC_CODE_SIGNING_ALLOWED=YES
         
         echo "✅ Archive created"
+        ls -la build/ICCCAlert.xcarchive/Products/Applications/
         
-        # Create IPA manually
+        # Create IPA manually - FIXED VERSION
+        echo "📦 Creating IPA..."
         mkdir -p build/Payload
-        cp -R build/ICCCAlert.xcarchive/Products/Applications/ICCCAlert.app build/Payload/
-        cd build
-        zip -r ICCCAlert.ipa Payload
-        rm -rf Payload
         
-        echo "✅ IPA created"
-        ls -lh ICCCAlert.ipa
+        # Copy the .app to Payload directory
+        cp -R build/ICCCAlert.xcarchive/Products/Applications/ICCCAlert.app build/Payload/
+        
+        # Verify the app was copied
+        if [ ! -d "build/Payload/ICCCAlert.app" ]; then
+          echo "❌ ERROR: App bundle not found in Payload!"
+          exit 1
+        fi
+        
+        echo "✅ App copied to Payload"
+        ls -la build/Payload/
+        
+        # Create the IPA (just a renamed ZIP)
+        cd build
+        zip -r -y ICCCAlert.ipa Payload
+        cd ..
+        
+        # Verify IPA was created
+        if [ ! -f "build/ICCCAlert.ipa" ]; then
+          echo "❌ ERROR: IPA file was not created!"
+          exit 1
+        fi
+        
+        echo "✅ IPA created successfully"
+        ls -lh build/ICCCAlert.ipa
+        file build/ICCCAlert.ipa
+        
+        # Clean up Payload directory
+        rm -rf build/Payload
+        rm -rf build/ICCCAlert.xcarchive
+        
+        echo "✅ Cleanup complete"
+        ls -lh build/
     
     - name: Upload IPA for iPhone Installation
       uses: actions/upload-artifact@v4
@@ -66,6 +99,7 @@ jobs:
         name: ICCCAlert-iPhone
         path: build/ICCCAlert.ipa
         retention-days: 30
+        if-no-files-found: error
     
     - name: Installation Instructions
       run: |
@@ -80,16 +114,12 @@ jobs:
         echo "4. Get the link and open it on your iPhone"
         echo "5. Tap 'Install' on your iPhone"
         echo ""
-        echo "Method 2: Using iPhone Files App (FREE, no internet needed)"
-        echo "1. Download ICCCAlert.ipa from GitHub Actions"
-        echo "2. AirDrop or email the IPA to your iPhone"
-        echo "3. Open Files app on iPhone"
-        echo "4. Tap the IPA file"
-        echo "5. Go to Settings > General > VPN & Device Management"
-        echo "6. Trust the developer profile"
-        echo "7. Open the app"
+        echo "Method 2: Using AltStore (FREE, requires computer)"
+        echo "1. Install AltStore from https://altstore.io/"
+        echo "2. Connect iPhone to computer"
+        echo "3. Use AltStore to sideload the IPA"
         echo ""
-        echo "Method 3: Using iOS App Signer (requires Mac access once)"
+        echo "Method 3: Using iOS App Signer (requires Mac)"
         echo "Visit: https://dantheman827.github.io/ios-app-signer/"
 
   # Keep Appetize build
