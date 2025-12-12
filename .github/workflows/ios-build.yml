@@ -31,7 +31,7 @@ jobs:
         sed -i '' 's/com.iccc.alert/com.iccc.alert.dev/g' generate_project.rb
         ruby generate_project.rb
     
-    - name: Build Development IPA
+    - name: Build for iOS Device
       run: |
         echo "🏗️ Building for iOS device..."
         
@@ -53,53 +53,105 @@ jobs:
           AD_HOC_CODE_SIGNING_ALLOWED=YES
         
         echo "✅ Archive created"
-        ls -la build/ICCCAlert.xcarchive/Products/Applications/
+    
+    - name: Create IPA Package
+      run: |
+        echo "📦 Creating IPA from archive..."
         
-        # Create IPA manually - FIXED VERSION
-        echo "📦 Creating IPA..."
-        mkdir -p build/Payload
+        # Set variables
+        ARCHIVE_PATH="$PWD/build/ICCCAlert.xcarchive"
+        APP_PATH="$ARCHIVE_PATH/Products/Applications/ICCCAlert.app"
+        PAYLOAD_PATH="$PWD/build/Payload"
+        IPA_PATH="$PWD/build/ICCCAlert.ipa"
         
-        # Copy the .app to Payload directory
-        cp -R build/ICCCAlert.xcarchive/Products/Applications/ICCCAlert.app build/Payload/
+        # Debug: Show what we have
+        echo "🔍 Archive contents:"
+        ls -la "$ARCHIVE_PATH/Products/Applications/" || echo "❌ Applications directory not found!"
         
-        # Verify the app was copied
-        if [ ! -d "build/Payload/ICCCAlert.app" ]; then
-          echo "❌ ERROR: App bundle not found in Payload!"
+        # Verify app exists
+        if [ ! -d "$APP_PATH" ]; then
+          echo "❌ ERROR: App bundle not found at $APP_PATH"
+          echo "Available files:"
+          find "$ARCHIVE_PATH" -name "*.app" -type d
           exit 1
         fi
         
-        echo "✅ App copied to Payload"
-        ls -la build/Payload/
+        echo "✅ Found app at: $APP_PATH"
         
-        # Create the IPA (just a renamed ZIP)
-        cd build
-        zip -r -y ICCCAlert.ipa Payload
+        # Create Payload directory
+        mkdir -p "$PAYLOAD_PATH"
+        echo "✅ Created Payload directory"
+        
+        # Copy app to Payload
+        cp -R "$APP_PATH" "$PAYLOAD_PATH/"
+        echo "✅ Copied app to Payload"
+        
+        # Verify copy
+        if [ ! -d "$PAYLOAD_PATH/ICCCAlert.app" ]; then
+          echo "❌ ERROR: Failed to copy app to Payload!"
+          ls -la "$PAYLOAD_PATH/"
+          exit 1
+        fi
+        
+        echo "📋 Payload contents:"
+        ls -la "$PAYLOAD_PATH/"
+        
+        # Create IPA (zip the Payload directory)
+        cd "$PWD/build"
+        zip -r -q ICCCAlert.ipa Payload
         cd ..
         
         # Verify IPA was created
-        if [ ! -f "build/ICCCAlert.ipa" ]; then
+        if [ ! -f "$IPA_PATH" ]; then
           echo "❌ ERROR: IPA file was not created!"
+          echo "Current directory contents:"
+          ls -la build/
           exit 1
         fi
         
-        echo "✅ IPA created successfully"
-        ls -lh build/ICCCAlert.ipa
-        file build/ICCCAlert.ipa
+        # Check IPA file
+        echo "✅ IPA created successfully!"
+        ls -lh "$IPA_PATH"
+        file "$IPA_PATH"
         
-        # Clean up Payload directory
+        # Verify it's a valid ZIP
+        if unzip -t "$IPA_PATH" > /dev/null 2>&1; then
+          echo "✅ IPA is a valid ZIP archive"
+        else
+          echo "❌ WARNING: IPA may not be a valid ZIP archive"
+        fi
+        
+        # Show IPA contents
+        echo "📋 IPA contents:"
+        unzip -l "$IPA_PATH" | head -20
+        
+        # Clean up
         rm -rf build/Payload
         rm -rf build/ICCCAlert.xcarchive
+        echo "✅ Cleaned up temporary files"
         
-        echo "✅ Cleanup complete"
+        # Final verification
+        echo "📦 Final build directory:"
         ls -lh build/
     
-    - name: Upload IPA for iPhone Installation
+    - name: Upload IPA Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ICCCAlert-iPhone
+        name: ICCCAlert-iPhone-IPA
         path: build/ICCCAlert.ipa
         retention-days: 30
         if-no-files-found: error
+    
+    - name: Verify Upload
+      run: |
+        if [ -f "build/ICCCAlert.ipa" ]; then
+          echo "✅ IPA file ready for upload"
+          echo "📊 File size: $(du -h build/ICCCAlert.ipa | cut -f1)"
+          echo "📊 File type: $(file build/ICCCAlert.ipa)"
+        else
+          echo "❌ IPA file missing before upload!"
+          exit 1
+        fi
     
     - name: Installation Instructions
       run: |
@@ -107,22 +159,23 @@ jobs:
         echo ""
         echo "📱 To install on your iPhone:"
         echo ""
-        echo "Method 1: Using Diawi (FREE, easiest)"
-        echo "1. Download ICCCAlert.ipa from GitHub Actions artifacts"
-        echo "2. Go to https://www.diawi.com/"
-        echo "3. Upload the IPA file"
-        echo "4. Get the link and open it on your iPhone"
-        echo "5. Tap 'Install' on your iPhone"
+        echo "Method 1: Using Diawi (EASIEST)"
+        echo "1. Download 'ICCCAlert-iPhone-IPA' artifact"
+        echo "2. Extract the ZIP to get ICCCAlert.ipa"
+        echo "3. Go to https://www.diawi.com/"
+        echo "4. Upload ICCCAlert.ipa"
+        echo "5. Open the Diawi link on iPhone Safari"
+        echo "6. Tap Install"
+        echo "7. Trust in Settings → General → Device Management"
         echo ""
-        echo "Method 2: Using AltStore (FREE, requires computer)"
-        echo "1. Install AltStore from https://altstore.io/"
-        echo "2. Connect iPhone to computer"
-        echo "3. Use AltStore to sideload the IPA"
-        echo ""
-        echo "Method 3: Using iOS App Signer (requires Mac)"
-        echo "Visit: https://dantheman827.github.io/ios-app-signer/"
+        echo "Method 2: Manual IPA Creation (if download has no .ipa)"
+        echo "1. Create a folder named 'Payload'"
+        echo "2. Copy ICCCAlert.app into Payload/"
+        echo "3. Zip the Payload folder"
+        echo "4. Rename .zip to .ipa"
+        echo "5. Upload to Diawi"
 
-  # Keep Appetize build
+  # Keep simulator build for Appetize
   build-appetize:
     name: Build for Appetize.io
     runs-on: macos-latest
