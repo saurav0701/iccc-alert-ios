@@ -41,6 +41,7 @@ jobs:
         mkdir -p build
         
         # Build for device (ad-hoc style without signing)
+        # iPhone 7 uses arm64 architecture only (armv7 is deprecated)
         xcodebuild \
           -project ICCCAlert.xcodeproj \
           -scheme ICCCAlert \
@@ -56,8 +57,8 @@ jobs:
           PROVISIONING_PROFILE="" \
           ENABLE_BITCODE=NO \
           ONLY_ACTIVE_ARCH=NO \
-          ARCHS="arm64 armv7" \
-          VALID_ARCHS="arm64 armv7" \
+          ARCHS="arm64" \
+          VALID_ARCHS="arm64" \
           IPHONEOS_DEPLOYMENT_TARGET=14.0
         
         echo "✅ Build completed"
@@ -168,7 +169,7 @@ jobs:
 
         📱 DEVICE COMPATIBILITY:
         ✅ iPhone 7 running iOS 15.8.5 - FULLY COMPATIBLE
-        ✅ This build supports arm64 and armv7 architectures
+        ✅ This build supports arm64 architecture (A10 Fusion chip)
         ✅ Minimum iOS version: 14.0
 
         🚀 INSTALLATION STEPS (Using Diawi):
@@ -236,9 +237,10 @@ jobs:
         - Use TestFlight for beta testing
 
         📱 CURRENT BUILD INFO:
-        - Target: iPhone (arm64, armv7)
+        - Target: iPhone (arm64 only)
         - Min iOS: 14.0
         - Tested on: iOS 15.8.5
+        - iPhone 7: A10 Fusion chip (64-bit)
         - Build Type: Release (unsigned)
         - Created: $(date)
 
