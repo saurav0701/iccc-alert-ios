@@ -16,157 +16,75 @@ jobs:
         sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
         xcodebuild -version
     
-    - name: Install xcodeproj
-      run: sudo gem install xcodeproj
+    - name: Install Tools
+      run: |
+        sudo gem install xcodeproj
+        sudo gem install fastlane -NV
     
     - name: Generate Project
       run: ruby generate_project.rb
     
-    - name: Create Simple iOS Project to Extract Team ID
-      run: |
-        echo "════════════════════════════════════════════════════════"
-        echo "🔍 Extracting Team ID from Xcode..."
-        echo "════════════════════════════════════════════════════════"
-        echo ""
-        
-        # Create a test configuration
-        BUNDLE_ID="com.test.teamid"
-        
-        # Update the project's bundle ID
-        /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" ICCCAlert/Info.plist || true
-        
-        # Try to build and capture the team ID from the output
-        echo "Attempting to build (will fail, but will show Team ID)..."
-        echo ""
-        
-        xcodebuild \
-          -project ICCCAlert.xcodeproj \
-          -scheme ICCCAlert \
-          -sdk iphoneos \
-          -configuration Release \
-          CODE_SIGN_IDENTITY="Apple Development" \
-          DEVELOPMENT_TEAM="" \
-          CODE_SIGN_STYLE=Automatic \
-          clean build 2>&1 | tee build_output.txt || true
-        
-        echo ""
-        echo "════════════════════════════════════════════════════════"
-        echo "📋 Analyzing output for Team ID..."
-        echo "════════════════════════════════════════════════════════"
-        echo ""
-        
-        # Look for team-related messages
-        if grep -i "team" build_output.txt; then
-          echo ""
-          echo "✅ Found team information above!"
-        fi
-        
-        if grep -i "development team" build_output.txt; then
-          echo ""
-          echo "✅ Found development team information!"
-        fi
-        
-        echo ""
-        echo "════════════════════════════════════════════════════════"
-        echo "💡 IMPORTANT INSTRUCTIONS:"
-        echo "════════════════════════════════════════════════════════"
-        echo ""
-        echo "For FREE Apple ID accounts, you need to:"
-        echo ""
-        echo "1️⃣ Open Xcode on a Mac (borrow from a friend/library/cafe)"
-        echo "2️⃣ Create any new iOS project"
-        echo "3️⃣ Go to project settings → Signing & Capabilities"
-        echo "4️⃣ Sign in with your Apple ID"
-        echo "5️⃣ Enable 'Automatically manage signing'"
-        echo "6️⃣ Your Team will appear - it's usually your name"
-        echo "7️⃣ The Team ID is shown in parentheses next to your name"
-        echo "    Format: 'Your Name (ABC1234XYZ)'"
-        echo ""
-        echo "ALTERNATIVE - Use your Apple ID as Team ID:"
-        echo "For FREE accounts, sometimes the Apple ID email or a derived"
-        echo "identifier works as the Team ID."
-        echo ""
-        echo "════════════════════════════════════════════════════════"
-    
-    - name: Try Alternative Method - Use Apple ID directly
+    - name: Extract Team ID
       env:
         APPLE_ID: ${{ secrets.APPLE_ID }}
         APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
       run: |
-        echo ""
         echo "════════════════════════════════════════════════════════"
-        echo "🔄 Trying alternative authentication method..."
+        echo "🔍 Extracting your Team ID..."
         echo "════════════════════════════════════════════════════════"
         echo ""
-        
-        sudo gem install fastlane -NV
-        
-        # Create a script to list teams via Spaceship
-        cat > list_teams.rb << 'RUBY_EOF'
-require 'spaceship'
-
-begin
-  puts "Authenticating..."
-  
-  Spaceship::Portal.login(ENV['APPLE_ID'], ENV['FASTLANE_PASSWORD'])
-  
-  teams = Spaceship::Portal.client.teams
-  
-  if teams && teams.count > 0
-    puts ""
-    puts "="*60
-    puts "✅ SUCCESS! FOUND YOUR TEAM(S):"
-    puts "="*60
-    
-    teams.each do |team|
-      puts ""
-      puts "Team Name: #{team['name']}"
-      puts "Team ID:   #{team['teamId']}   ← THIS IS WHAT YOU NEED!"
-      puts "Type:      #{team['type']}"
-      puts ""
-      puts "-"*60
-      
-      # Save to file
-      File.write('TEAM_ID.txt', team['teamId'])
-    end
-    
-    puts ""
-    puts "✅ Your Team ID has been saved!"
-    puts ""
-    
-  else
-    puts "No teams found"
-  end
-  
-rescue => e
-  puts ""
-  puts "Error: #{e.message}"
-  puts ""
-  
-  # Check if error contains team info
-  if e.message =~ /([A-Z0-9]{10})/
-    puts "Found possible Team ID in error: #{$1}"
-    File.write('TEAM_ID.txt', $1)
-  end
-  
-  puts ""
-  puts "If you see 'Multiple teams' error, your Team ID is in the message above!"
-  puts ""
-end
-RUBY_EOF
         
         export FASTLANE_PASSWORD="$APP_SPECIFIC_PASSWORD"
         export FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD="$APP_SPECIFIC_PASSWORD"
         export FASTLANE_DONT_STORE_PASSWORD=1
         
-        ruby list_teams.rb || {
-          echo ""
-          echo "⚠️ Authentication had issues, but this is normal."
-          echo "Check the output above for your Team ID!"
-          echo ""
-        }
+        # Create Ruby script
+        cat > list_teams.rb << 'EOF'
+        require 'spaceship'
+        
+        begin
+          puts "Authenticating with Apple..."
+          
+          Spaceship::Portal.login(ENV['APPLE_ID'], ENV['FASTLANE_PASSWORD'])
+          
+          teams = Spaceship::Portal.client.teams
+          
+          if teams && teams.count > 0
+            puts ""
+            puts "="*60
+            puts "SUCCESS! FOUND YOUR TEAM(S):"
+            puts "="*60
+            
+            teams.each do |team|
+              puts ""
+              puts "Team Name: #{team['name']}"
+              puts "Team ID:   #{team['teamId']}"
+              puts "Type:      #{team['type']}"
+              puts "-"*60
+              
+              File.write('TEAM_ID.txt', team['teamId'])
+            end
+            
+            puts ""
+            puts "Team ID saved!"
+          else
+            puts "No teams found"
+          end
+          
+        rescue => e
+          puts ""
+          puts "Error: #{e.message}"
+          
+          if e.message =~ /([A-Z0-9]{10})/
+            puts "Found Team ID: #{$1}"
+            File.write('TEAM_ID.txt', $1)
+          end
+        end
+        EOF
+        
+        ruby list_teams.rb || true
     
-    - name: Display Team ID if Found
+    - name: Display Result
       if: always()
       run: |
         echo ""
@@ -174,50 +92,26 @@ RUBY_EOF
         
         if [ -f "TEAM_ID.txt" ]; then
           TEAM_ID=$(cat TEAM_ID.txt)
-          echo "🎉 YOUR TEAM ID: $TEAM_ID"
+          echo "YOUR TEAM ID: $TEAM_ID"
           echo "════════════════════════════════════════════════════════"
           echo ""
-          echo "📝 ADD THIS TO GITHUB SECRETS:"
-          echo "   1. Go to your repo Settings"
-          echo "   2. Secrets and variables → Actions"
-          echo "   3. New repository secret"
-          echo "   4. Name: TEAM_ID"
-          echo "   5. Value: $TEAM_ID"
-          echo ""
+          echo "ADD THIS TO GITHUB:"
+          echo "Settings → Secrets → Actions → New secret"
+          echo "Name: TEAM_ID"
+          echo "Value: $TEAM_ID"
         else
-          echo "❌ Could not automatically extract Team ID"
+          echo "Could not extract Team ID automatically"
           echo "════════════════════════════════════════════════════════"
           echo ""
-          echo "MANUAL METHODS FOR FREE APPLE ID:"
-          echo ""
-          echo "Method 1: Using Xcode (Need temporary Mac access)"
-          echo "  - Borrow a Mac for 5 minutes"
-          echo "  - Open Xcode → Preferences → Accounts"
-          echo "  - Add your Apple ID"
-          echo "  - Create new iOS project"
-          echo "  - Enable auto-signing"
-          echo "  - Team ID appears in project settings"
-          echo ""
-          echo "Method 2: Use AltStore/Sideloadly"
-          echo "  - Install AltStore on Windows/Mac"
-          echo "  - Sign any app with your Apple ID"
-          echo "  - It will show your Team ID in logs"
-          echo ""
-          echo "Method 3: Ask in error message"
-          echo "  - Look at the build errors above"
-          echo "  - Team ID is often mentioned in errors"
-          echo "  - Look for 10-character codes like: ABC1234XYZ"
-          echo ""
+          echo "Check the output above for Team ID"
+          echo "Look for 10-character codes like: ABC1234XYZ"
         fi
-        
-        echo "════════════════════════════════════════════════════════"
     
-    - name: Upload Team ID File
+    - name: Upload
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: Team-ID-Info
-        path: |
-          TEAM_ID.txt
-          build_output.txt
+        path: TEAM_ID.txt
+        if-no-files-found: ignore
         retention-days: 7
