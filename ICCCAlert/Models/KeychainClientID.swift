@@ -149,7 +149,7 @@ class ServerManagedClientID {
         // Body: { "phone": "+1234567890", "platform": "ios" }
         // Response: { "clientId": "user-123-device-456" }
         
-        guard let url = URL(string: "http://202.140.131.90:8890/api/client-id") else {
+        guard let url = URL(string: "http://192.168.29.69:19998/api/client-id") else {
             completion(nil)
             return
         }
