@@ -327,19 +327,19 @@ class SubscriptionManager: ObservableObject {
 // MARK: - Available Channels
 extension SubscriptionManager {
     static let availableAreas: [(id: String, display: String)] = [
-        ("sijua", "Sijua"),
-        ("kusunda", "Kusunda"),
-        ("bastacolla", "Bastacolla"),
-        ("lodna", "Lodna"),
-        ("govindpur", "Govindpur"),
-        ("barora", "Barora"),
-        ("ccwo", "CCWO"),
-        ("ej", "EJ"),
-        ("cvarea", "CV Area"),
-        ("wjarea", "WJ Area"),
-        ("pbarea", "PB Area"),
-        ("block2", "Block 2"),
-        ("katras", "Katras")
+        ("barkasayal", "Barka Sayal"),
+        ("argada", "Argada"),
+        ("northkaranpura", "North Karanpura"),
+        ("bokarokargali", "Bokaro & Kargali"),
+        ("kathara", "Kathara"),
+        ("giridih", "Giridih"),
+        ("amrapali", "Amrapali & Chandragupta"),
+        ("rajhara", "Rajhara"),
+        ("kuju", "Kuju"),
+        ("hazaribagh", "Hazaribagh"),
+        ("rajrappa", "Rajrappa"),
+        ("dhori", "Dhori"),
+        ("piparwar", "Piparwar")
     ]
     
     static let availableEventTypes: [(id: String, display: String)] = [
