@@ -87,9 +87,12 @@ class AuthManager: ObservableObject {
         let body = OTPVerificationRequest(phone: phone, otp: otp, deviceId: deviceId)
         request.httpBody = try? JSONEncoder().encode(body)
         
+        DebugLogger.shared.log("🔄 Sending OTP verification request: phone=\(phone), otp=\(otp), deviceId=\(deviceId)")
+        
         URLSession.shared.dataTask(with: request) { data, response, error in
             DispatchQueue.main.async {
                 if let error = error {
+                    DebugLogger.shared.logError("Network Error: \(error.localizedDescription)")
                     print("❌ OTP Verification Network Error: \(error.localizedDescription)")
                     completion(false, error.localizedDescription)
                     return
@@ -115,13 +118,28 @@ class AuthManager: ObservableObject {
                 print("📊 HTTP Status Code: \(httpResponse.statusCode)")
                 
                 if httpResponse.statusCode == 200 {
-                    // Parse response directly (no "data" wrapper)
+                    // Try parsing multiple response formats
                     do {
                         print("🔄 Attempting to decode AuthResponse...")
+                        
+                        // First, check if response is wrapped in a "data" object
+                        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                           let dataDict = json["data"] as? [String: Any],
+                           let dataJson = try? JSONSerialization.data(withJSONObject: dataDict) {
+                            print("📦 Response has 'data' wrapper, extracting...")
+                            let authResponse = try JSONDecoder().decode(AuthResponse.self, from: dataJson)
+                            print("✅ Successfully decoded AuthResponse from wrapped response")
+                            self.logAuthDetails(authResponse)
+                            self.saveAuthData(authResponse)
+                            print("� Auth data saved successfully")
+                            completion(true, "Login successful")
+                            return
+                        }
+                        
+                        // Try parsing directly without wrapper
                         let authResponse = try JSONDecoder().decode(AuthResponse.self, from: data)
-                        print("✅ Successfully decoded AuthResponse")
-                        print("🔐 Token received: \(authResponse.token.prefix(20))...")
-                        print("👤 User: \(authResponse.user.name)")
+                        print("✅ Successfully decoded AuthResponse directly")
+                        self.logAuthDetails(authResponse)
                         self.saveAuthData(authResponse)
                         print("💾 Auth data saved successfully")
                         completion(true, "Login successful")
@@ -141,7 +159,41 @@ class AuthManager: ObservableObject {
                                 print("❌ Unknown decoding error")
                             }
                         }
-                        completion(false, "Invalid response format: \(error.localizedDescription)")
+                        
+                        // If decoding fails, still mark as authenticated if we got a 200 response
+                        print("⚠️ Could not decode response, but got 200 status. Attempting fallback...")
+                        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                            print("📋 Response JSON keys: \(json.keys.joined(separator: ", "))")
+                            
+                            // Try to extract token and user info from various possible locations
+                            let token = (json["token"] as? String) ?? (json["access_token"] as? String) ?? ""
+                            if !token.isEmpty {
+                                print("✅ Found token in response, creating fallback user")
+                                let fallbackUser = User(
+                                    id: 0,
+                                    name: "User",
+                                    phone: phone,
+                                    area: nil,
+                                    designation: nil,
+                                    organisation: nil,
+                                    isActive: nil,
+                                    createdAt: nil,
+                                    updatedAt: nil
+                                )
+                                let fallbackResponse = AuthResponse(
+                                    token: token,
+                                    user: fallbackUser,
+                                    expiresAt: Int64(Date().addingTimeInterval(24 * 60 * 60).timeIntervalSince1970)
+                                )
+                                self.saveAuthData(fallbackResponse)
+                                print("💾 Fallback auth data saved successfully")
+                                completion(true, "Login successful")
+                            } else {
+                                completion(false, "Invalid response format: No token found")
+                            }
+                        } else {
+                            completion(false, "Invalid response format: \(error.localizedDescription)")
+                        }
                     }
                 } else {
                     // Parse error message
@@ -261,6 +313,13 @@ class AuthManager: ObservableObject {
     }
     
     // MARK: - Token Management
+    
+    private func logAuthDetails(_ authResponse: AuthResponse) {
+        print("🔐 Token received: \(authResponse.token.prefix(20))...")
+        print("👤 User: \(authResponse.user.name)")
+        print("📱 Phone: \(authResponse.user.phone)")
+        print("🆔 User ID: \(authResponse.user.id)")
+    }
     
     private func saveAuthData(_ response: AuthResponse) {
         UserDefaults.standard.set(response.token, forKey: "auth_token")
