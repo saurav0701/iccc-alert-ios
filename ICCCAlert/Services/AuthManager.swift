@@ -91,6 +91,8 @@ class AuthManager: ObservableObject {
         
         URLSession.shared.dataTask(with: request) { data, response, error in
             DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                
                 if let error = error {
                     DebugLogger.shared.logError("Network Error: \(error.localizedDescription)")
                     print("❌ OTP Verification Network Error: \(error.localizedDescription)")
