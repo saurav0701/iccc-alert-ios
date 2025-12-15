@@ -457,7 +457,7 @@ class WebSocketService: ObservableObject {
             catchUpChannels.insert(channelId)
         }
         
-        var request: [String: Any] = [
+        let request: [String: Any] = [
             "clientId": clientId,
             "filters": filters,
             "resetConsumers": reset

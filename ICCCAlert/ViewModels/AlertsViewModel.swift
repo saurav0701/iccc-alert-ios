@@ -50,8 +50,9 @@ class AlertsViewModel: ObservableObject {
     
     func markAsRead(_ alert: Event) {
         guard let token = authManager.token else { return }
+        guard let alertId = alert.id else { return }
         
-        guard let url = URL(string: "\(baseURL)/api/events/\(alert.id)/read") else {
+        guard let url = URL(string: "\(baseURL)/api/events/\(alertId)/read") else {
             return
         }
         
@@ -62,9 +63,11 @@ class AlertsViewModel: ObservableObject {
         URLSession.shared.dataTask(with: request) { [weak self] _, _, _ in
             DispatchQueue.main.async {
                 if let index = self?.alerts.firstIndex(where: { $0.id == alert.id }) {
-                    var updatedAlert = alert
+                    var updatedAlert = self?.alerts[index]
                     // Note: You'll need to add isRead property to Event model
-                    self?.alerts[index] = updatedAlert
+                    if let updatedAlert = updatedAlert {
+                        self?.alerts[index] = updatedAlert
+                    }
                 }
             }
         }.resume()

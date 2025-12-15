@@ -45,7 +45,7 @@ class ChannelsViewModel: ObservableObject {
                 }
             } receiveValue: { [weak self] channels in
                 self?.channels = channels
-                self?.categories = Array(Set(channels.map { $0.category })).sorted()
+                self?.categories = Array(Set(channels.map { $0.areaDisplay })).sorted()
             }
             .store(in: &cancellables)
     }

@@ -133,11 +133,6 @@ struct AlertsView: View {
                 webSocketService.connect()
             }
         }
-        // **FIX**: Listen for new events
-        .onReceive(NotificationCenter.default.publisher(for: .newEventReceived)) { _ in
-            // Trigger UI update
-            objectWillChange.send()
-        }
     }
     
     private func markAsRead(_ alert: Event) {
