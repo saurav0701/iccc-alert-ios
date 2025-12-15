@@ -1,8 +1,7 @@
 import Foundation
 
 // MARK: - Event Model
-
-struct Event: Identifiable, Codable, Equatable {
+struct Event: Identifiable, Codable {
     let id: String?
     let timestamp: Int64
     let source: String?
@@ -13,295 +12,100 @@ struct Event: Identifiable, Codable, Equatable {
     let groupId: String?
     let vehicleNumber: String?
     let vehicleTransporter: String?
-    let data: [String: AnyCodable]
-    var isRead: Bool = false
+    let data: [String: AnyCodable]?
     
     // Computed properties
-    var title: String {
-        return typeDisplay ?? type ?? "Alert"
-    }
-    
-    var message: String {
-        if let desc = data["description"]?.stringValue {
-            return desc
-        }
-        return location
-    }
-    
-    var channelName: String? {
-        return areaDisplay ?? area
-    }
-    
-    var priority: String? {
-        // Determine priority based on event type
-        guard let eventType = type?.lowercased() else {
-            return "normal"
-        }
-        
-        switch eventType {
-        case "id", "ct", "sh", "tamper": // Intrusion, Camera Tamper, Safety Hazard, Tamper
-            return "high"
-        case "cd", "vc", "off-route": // Crowd, Vehicle Congestion, Off-Route
-            return "medium"
-        default:
-            return "low"
-        }
-    }
-    
-    var createdAt: String {
-        let date = Date(timeIntervalSince1970: TimeInterval(timestamp))
-        let formatter = ISO8601DateFormatter()
-        return formatter.string(from: date)
-    }
-    
     var date: Date {
         Date(timeIntervalSince1970: TimeInterval(timestamp))
     }
     
     var location: String {
-        if let loc = data["location"]?.stringValue {
-            return loc
+        if let location = data?["location"]?.value as? String {
+            return location
         }
-        return "Unknown Location"
+        return areaDisplay ?? area ?? "Unknown Location"
     }
     
-    var eventTime: String? {
-        return data["eventTime"]?.stringValue
+    var priority: String? {
+        data?["priority"]?.value as? String
     }
     
-    var sequence: Int64? {
-        if let seq = data["_seq"]?.int64Value {
-            return seq
-        } else if let seqStr = data["_seq"]?.stringValue,
-                  let seq = Int64(seqStr) {
-            return seq
-        }
-        return nil
+    var title: String {
+        typeDisplay ?? type?.capitalized ?? "Event"
     }
     
-    var requiresAck: Bool {
-        return data["_requireAck"]?.boolValue ?? true
+    var message: String {
+        if let eventData = data {
+            if let desc = eventData["description"]?.value as? String {
+                return desc
+            }
+            if let msg = eventData["message"]?.value as? String {
+                return msg
+            }
+        }
+        return "\(title) at \(location)"
     }
     
-    // GPS-specific properties
-    var isGPSEvent: Bool {
-        return type == "off-route" || type == "tamper" || type == "overspeed"
+    // **CRITICAL FIX**: Properly compute channelName from area and type
+    var channelName: String? {
+        guard let area = area, let type = type else { return nil }
+        return "\(area)_\(type)"
     }
     
-    var currentLocation: GPSLocation? {
-        guard let locData = data["currentLocation"]?.dictionaryValue else {
-            return nil
-        }
-        guard let lat = locData["lat"]?.doubleValue,
-              let lng = locData["lng"]?.doubleValue else {
-            return nil
-        }
-        return GPSLocation(lat: lat, lng: lng)
-    }
-    
-    var alertLocation: GPSLocation? {
-        guard let locData = data["alertLocation"]?.dictionaryValue else {
-            return nil
-        }
-        guard let lat = locData["lat"]?.doubleValue,
-              let lng = locData["lng"]?.doubleValue else {
-            return nil
-        }
-        return GPSLocation(lat: lat, lng: lng)
-    }
-    
-    // Geofence data (for GPS events)
-    var geofenceData: GeofenceData? {
-        guard let geofenceDict = data["geofence"]?.dictionaryValue else {
-            return nil
-        }
-        
-        guard let id = geofenceDict["id"]?.intValue,
-              let name = geofenceDict["name"]?.stringValue else {
-            return nil
-        }
-        
-        return GeofenceData(
-            id: id,
-            name: name,
-            description: geofenceDict["description"]?.stringValue,
-            geoType: geofenceDict["geotype"]?.stringValue,
-            attributes: geofenceDict["attributes"]?.dictionaryValue,
-            geoJSON: geofenceDict["geojson"]?.value
-        )
-    }
-    
-    static func == (lhs: Event, rhs: Event) -> Bool {
-        return lhs.id == rhs.id
-    }
+    // Track read status (not from server, managed locally)
+    var isRead: Bool = false
     
     enum CodingKeys: String, CodingKey {
         case id, timestamp, source, area, areaDisplay, type, typeDisplay
-        case groupId, vehicleNumber, vehicleTransporter, data, isRead
-    }
-}
-
-// MARK: - GPS Location
-
-struct GPSLocation: Codable {
-    let lat: Double
-    let lng: Double
-}
-
-// MARK: - Geofence Data
-
-struct GeofenceData {
-    let id: Int
-    let name: String
-    let description: String?
-    let geoType: String?
-    let attributes: [String: AnyCodable]?
-    let geoJSON: Any?
-}
-
-// MARK: - Channel Model
-
-struct Channel: Identifiable, Codable, Equatable {
-    let id: String
-    let area: String
-    let areaDisplay: String
-    let eventType: String
-    let eventTypeDisplay: String
-    let description: String?
-    var isSubscribed: Bool = false
-    var isMuted: Bool = false
-    var isPinned: Bool = false
-    
-    // Computed properties for compatibility
-    var name: String {
-        return areaDisplay
+        case groupId, vehicleNumber, vehicleTransporter, data
     }
     
-    var category: String {
-        return eventTypeDisplay
+    // Custom decoder to handle flexible data types
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        
+        id = try container.decodeIfPresent(String.self, forKey: .id)
+        timestamp = try container.decode(Int64.self, forKey: .timestamp)
+        source = try container.decodeIfPresent(String.self, forKey: .source)
+        area = try container.decodeIfPresent(String.self, forKey: .area)
+        areaDisplay = try container.decodeIfPresent(String.self, forKey: .areaDisplay)
+        type = try container.decodeIfPresent(String.self, forKey: .type)
+        typeDisplay = try container.decodeIfPresent(String.self, forKey: .typeDisplay)
+        groupId = try container.decodeIfPresent(String.self, forKey: .groupId)
+        vehicleNumber = try container.decodeIfPresent(String.self, forKey: .vehicleNumber)
+        vehicleTransporter = try container.decodeIfPresent(String.self, forKey: .vehicleTransporter)
+        
+        // Decode data as dictionary of AnyCodable
+        if let dataDict = try? container.decode([String: AnyCodable].self, forKey: .data) {
+            data = dataDict
+        } else {
+            data = nil
+        }
     }
     
-    enum CodingKeys: String, CodingKey {
-        case id, area, areaDisplay, eventType, eventTypeDisplay, description
-        case isSubscribed, isMuted, isPinned
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        
+        try container.encodeIfPresent(id, forKey: .id)
+        try container.encode(timestamp, forKey: .timestamp)
+        try container.encodeIfPresent(source, forKey: .source)
+        try container.encodeIfPresent(area, forKey: .area)
+        try container.encodeIfPresent(areaDisplay, forKey: .areaDisplay)
+        try container.encodeIfPresent(type, forKey: .type)
+        try container.encodeIfPresent(typeDisplay, forKey: .typeDisplay)
+        try container.encodeIfPresent(groupId, forKey: .groupId)
+        try container.encodeIfPresent(vehicleNumber, forKey: .vehicleNumber)
+        try container.encodeIfPresent(vehicleTransporter, forKey: .vehicleTransporter)
+        try container.encodeIfPresent(data, forKey: .data)
     }
-    
-    static func == (lhs: Channel, rhs: Channel) -> Bool {
-        return lhs.id == rhs.id
-    }
-}
-
-// MARK: - Subscription Models
-
-struct SubscriptionFilter: Codable {
-    let area: String
-    let eventType: String
-}
-
-struct SubscriptionRequest: Codable {
-    let clientId: String
-    let filters: [SubscriptionFilter]
-    let syncState: [String: SyncStateInfo]?
-    let resetConsumers: Bool
-}
-
-struct SyncStateInfo: Codable {
-    let lastEventId: String?
-    let lastTimestamp: Int64
-    let lastSeq: Int64
-}
-
-// MARK: - Auth Models
-
-struct User: Codable {
-    let id: Int
-    let name: String
-    let phone: String
-    let area: String?
-    let designation: String?
-    let organisation: String?
-    let createdAt: String
-    let updatedAt: String?
-    
-    // Computed property for backward compatibility
-    var username: String {
-        return name
-    }
-    
-    var role: String {
-        return designation ?? "User"
-    }
-    
-    enum CodingKeys: String, CodingKey {
-        case id, name, phone, area, designation, organisation, createdAt, updatedAt
-    }
-}
-
-struct LoginRequest: Codable {
-    let phone: String
-    let purpose: String
-}
-
-struct OTPVerificationRequest: Codable {
-    let phone: String
-    let otp: String
-    let deviceId: String
-}
-
-struct AuthResponse: Codable {
-    let token: String
-    let expiresAt: Int64
-    let user: User
 }
 
 // MARK: - AnyCodable Helper
-
 struct AnyCodable: Codable {
     let value: Any
     
     init(_ value: Any) {
         self.value = value
-    }
-    
-    var stringValue: String? {
-        return value as? String
-    }
-    
-    var intValue: Int? {
-        return value as? Int
-    }
-    
-    var int64Value: Int64? {
-        if let int = value as? Int {
-            return Int64(int)
-        }
-        return value as? Int64
-    }
-    
-    var doubleValue: Double? {
-        if let double = value as? Double {
-            return double
-        } else if let int = value as? Int {
-            return Double(int)
-        } else if let float = value as? Float {
-            return Double(float)
-        }
-        return nil
-    }
-    
-    var boolValue: Bool? {
-        return value as? Bool
-    }
-    
-    var arrayValue: [Any]? {
-        return value as? [Any]
-    }
-    
-    var dictionaryValue: [String: AnyCodable]? {
-        guard let dict = value as? [String: Any] else {
-            return nil
-        }
-        return dict.mapValues { AnyCodable($0) }
     }
     
     init(from decoder: Decoder) throws {
@@ -321,13 +125,8 @@ struct AnyCodable: Codable {
             value = array.map { $0.value }
         } else if let dict = try? container.decode([String: AnyCodable].self) {
             value = dict.mapValues { $0.value }
-        } else if container.decodeNil() {
-            value = NSNull()
         } else {
-            throw DecodingError.dataCorruptedError(
-                in: container,
-                debugDescription: "AnyCodable value cannot be decoded"
-            )
+            value = NSNull()
         }
     }
     
@@ -346,180 +145,309 @@ struct AnyCodable: Codable {
         case let string as String:
             try container.encode(string)
         case let array as [Any]:
-            let codableArray = array.map { AnyCodable($0) }
-            try container.encode(codableArray)
+            try container.encode(array.map { AnyCodable($0) })
         case let dict as [String: Any]:
-            let codableDict = dict.mapValues { AnyCodable($0) }
-            try container.encode(codableDict)
-        case is NSNull:
-            try container.encodeNil()
+            try container.encode(dict.mapValues { AnyCodable($0) })
         default:
-            let context = EncodingError.Context(
-                codingPath: container.codingPath,
-                debugDescription: "AnyCodable value cannot be encoded"
-            )
-            throw EncodingError.invalidValue(value, context)
+            try container.encodeNil()
         }
     }
 }
 
-// MARK: - Event Type Helpers
-
-enum EventType: String, CaseIterable {
-    case cd = "cd"
-    case vd = "vd"
-    case pd = "pd"
-    case id = "id"
-    case vc = "vc"
-    case ls = "ls"
-    case us = "us"
-    case ct = "ct"
-    case sh = "sh"
-    case ii = "ii"
-    case offRoute = "off-route"
-    case tamper = "tamper"
-    case overspeed = "overspeed"
+// MARK: - Channel Model
+struct Channel: Identifiable, Codable, Equatable {
+    let id: String
+    let area: String
+    let areaDisplay: String
+    let eventType: String
+    let eventTypeDisplay: String
+    let description: String
+    var isSubscribed: Bool = false
+    var isMuted: Bool = false
     
-    var displayName: String {
-        switch self {
-        case .cd: return "Crowd Detection"
-        case .vd: return "Vehicle Detection"
-        case .pd: return "Person Detection"
-        case .id: return "Intrusion Detection"
-        case .vc: return "Vehicle Congestion"
-        case .ls: return "Loading Status"
-        case .us: return "Unloading Status"
-        case .ct: return "Camera Tampering"
-        case .sh: return "Safety Hazard"
-        case .ii: return "Insufficient Illumination"
-        case .offRoute: return "Off-Route Alert"
-        case .tamper: return "Tamper Alert"
-        case .overspeed: return "Overspeed Alert"
-        }
+    enum CodingKeys: String, CodingKey {
+        case id, area, areaDisplay, eventType, eventTypeDisplay, description, isSubscribed, isMuted
     }
     
-    var iconName: String {
-        switch self {
-        case .cd: return "person.3.fill"
-        case .vd: return "car.fill"
-        case .pd: return "person.fill"
-        case .id: return "exclamationmark.triangle.fill"
-        case .vc: return "car.2.fill"
-        case .ls: return "arrow.up.bin.fill"
-        case .us: return "arrow.down.bin.fill"
-        case .ct: return "video.slash.fill"
-        case .sh: return "exclamationmark.shield.fill"
-        case .ii: return "lightbulb.slash.fill"
-        case .offRoute: return "location.slash.fill"
-        case .tamper: return "hand.raised.slash.fill"
-        case .overspeed: return "gauge.badge.plus"
-        }
-    }
-    
-    var color: String {
-        switch self {
-        case .cd: return "#FF5722"
-        case .vd: return "#2196F3"
-        case .pd: return "#4CAF50"
-        case .id: return "#F44336"
-        case .vc: return "#FFC107"
-        case .ls: return "#00BCD4"
-        case .us: return "#00BCD4"
-        case .ct: return "#E91E63"
-        case .sh: return "#FF9800"
-        case .ii: return "#9C27B0"
-        case .offRoute: return "#FF5722"
-        case .tamper: return "#F44336"
-        case .overspeed: return "#FF6B35"
-        }
+    static func == (lhs: Channel, rhs: Channel) -> Bool {
+        lhs.id == rhs.id
     }
 }
 
-// MARK: - Area Helpers
-
-enum Area: String, CaseIterable {
-    case barkasayal = "barkasayal"
-    case argada = "argada"
-    case northkaranpura = "northkaranpura"
-    case bokarokargali = "bokarokargali"
-    case kathara = "kathara"
-    case giridih = "giridih"
-    case amrapali = "amrapali"
-    case rajhara = "rajhara"
-    case kuju = "kuju"
-    case hazaribagh = "hazaribagh"
-    case rajrappa = "rajrappa"
-    case dhori = "dhori"
-    case piparwar = "piparwar"
-    case magadh = "magadh"
+// MARK: - User Model
+struct User: Codable {
+    let id: String
+    let username: String
+    let email: String?
+    let role: String?
+    let createdAt: String?
     
-    var displayName: String {
-        switch self {
-        case .barkasayal: return "Barka Sayal"
-        case .argada: return "Argada"
-        case .northkaranpura: return "North Karanpura"
-        case .bokarokargali: return "Bokaro & Kargali"
-        case .kathara: return "Kathara"
-        case .giridih: return "Giridih"
-        case .amrapali: return "Amrapali & Chandragupta"
-        case .rajhara: return "Rajhara"
-        case .kuju: return "Kuju"
-        case .hazaribagh: return "Hazaribagh"
-        case .rajrappa: return "Rajrappa"
-        case .dhori: return "Dhori"
-        case .piparwar: return "Piparwar"
-        case .magadh: return "Magadh"
-        }
+    enum CodingKeys: String, CodingKey {
+        case id, username, email, role, createdAt
     }
 }
 
-// MARK: - Helper Extensions
+// MARK: - Auth Response
+struct AuthResponse: Codable {
+    let token: String
+    let user: User
+}
 
-extension Event {
-    /// Returns a formatted time string (e.g., "2m ago", "1h ago")
-    func timeAgo() -> String {
-        let now = Date()
-        let interval = now.timeIntervalSince(date)
+// MARK: - Login Request
+struct LoginRequest: Codable {
+    let username: String
+    let password: String
+}
+
+// MARK: - Register Request
+struct RegisterRequest: Codable {
+    let username: String
+    let email: String
+    let password: String
+}
+
+// MARK: - API Error Response
+struct APIError: Codable {
+    let error: String
+    let message: String?
+    let statusCode: Int?
+}
+
+// MARK: - Subscription State
+struct SubscriptionState: Codable {
+    let channelId: String
+    let lastEventId: String?
+    let lastTimestamp: Int64?
+    let lastSeq: Int64?
+    let eventsReceived: Int
+    
+    enum CodingKeys: String, CodingKey {
+        case channelId, lastEventId, lastTimestamp, lastSeq, eventsReceived
+    }
+}
+
+// MARK: - Channel Sync State
+class ChannelSyncState {
+    static let shared = ChannelSyncState()
+    
+    private var channelStates: [String: ChannelState] = [:]
+    private let lock = NSLock()
+    private let defaults = UserDefaults.standard
+    private let stateKey = "channel_sync_states"
+    
+    private struct ChannelState: Codable {
+        var lastEventId: String?
+        var lastTimestamp: Int64 = 0
+        var lastSeq: Int64 = 0
+        var eventsReceived: Int = 0
+        var recentEventIds: Set<String> = []
+        var isInCatchUpMode: Bool = false
+        var catchUpStartTime: Date?
+        var catchUpEventsProcessed: Int = 0
+    }
+    
+    private init() {
+        loadStates()
+    }
+    
+    func recordEventReceived(channelId: String, eventId: String, timestamp: Int64, seq: Int64) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
         
-        if interval < 60 {
-            return "Just now"
-        } else if interval < 3600 {
-            let minutes = Int(interval / 60)
-            return "\(minutes)m ago"
-        } else if interval < 86400 {
-            let hours = Int(interval / 3600)
-            return "\(hours)h ago"
-        } else {
-            let days = Int(interval / 86400)
-            return "\(days)d ago"
+        var state = channelStates[channelId] ?? ChannelState()
+        
+        // Check if already received
+        if state.recentEventIds.contains(eventId) {
+            return false
+        }
+        
+        // Add to recent IDs
+        state.recentEventIds.insert(eventId)
+        
+        // Keep only last 100 event IDs
+        if state.recentEventIds.count > 100 {
+            state.recentEventIds.removeFirst()
+        }
+        
+        // Update state
+        state.lastEventId = eventId
+        state.lastTimestamp = max(state.lastTimestamp, timestamp)
+        state.lastSeq = max(state.lastSeq, seq)
+        state.eventsReceived += 1
+        
+        if state.isInCatchUpMode {
+            state.catchUpEventsProcessed += 1
+        }
+        
+        channelStates[channelId] = state
+        scheduleSave()
+        
+        return true
+    }
+    
+    func enableCatchUpMode(channelId: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        var state = channelStates[channelId] ?? ChannelState()
+        state.isInCatchUpMode = true
+        state.catchUpStartTime = Date()
+        state.catchUpEventsProcessed = 0
+        channelStates[channelId] = state
+    }
+    
+    func disableCatchUpMode(channelId: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        var state = channelStates[channelId] ?? ChannelState()
+        state.isInCatchUpMode = false
+        state.catchUpStartTime = nil
+        channelStates[channelId] = state
+    }
+    
+    func isInCatchUpMode(channelId: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        return channelStates[channelId]?.isInCatchUpMode ?? false
+    }
+    
+    func getCatchUpProgress(channelId: String) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        return channelStates[channelId]?.catchUpEventsProcessed ?? 0
+    }
+    
+    func getLastSequence(channelId: String) -> Int64 {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        return channelStates[channelId]?.lastSeq ?? 0
+    }
+    
+    func getTotalEventsReceived() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        return channelStates.values.reduce(0) { $0 + $1.eventsReceived }
+    }
+    
+    func getAllSyncStates() -> [String: SubscriptionState] {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        var states: [String: SubscriptionState] = [:]
+        for (channelId, state) in channelStates {
+            states[channelId] = SubscriptionState(
+                channelId: channelId,
+                lastEventId: state.lastEventId,
+                lastTimestamp: state.lastTimestamp,
+                lastSeq: state.lastSeq,
+                eventsReceived: state.eventsReceived
+            )
+        }
+        return states
+    }
+    
+    func clearChannel(channelId: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        channelStates.removeValue(forKey: channelId)
+        scheduleSave()
+    }
+    
+    // MARK: - Persistence
+    
+    private var saveTimer: Timer?
+    
+    private func scheduleSave() {
+        saveTimer?.invalidate()
+        
+        DispatchQueue.main.async { [weak self] in
+            self?.saveTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { [weak self] _ in
+                self?.saveStates()
+            }
         }
     }
     
-    /// Returns formatted timestamp (e.g., "Dec 15, 3:45 PM")
-    func formattedTimestamp() -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
-    }
-}
-
-extension Channel {
-    /// Returns icon color based on event type
-    var iconColor: String {
-        if let eventType = EventType(rawValue: eventType) {
-            return eventType.color
+    private func saveStates() {
+        lock.lock()
+        let statesToSave = channelStates
+        lock.unlock()
+        
+        if let data = try? JSONEncoder().encode(statesToSave) {
+            defaults.set(data, forKey: stateKey)
         }
-        return "#9E9E9E" // Default gray
     }
     
-    /// Returns SF Symbol name for icon
-    var iconName: String {
-        if let eventType = EventType(rawValue: eventType) {
-            return eventType.iconName
+    private func loadStates() {
+        if let data = defaults.data(forKey: stateKey),
+           let states = try? JSONDecoder().decode([String: ChannelState].self, from: data) {
+            channelStates = states
+            print("📊 Loaded sync states for \(states.count) channels")
         }
-        return "bell.fill" // Default icon
+    }
+    
+    func forceSave() {
+        saveTimer?.invalidate()
+        saveStates()
     }
 }
 
-// Note: Color(hex:) extension is defined in ChannelsView.swift to avoid duplication
+// MARK: - Keychain Client ID
+class KeychainClientID {
+    private static let service = "com.iccc.alert"
+    private static let account = "persistent_client_id"
+    
+    static func getOrCreateClientID() -> String {
+        // Try to get from keychain
+        if let existingID = getFromKeychain() {
+            return existingID
+        }
+        
+        // Generate new ID
+        let newID = UUID().uuidString
+        saveToKeychain(newID)
+        return newID
+    }
+    
+    private static func getFromKeychain() -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true
+        ]
+        
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        
+        guard status == errSecSuccess,
+              let data = result as? Data,
+              let clientID = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        
+        return clientID
+    }
+    
+    private static func saveToKeychain(_ clientID: String) {
+        guard let data = clientID.data(using: .utf8) else { return }
+        
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecValueData as String: data
+        ]
+        
+        // Delete any existing item
+        SecItemDelete(query as CFDictionary)
+        
+        // Add new item
+        SecItemAdd(query as CFDictionary, nil)
+    }
+}

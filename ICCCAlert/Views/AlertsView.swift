@@ -10,9 +10,11 @@ struct AlertsView: View {
         _viewModel = StateObject(wrappedValue: AlertsViewModel(authManager: authManager))
     }
     
+    // **FIX**: Get events directly from SubscriptionManager with proper filtering
     var filteredAlerts: [Event] {
-        // Get all events from subscribed channels
         var allEvents: [Event] = []
+        
+        // Get all events from all subscribed channels
         for channel in subscriptionManager.subscribedChannels {
             let events = subscriptionManager.getEvents(channelId: channel.id)
             allEvents.append(contentsOf: events)
@@ -26,9 +28,19 @@ struct AlertsView: View {
         case .all:
             return allEvents
         case .unread:
-            return allEvents.filter { !$0.isRead }
+            // **FIX**: Use proper unread tracking from subscription manager
+            return allEvents.filter { event in
+                guard let channelName = event.channelName else { return false }
+                return subscriptionManager.getUnreadCount(channelId: channelName) > 0
+            }
         case .important:
             return allEvents.filter { $0.priority == "high" }
+        }
+    }
+    
+    var unreadCount: Int {
+        subscriptionManager.subscribedChannels.reduce(0) { total, channel in
+            total + subscriptionManager.getUnreadCount(channelId: channel.id)
         }
     }
     
@@ -37,8 +49,8 @@ struct AlertsView: View {
             VStack(spacing: 0) {
                 // Filter Picker
                 Picker("Filter", selection: $selectedFilter) {
-                    Text("All").tag(AlertFilter.all)
-                    Text("Unread").tag(AlertFilter.unread)
+                    Text("All (\(filteredAlerts.count))").tag(AlertFilter.all)
+                    Text("Unread (\(unreadCount))").tag(AlertFilter.unread)
                     Text("Important").tag(AlertFilter.important)
                 }
                 .pickerStyle(SegmentedPickerStyle())
@@ -111,7 +123,7 @@ struct AlertsView: View {
                         Text("Mark All Read")
                             .font(.subheadline)
                     }
-                    .disabled(filteredAlerts.filter { !$0.isRead }.isEmpty)
+                    .disabled(unreadCount == 0)
                 }
             }
         }
@@ -121,12 +133,16 @@ struct AlertsView: View {
                 webSocketService.connect()
             }
         }
+        // **FIX**: Listen for new events
+        .onReceive(NotificationCenter.default.publisher(for: .newEventReceived)) { _ in
+            // Trigger UI update
+            objectWillChange.send()
+        }
     }
     
     private func markAsRead(_ alert: Event) {
-        // Mark event as read in subscription manager
-        guard let channelId = alert.channelName else { return }
-        subscriptionManager.markAsRead(channelId: channelId)
+        guard let channelName = alert.channelName else { return }
+        subscriptionManager.markAsRead(channelId: channelName)
     }
     
     private func markAllAsRead() {
@@ -146,6 +162,12 @@ struct AlertRowView: View {
     let alert: Event
     let onTap: () -> Void
     
+    // **FIX**: Check unread status properly
+    private var isUnread: Bool {
+        guard let channelName = alert.channelName else { return false }
+        return SubscriptionManager.shared.getUnreadCount(channelId: channelName) > 0
+    }
+    
     var body: some View {
         Button(action: onTap) {
             HStack(alignment: .top, spacing: 12) {
@@ -161,7 +183,7 @@ struct AlertRowView: View {
                             .font(.headline)
                             .foregroundColor(.primary)
                         Spacer()
-                        if !alert.isRead {
+                        if isUnread {
                             Circle()
                                 .fill(Color.blue)
                                 .frame(width: 8, height: 8)
@@ -174,13 +196,15 @@ struct AlertRowView: View {
                         .lineLimit(2)
                     
                     HStack {
-                        Text(alert.channelName ?? "General")
-                            .font(.caption)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.blue.opacity(0.1))
-                            .foregroundColor(.blue)
-                            .cornerRadius(4)
+                        if let channelName = alert.channelName {
+                            Text(channelName.replacingOccurrences(of: "_", with: " ").capitalized)
+                                .font(.caption)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.blue.opacity(0.1))
+                                .foregroundColor(.blue)
+                                .cornerRadius(4)
+                        }
                         
                         Spacer()
                         
