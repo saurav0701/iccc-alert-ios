@@ -276,7 +276,6 @@ class AuthManager: ObservableObject {
     
     private func saveAuthData(_ response: AuthResponse) {
         UserDefaults.standard.set(response.token, forKey: "auth_token")
-        UserDefaults.standard.set(response.expiresAt, forKey: "token_expiry")
         if let userData = try? JSONEncoder().encode(response.user) {
             UserDefaults.standard.set(userData, forKey: "user_data")
         }

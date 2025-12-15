@@ -7,9 +7,9 @@ class ChannelsViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var error: String?
     
-    let authManager: AuthManager
+    private let authManager: AuthManager
+    private let baseURL = "http://192.168.29.70:19998"
     private var cancellables = Set<AnyCancellable>()
-    private let baseURL = "https://iccc-backend.onrender.com"
     
     init(authManager: AuthManager) {
         self.authManager = authManager
@@ -45,8 +45,17 @@ class ChannelsViewModel: ObservableObject {
                 }
             } receiveValue: { [weak self] channels in
                 self?.channels = channels
-                self?.categories = Array(Set(channels.map { $0.category })).sorted()
+                // FIX: Use eventTypeDisplay instead of category
+                self?.categories = Array(Set(channels.map { $0.eventTypeDisplay })).sorted()
             }
             .store(in: &cancellables)
+    }
+    
+    func subscribe(to channel: Channel) {
+        SubscriptionManager.shared.subscribe(channel: channel)
+    }
+    
+    func unsubscribe(from channelId: String) {
+        SubscriptionManager.shared.unsubscribe(channelId: channelId)
     }
 }

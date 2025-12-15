@@ -8,11 +8,8 @@ class KeychainClientID {
     
     static let service = "com.iccc.alert.clientid"
     private static let account = "websocket_client_id"
-    
-    /// Get or create a persistent client ID
-    /// - Returns: Stable client ID that survives app reinstalls
+ 
     static func getOrCreateClientID() -> String {
-        // Try to retrieve existing client ID from Keychain
         if let existingID = retrieveFromKeychain() {
             print("✅ Using existing Keychain client ID: \(existingID)")
             return existingID
@@ -85,9 +82,7 @@ class KeychainClientID {
         SecItemDelete(query as CFDictionary)
     }
     
-    /// Generate a new client ID similar to Android implementation
     private static func generateClientID() -> String {
-        // Use iOS Vendor ID as base (similar to Android ID)
         let vendorID = UIDevice.current.identifierForVendor?.uuidString ?? "unknown"
         
         // Add short UUID for additional uniqueness
@@ -96,9 +91,7 @@ class KeychainClientID {
         // Format: ios-<vendor-id>-<short-uuid>
         return "ios-\(vendorID)-\(uuid)"
     }
-    
-    /// Reset client ID (for debugging or user-initiated reset)
-    /// WARNING: This will orphan existing durable consumers on server
+
     static func resetClientID() -> String {
         print("⚠️ Resetting client ID - this will orphan old durable consumers")
         deleteFromKeychain()

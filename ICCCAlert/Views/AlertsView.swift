@@ -5,30 +5,26 @@ struct AlertsView: View {
     @StateObject private var webSocketService = WebSocketService.shared
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @State private var selectedFilter: AlertFilter = .all
+    @State private var refreshTrigger = false
     
     init(authManager: AuthManager) {
         _viewModel = StateObject(wrappedValue: AlertsViewModel(authManager: authManager))
     }
     
-    // **FIX**: Get events directly from SubscriptionManager with proper filtering
     var filteredAlerts: [Event] {
         var allEvents: [Event] = []
         
-        // Get all events from all subscribed channels
         for channel in subscriptionManager.subscribedChannels {
             let events = subscriptionManager.getEvents(channelId: channel.id)
             allEvents.append(contentsOf: events)
         }
         
-        // Sort by timestamp (newest first)
         allEvents.sort { $0.timestamp > $1.timestamp }
         
-        // Apply filter
         switch selectedFilter {
         case .all:
             return allEvents
         case .unread:
-            // **FIX**: Use proper unread tracking from subscription manager
             return allEvents.filter { event in
                 guard let channelName = event.channelName else { return false }
                 return subscriptionManager.getUnreadCount(channelId: channelName) > 0
@@ -47,7 +43,6 @@ struct AlertsView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
-                // Filter Picker
                 Picker("Filter", selection: $selectedFilter) {
                     Text("All (\(filteredAlerts.count))").tag(AlertFilter.all)
                     Text("Unread (\(unreadCount))").tag(AlertFilter.unread)
@@ -56,7 +51,6 @@ struct AlertsView: View {
                 .pickerStyle(SegmentedPickerStyle())
                 .padding()
                 
-                // Connection Status
                 if !webSocketService.isConnected {
                     HStack {
                         Image(systemName: "wifi.slash")
@@ -88,7 +82,6 @@ struct AlertsView: View {
                     .background(Color.green.opacity(0.1))
                 }
                 
-                // Alerts List
                 if filteredAlerts.isEmpty {
                     VStack(spacing: 16) {
                         Image(systemName: "bell.slash")
@@ -112,6 +105,7 @@ struct AlertsView: View {
                             }
                         }
                     }
+                    .id(refreshTrigger)
                 }
             }
             .navigationTitle("Alerts")
@@ -128,27 +122,27 @@ struct AlertsView: View {
             }
         }
         .onAppear {
-            // Connect WebSocket if not connected
             if !webSocketService.isConnected {
                 webSocketService.connect()
             }
         }
-        // **FIX**: Listen for new events
+        // FIX: Use refreshTrigger instead of objectWillChange
         .onReceive(NotificationCenter.default.publisher(for: .newEventReceived)) { _ in
-            // Trigger UI update
-            objectWillChange.send()
+            refreshTrigger.toggle()
         }
     }
     
     private func markAsRead(_ alert: Event) {
         guard let channelName = alert.channelName else { return }
         subscriptionManager.markAsRead(channelId: channelName)
+        refreshTrigger.toggle()
     }
     
     private func markAllAsRead() {
         for channel in subscriptionManager.subscribedChannels {
             subscriptionManager.markAsRead(channelId: channel.id)
         }
+        refreshTrigger.toggle()
     }
 }
 
@@ -162,7 +156,6 @@ struct AlertRowView: View {
     let alert: Event
     let onTap: () -> Void
     
-    // **FIX**: Check unread status properly
     private var isUnread: Bool {
         guard let channelName = alert.channelName else { return false }
         return SubscriptionManager.shared.getUnreadCount(channelId: channelName) > 0
@@ -171,7 +164,6 @@ struct AlertRowView: View {
     var body: some View {
         Button(action: onTap) {
             HStack(alignment: .top, spacing: 12) {
-                // Priority Indicator
                 Circle()
                     .fill(priorityColor)
                     .frame(width: 12, height: 12)
