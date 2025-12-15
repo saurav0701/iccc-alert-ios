@@ -89,9 +89,9 @@ class AuthManager: ObservableObject {
         
         DebugLogger.shared.log("🔄 Sending OTP verification request: phone=\(phone), otp=\(otp), deviceId=\(deviceId)")
         
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard let self = self else { return }
+            DispatchQueue.main.async {
                 
                 if let error = error {
                     DebugLogger.shared.logError("Network Error: \(error.localizedDescription)")
@@ -208,7 +208,7 @@ class AuthManager: ObservableObject {
                         completion(false, "Invalid credentials")
                     }
                 }
-            }
+            }  // Close DispatchQueue.main.async
         }.resume()
     }
     
