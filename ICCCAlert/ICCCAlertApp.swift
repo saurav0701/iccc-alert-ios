@@ -17,7 +17,6 @@ struct ICCCAlertApp: App {
     var body: some Scene {
         WindowGroup {
             if authManager.isAuthenticated {
-                print("✅ Showing ContentView (authenticated)")
                 ContentView()
                     .environmentObject(authManager)
                     .environmentObject(webSocketService)
@@ -26,7 +25,6 @@ struct ICCCAlertApp: App {
                         connectWebSocket()
                     }
             } else {
-                print("🔓 Showing LoginView (not authenticated)")
                 LoginView()
                     .environmentObject(authManager)
             }
