@@ -201,12 +201,6 @@ struct AuthResponse: Codable {
         token = try container.decode(String.self, forKey: .token)
         user = try container.decode(User.self, forKey: .user)
         expiresAt = try container.decodeIfPresent(Int64.self, forKey: .expiresAt)
-        
-        // If expiresAt is not provided, set it to 24 hours from now
-        if expiresAt == nil {
-            let futureDate = Date().addingTimeInterval(24 * 60 * 60) // 24 hours
-            // Note: This value won't be used since expiresAt is optional
-        }
     }
 }
 

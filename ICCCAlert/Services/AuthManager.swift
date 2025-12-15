@@ -121,7 +121,7 @@ class AuthManager: ObservableObject {
                         let authResponse = try JSONDecoder().decode(AuthResponse.self, from: data)
                         print("✅ Successfully decoded AuthResponse")
                         print("🔐 Token received: \(authResponse.token.prefix(20))...")
-                        print("👤 User: \(authResponse.user.username)")
+                        print("👤 User: \(authResponse.user.name)")
                         self.saveAuthData(authResponse)
                         print("💾 Auth data saved successfully")
                         completion(true, "Login successful")
