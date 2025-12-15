@@ -144,12 +144,9 @@ class ServerManagedClientID {
     
     /// Request client ID from backend
     private static func requestClientIDFromServer(phoneNumber: String, completion: @escaping (String?) -> Void) {
-        // TODO: Implement your backend API call
-        // Example endpoint: POST /api/client-id
-        // Body: { "phone": "+1234567890", "platform": "ios" }
-        // Response: { "clientId": "user-123-device-456" }
         
-        guard let url = URL(string: "http://192.168.29.69:19998/api/client-id") else {
+        
+        guard let url = URL(string: "http://192.168.29.70:19998/api/client-id") else {
             completion(nil)
             return
         }
