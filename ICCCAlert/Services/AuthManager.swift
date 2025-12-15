@@ -91,7 +91,8 @@ class AuthManager: ObservableObject {
         
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self = self else { return }
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
                 
                 if let error = error {
                     DebugLogger.shared.logError("Network Error: \(error.localizedDescription)")
