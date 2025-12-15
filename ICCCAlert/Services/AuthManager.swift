@@ -91,29 +91,32 @@ class AuthManager: ObservableObject {
         
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self = self else { return }
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                
-                if let error = error {
-                    DebugLogger.shared.logError("Network Error: \(error.localizedDescription)")
-                    print("❌ OTP Verification Network Error: \(error.localizedDescription)")
+            
+            if let error = error {
+                DebugLogger.shared.logError("Network Error: \(error.localizedDescription)")
+                print("❌ OTP Verification Network Error: \(error.localizedDescription)")
+                DispatchQueue.main.async {
                     completion(false, error.localizedDescription)
-                    return
                 }
-                
-                guard let data = data else {
-                    print("❌ No response data from OTP verification")
+                return
+            }
+            
+            guard let data = data else {
+                print("❌ No response data from OTP verification")
+                DispatchQueue.main.async {
                     completion(false, "No response from server")
-                    return
                 }
+                return
+            }
                 
-                guard let httpResponse = response as? HTTPURLResponse else {
-                    print("❌ Invalid HTTP response")
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                print("❌ Invalid HTTP response")
+                DispatchQueue.main.async {
                     completion(false, "Invalid response")
-                    return
                 }
-                
-                // DEBUG: Print raw response
+                return
+            }                // DEBUG: Print raw response
                 if let jsonString = String(data: data, encoding: .utf8) {
                     print("🔍 RAW RESPONSE from server: \(jsonString)")
                 }
@@ -146,6 +149,7 @@ class AuthManager: ObservableObject {
                         self.saveAuthData(authResponse)
                         print("💾 Auth data saved successfully")
                         completion(true, "Login successful")
+                        }
                     } catch {
                         print("❌ Decoding error: \(error)")
                         if let decodingError = error as? DecodingError {
@@ -188,14 +192,20 @@ class AuthManager: ObservableObject {
                                     user: fallbackUser,
                                     expiresAt: Int64(Date().addingTimeInterval(24 * 60 * 60).timeIntervalSince1970)
                                 )
-                                self.saveAuthData(fallbackResponse)
-                                print("💾 Fallback auth data saved successfully")
-                                completion(true, "Login successful")
+                                DispatchQueue.main.async {
+                                    self.saveAuthData(fallbackResponse)
+                                    print("💾 Fallback auth data saved successfully")
+                                    completion(true, "Login successful")
+                                }
                             } else {
-                                completion(false, "Invalid response format: No token found")
+                                DispatchQueue.main.async {
+                                    completion(false, "Invalid response format: No token found")
+                                }
                             }
                         } else {
-                            completion(false, "Invalid response format: \(error.localizedDescription)")
+                            DispatchQueue.main.async {
+                                completion(false, "Invalid response format: \(error.localizedDescription)")
+                            }
                         }
                     }
                 } else {
@@ -203,13 +213,16 @@ class AuthManager: ObservableObject {
                     if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                        let errorMsg = json["error"] as? String {
                         print("❌ Server error: \(errorMsg)")
-                        completion(false, errorMsg)
+                        DispatchQueue.main.async {
+                            completion(false, errorMsg)
+                        }
                     } else {
                         print("❌ Invalid credentials or server error")
-                        completion(false, "Invalid credentials")
+                        DispatchQueue.main.async {
+                            completion(false, "Invalid credentials")
+                        }
                     }
                 }
-            }  // Close DispatchQueue.main.async
         }.resume()
     }
     
