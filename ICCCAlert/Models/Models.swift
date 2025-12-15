@@ -181,14 +181,9 @@ struct User: Codable {
     let email: String?
     let role: String?
     let createdAt: String?
-    let name: String?
-    let phone: String?
-    let designation: String?
-    let area: String?
-    let organisation: String?
     
     enum CodingKeys: String, CodingKey {
-        case id, username, email, role, createdAt, name, phone, designation, area, organisation
+        case id, username, email, role, createdAt
     }
 }
 
@@ -196,20 +191,12 @@ struct User: Codable {
 struct AuthResponse: Codable {
     let token: String
     let user: User
-    let expiresAt: Int64
 }
 
 // MARK: - Login Request
 struct LoginRequest: Codable {
-    let phone: String
-    let purpose: String
-}
-
-// MARK: - OTP Verification Request
-struct OTPVerificationRequest: Codable {
-    let phone: String
-    let otp: String
-    let deviceId: String
+    let username: String
+    let password: String
 }
 
 // MARK: - Register Request
@@ -236,5 +223,231 @@ struct SubscriptionState: Codable {
     
     enum CodingKeys: String, CodingKey {
         case channelId, lastEventId, lastTimestamp, lastSeq, eventsReceived
+    }
+}
+
+// MARK: - Channel Sync State
+class ChannelSyncState {
+    static let shared = ChannelSyncState()
+    
+    private var channelStates: [String: ChannelState] = [:]
+    private let lock = NSLock()
+    private let defaults = UserDefaults.standard
+    private let stateKey = "channel_sync_states"
+    
+    private struct ChannelState: Codable {
+        var lastEventId: String?
+        var lastTimestamp: Int64 = 0
+        var lastSeq: Int64 = 0
+        var eventsReceived: Int = 0
+        var recentEventIds: Set<String> = []
+        var isInCatchUpMode: Bool = false
+        var catchUpStartTime: Date?
+        var catchUpEventsProcessed: Int = 0
+    }
+    
+    private init() {
+        loadStates()
+    }
+    
+    func recordEventReceived(channelId: String, eventId: String, timestamp: Int64, seq: Int64) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        var state = channelStates[channelId] ?? ChannelState()
+        
+        // Check if already received
+        if state.recentEventIds.contains(eventId) {
+            return false
+        }
+        
+        // Add to recent IDs
+        state.recentEventIds.insert(eventId)
+        
+        // Keep only last 100 event IDs
+        if state.recentEventIds.count > 100 {
+            state.recentEventIds.removeFirst()
+        }
+        
+        // Update state
+        state.lastEventId = eventId
+        state.lastTimestamp = max(state.lastTimestamp, timestamp)
+        state.lastSeq = max(state.lastSeq, seq)
+        state.eventsReceived += 1
+        
+        if state.isInCatchUpMode {
+            state.catchUpEventsProcessed += 1
+        }
+        
+        channelStates[channelId] = state
+        scheduleSave()
+        
+        return true
+    }
+    
+    func enableCatchUpMode(channelId: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        var state = channelStates[channelId] ?? ChannelState()
+        state.isInCatchUpMode = true
+        state.catchUpStartTime = Date()
+        state.catchUpEventsProcessed = 0
+        channelStates[channelId] = state
+    }
+    
+    func disableCatchUpMode(channelId: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        var state = channelStates[channelId] ?? ChannelState()
+        state.isInCatchUpMode = false
+        state.catchUpStartTime = nil
+        channelStates[channelId] = state
+    }
+    
+    func isInCatchUpMode(channelId: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        return channelStates[channelId]?.isInCatchUpMode ?? false
+    }
+    
+    func getCatchUpProgress(channelId: String) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        return channelStates[channelId]?.catchUpEventsProcessed ?? 0
+    }
+    
+    func getLastSequence(channelId: String) -> Int64 {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        return channelStates[channelId]?.lastSeq ?? 0
+    }
+    
+    func getTotalEventsReceived() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        return channelStates.values.reduce(0) { $0 + $1.eventsReceived }
+    }
+    
+    func getAllSyncStates() -> [String: SubscriptionState] {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        var states: [String: SubscriptionState] = [:]
+        for (channelId, state) in channelStates {
+            states[channelId] = SubscriptionState(
+                channelId: channelId,
+                lastEventId: state.lastEventId,
+                lastTimestamp: state.lastTimestamp,
+                lastSeq: state.lastSeq,
+                eventsReceived: state.eventsReceived
+            )
+        }
+        return states
+    }
+    
+    func clearChannel(channelId: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        channelStates.removeValue(forKey: channelId)
+        scheduleSave()
+    }
+    
+    // MARK: - Persistence
+    
+    private var saveTimer: Timer?
+    
+    private func scheduleSave() {
+        saveTimer?.invalidate()
+        
+        DispatchQueue.main.async { [weak self] in
+            self?.saveTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { [weak self] _ in
+                self?.saveStates()
+            }
+        }
+    }
+    
+    private func saveStates() {
+        lock.lock()
+        let statesToSave = channelStates
+        lock.unlock()
+        
+        if let data = try? JSONEncoder().encode(statesToSave) {
+            defaults.set(data, forKey: stateKey)
+        }
+    }
+    
+    private func loadStates() {
+        if let data = defaults.data(forKey: stateKey),
+           let states = try? JSONDecoder().decode([String: ChannelState].self, from: data) {
+            channelStates = states
+            print("📊 Loaded sync states for \(states.count) channels")
+        }
+    }
+    
+    func forceSave() {
+        saveTimer?.invalidate()
+        saveStates()
+    }
+}
+
+// MARK: - Keychain Client ID
+class KeychainClientID {
+    private static let service = "com.iccc.alert"
+    private static let account = "persistent_client_id"
+    
+    static func getOrCreateClientID() -> String {
+        // Try to get from keychain
+        if let existingID = getFromKeychain() {
+            return existingID
+        }
+        
+        // Generate new ID
+        let newID = UUID().uuidString
+        saveToKeychain(newID)
+        return newID
+    }
+    
+    private static func getFromKeychain() -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true
+        ]
+        
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        
+        guard status == errSecSuccess,
+              let data = result as? Data,
+              let clientID = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        
+        return clientID
+    }
+    
+    private static func saveToKeychain(_ clientID: String) {
+        guard let data = clientID.data(using: .utf8) else { return }
+        
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecValueData as String: data
+        ]
+        
+        // Delete any existing item
+        SecItemDelete(query as CFDictionary)
+        
+        // Add new item
+        SecItemAdd(query as CFDictionary, nil)
     }
 }

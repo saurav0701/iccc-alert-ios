@@ -18,7 +18,7 @@ class AuthManager: ObservableObject {
     }
     
     func checkAuthStatus() {
-        if let _ = UserDefaults.standard.string(forKey: "auth_token"),
+        if let token = UserDefaults.standard.string(forKey: "auth_token"),
            let expiry = UserDefaults.standard.object(forKey: "token_expiry") as? Int64 {
             let now = Int64(Date().timeIntervalSince1970)
             isAuthenticated = expiry > now
