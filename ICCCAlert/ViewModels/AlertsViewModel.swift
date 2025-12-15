@@ -63,10 +63,10 @@ class AlertsViewModel: ObservableObject {
         URLSession.shared.dataTask(with: request) { [weak self] _, _, _ in
             DispatchQueue.main.async {
                 if let index = self?.alerts.firstIndex(where: { $0.id == alert.id }) {
-                    var updatedAlert = self?.alerts[index]
+                    let updatedAlert = self?.alerts[index]
                     // Note: You'll need to add isRead property to Event model
-                    if let updatedAlert = updatedAlert {
-                        self?.alerts[index] = updatedAlert
+                    if let _ = updatedAlert {
+                        // Event marked as read on server
                     }
                 }
             }

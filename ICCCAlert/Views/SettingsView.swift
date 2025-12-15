@@ -16,9 +16,9 @@ struct SettingsView: View {
                                 .font(.system(size: 50))
                                 .foregroundColor(.blue)
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(user.name)
+                                Text(user.name ?? user.username)
                                     .font(.headline)
-                                Text(user.phone)
+                                Text(user.phone ?? "N/A")
                                     .font(.subheadline)
                                     .foregroundColor(.secondary)
                             }
