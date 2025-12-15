@@ -33,7 +33,19 @@ struct Event: Identifiable, Codable, Equatable {
     }
     
     var priority: String? {
-        return data["priority"]?.stringValue ?? "normal"
+        // Determine priority based on event type
+        guard let eventType = type?.lowercased() else {
+            return "normal"
+        }
+        
+        switch eventType {
+        case "id", "ct", "sh", "tamper": // Intrusion, Camera Tamper, Safety Hazard, Tamper
+            return "high"
+        case "cd", "vc", "off-route": // Crowd, Vehicle Congestion, Off-Route
+            return "medium"
+        default:
+            return "low"
+        }
     }
     
     var createdAt: String {
@@ -98,8 +110,34 @@ struct Event: Identifiable, Codable, Equatable {
         return GPSLocation(lat: lat, lng: lng)
     }
     
+    // Geofence data (for GPS events)
+    var geofenceData: GeofenceData? {
+        guard let geofenceDict = data["geofence"]?.dictionaryValue else {
+            return nil
+        }
+        
+        guard let id = geofenceDict["id"]?.intValue,
+              let name = geofenceDict["name"]?.stringValue else {
+            return nil
+        }
+        
+        return GeofenceData(
+            id: id,
+            name: name,
+            description: geofenceDict["description"]?.stringValue,
+            geoType: geofenceDict["geotype"]?.stringValue,
+            attributes: geofenceDict["attributes"]?.dictionaryValue,
+            geoJSON: geofenceDict["geojson"]?.value
+        )
+    }
+    
     static func == (lhs: Event, rhs: Event) -> Bool {
         return lhs.id == rhs.id
+    }
+    
+    enum CodingKeys: String, CodingKey {
+        case id, timestamp, source, area, areaDisplay, type, typeDisplay
+        case groupId, vehicleNumber, vehicleTransporter, data, isRead
     }
 }
 
@@ -108,6 +146,17 @@ struct Event: Identifiable, Codable, Equatable {
 struct GPSLocation: Codable {
     let lat: Double
     let lng: Double
+}
+
+// MARK: - Geofence Data
+
+struct GeofenceData {
+    let id: Int
+    let name: String
+    let description: String?
+    let geoType: String?
+    let attributes: [String: AnyCodable]?
+    let geoJSON: Any?
 }
 
 // MARK: - Channel Model
@@ -165,7 +214,7 @@ struct SyncStateInfo: Codable {
 // MARK: - Auth Models
 
 struct User: Codable {
-    let id: Int  // ✅ Changed from String to Int to match backend
+    let id: Int
     let name: String
     let phone: String
     let area: String?
@@ -173,6 +222,15 @@ struct User: Codable {
     let organisation: String?
     let createdAt: String
     let updatedAt: String?
+    
+    // Computed property for backward compatibility
+    var username: String {
+        return name
+    }
+    
+    var role: String {
+        return designation ?? "User"
+    }
     
     enum CodingKeys: String, CodingKey {
         case id, name, phone, area, designation, organisation, createdAt, updatedAt
@@ -186,7 +244,7 @@ struct LoginRequest: Codable {
 
 struct OTPVerificationRequest: Codable {
     let phone: String
-    let otp: String  // ✅ Kept as String
+    let otp: String
     let deviceId: String
 }
 
@@ -320,6 +378,7 @@ enum EventType: String, CaseIterable {
     case ii = "ii"
     case offRoute = "off-route"
     case tamper = "tamper"
+    case overspeed = "overspeed"
     
     var displayName: String {
         switch self {
@@ -335,6 +394,7 @@ enum EventType: String, CaseIterable {
         case .ii: return "Insufficient Illumination"
         case .offRoute: return "Off-Route Alert"
         case .tamper: return "Tamper Alert"
+        case .overspeed: return "Overspeed Alert"
         }
     }
     
@@ -352,6 +412,7 @@ enum EventType: String, CaseIterable {
         case .ii: return "lightbulb.slash.fill"
         case .offRoute: return "location.slash.fill"
         case .tamper: return "hand.raised.slash.fill"
+        case .overspeed: return "gauge.badge.plus"
         }
     }
     
@@ -369,6 +430,124 @@ enum EventType: String, CaseIterable {
         case .ii: return "#9C27B0"
         case .offRoute: return "#FF5722"
         case .tamper: return "#F44336"
+        case .overspeed: return "#FF6B35"
         }
+    }
+}
+
+// MARK: - Area Helpers
+
+enum Area: String, CaseIterable {
+    case barkasayal = "barkasayal"
+    case argada = "argada"
+    case northkaranpura = "northkaranpura"
+    case bokarokargali = "bokarokargali"
+    case kathara = "kathara"
+    case giridih = "giridih"
+    case amrapali = "amrapali"
+    case rajhara = "rajhara"
+    case kuju = "kuju"
+    case hazaribagh = "hazaribagh"
+    case rajrappa = "rajrappa"
+    case dhori = "dhori"
+    case piparwar = "piparwar"
+    case magadh = "magadh"
+    
+    var displayName: String {
+        switch self {
+        case .barkasayal: return "Barka Sayal"
+        case .argada: return "Argada"
+        case .northkaranpura: return "North Karanpura"
+        case .bokarokargali: return "Bokaro & Kargali"
+        case .kathara: return "Kathara"
+        case .giridih: return "Giridih"
+        case .amrapali: return "Amrapali & Chandragupta"
+        case .rajhara: return "Rajhara"
+        case .kuju: return "Kuju"
+        case .hazaribagh: return "Hazaribagh"
+        case .rajrappa: return "Rajrappa"
+        case .dhori: return "Dhori"
+        case .piparwar: return "Piparwar"
+        case .magadh: return "Magadh"
+        }
+    }
+}
+
+// MARK: - Helper Extensions
+
+extension Event {
+    /// Returns a formatted time string (e.g., "2m ago", "1h ago")
+    func timeAgo() -> String {
+        let now = Date()
+        let interval = now.timeIntervalSince(date)
+        
+        if interval < 60 {
+            return "Just now"
+        } else if interval < 3600 {
+            let minutes = Int(interval / 60)
+            return "\(minutes)m ago"
+        } else if interval < 86400 {
+            let hours = Int(interval / 3600)
+            return "\(hours)h ago"
+        } else {
+            let days = Int(interval / 86400)
+            return "\(days)d ago"
+        }
+    }
+    
+    /// Returns formatted timestamp (e.g., "Dec 15, 3:45 PM")
+    func formattedTimestamp() -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+}
+
+extension Channel {
+    /// Returns icon color based on event type
+    var iconColor: String {
+        if let eventType = EventType(rawValue: eventType) {
+            return eventType.color
+        }
+        return "#9E9E9E" // Default gray
+    }
+    
+    /// Returns SF Symbol name for icon
+    var iconName: String {
+        if let eventType = EventType(rawValue: eventType) {
+            return eventType.iconName
+        }
+        return "bell.fill" // Default icon
+    }
+}
+
+// MARK: - Color Extension for Hex Support
+
+import SwiftUI
+
+extension Color {
+    init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&int)
+        let a, r, g, b: UInt64
+        switch hex.count {
+        case 3: // RGB (12-bit)
+            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
+        case 6: // RGB (24-bit)
+            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
+        case 8: // ARGB (32-bit)
+            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+        default:
+            (a, r, g, b) = (255, 0, 0, 0)
+        }
+        self.init(
+            .sRGB,
+            red: Double(r) / 255,
+            green: Double(g) / 255,
+            blue: Double(b) / 255,
+            opacity: Double(a) / 255
+        )
     }
 }

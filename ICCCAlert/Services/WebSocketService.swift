@@ -23,6 +23,10 @@ class WebSocketService: ObservableObject {
     private let maxReconnectAttempts = Int.max
     private let reconnectDelay: TimeInterval = 5.0
     
+    // Connection health monitoring
+    private var lastMessageTime: Date = Date()
+    private var healthCheckTimer: Timer?
+    
     // Event processing
     private let eventQueue = DispatchQueue(label: "com.iccc.eventQueue", attributes: .concurrent)
     private let processingQueue = DispatchQueue(label: "com.iccc.processing", qos: .userInitiated)
@@ -38,6 +42,8 @@ class WebSocketService: ObservableObject {
     // Ping/Pong
     private var pingTimer: Timer?
     private let pingInterval: TimeInterval = 30.0
+    private var missedPongs = 0
+    private let maxMissedPongs = 3
     
     // Catch-up monitoring
     private var catchUpChannels: Set<String> = []
@@ -54,18 +60,16 @@ class WebSocketService: ObservableObject {
     
     // MARK: - Client ID Management
     private func setupClientId() {
-        // Use Keychain-backed client ID (survives app reinstall)
         clientId = KeychainClientID.getOrCreateClientID()
         print("✅ Using Keychain client ID: \(clientId)")
-        
-        // Also store in UserDefaults as backup (for easy access in UI)
         UserDefaults.standard.set(clientId, forKey: "persistent_client_id")
     }
     
     private func setupSession() {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
-        config.timeoutIntervalForResource = 0 // No timeout for WebSocket
+        config.timeoutIntervalForResource = 0
+        config.waitsForConnectivity = true // ✅ NEW: Better handling of network changes
         session = URLSession(configuration: config, delegate: nil, delegateQueue: nil)
     }
     
@@ -87,21 +91,24 @@ class WebSocketService: ObservableObject {
         isConnected = true
         reconnectAttempts = 0
         connectionStatus = "Connected - Monitoring alerts"
+        lastMessageTime = Date() // ✅ Reset message timer
         
         startReceiving()
         startPingPong()
         startAckFlusher()
         startStatsLogging()
+        startHealthCheck() // ✅ NEW: Monitor connection health
         
-        // Send subscription after connection
+        // ✅ CRITICAL: Send subscription with reset flag for fresh start
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            self.sendSubscriptionV2()
+            self.sendSubscriptionV2(reset: true)
         }
         
         print("✅ WebSocket connected")
     }
     
     func disconnect() {
+        stopHealthCheck() // ✅ Stop health monitoring
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         webSocketTask = nil
         isConnected = false
@@ -112,6 +119,34 @@ class WebSocketService: ObservableObject {
         stopCatchUpMonitoring()
         
         print("🔌 WebSocket disconnected")
+    }
+    
+    // MARK: - Health Check
+    private func startHealthCheck() {
+        stopHealthCheck()
+        
+        DispatchQueue.main.async { [weak self] in
+            self?.healthCheckTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+                self?.checkConnectionHealth()
+            }
+        }
+    }
+    
+    private func stopHealthCheck() {
+        healthCheckTimer?.invalidate()
+        healthCheckTimer = nil
+    }
+    
+    private func checkConnectionHealth() {
+        let timeSinceLastMessage = Date().timeIntervalSince(lastMessageTime)
+        
+        // If no messages for 60 seconds and we expect messages, reconnect
+        if timeSinceLastMessage > 60 && !SubscriptionManager.shared.subscribedChannels.isEmpty {
+            print("⚠️ No messages received for \(Int(timeSinceLastMessage))s, reconnecting...")
+            DispatchQueue.main.async {
+                self.reconnect()
+            }
+        }
     }
     
     // MARK: - Message Receiving
@@ -125,6 +160,8 @@ class WebSocketService: ObservableObject {
             
             switch result {
             case .success(let message):
+                self.lastMessageTime = Date() // ✅ Update last message time
+                self.missedPongs = 0 // ✅ Reset missed pong counter
                 self.handleMessage(message)
                 self.receiveMessage() // Continue receiving
                 
@@ -147,7 +184,6 @@ class WebSocketService: ObservableObject {
             eventBuffer.append(text)
             bufferLock.unlock()
             
-            // Process event asynchronously
             processingQueue.async { [weak self] in
                 self?.processEvent(text)
             }
@@ -173,6 +209,7 @@ class WebSocketService: ObservableObject {
     private func processEvent(_ text: String) {
         // Skip subscription confirmations
         if text.contains("\"status\":\"subscribed\"") {
+            print("✅ Subscription confirmed")
             return
         }
         
@@ -261,6 +298,7 @@ class WebSocketService: ObservableObject {
         if added {
             DispatchQueue.main.async {
                 self.processedCount += 1
+                print("✅ Event processed: \(event.typeDisplay) at \(event.location)")
             }
             
             // Post notification for UI update
@@ -356,13 +394,11 @@ class WebSocketService: ObservableObject {
     private func stopAckFlusher() {
         ackTimer?.invalidate()
         ackTimer = nil
-        
-        // Flush remaining ACKs
         flushAcks()
     }
     
     // MARK: - Subscription Management
-    func sendSubscriptionV2() {
+    func sendSubscriptionV2(reset: Bool = false) {
         guard isConnected else { return }
         
         let subscriptions = SubscriptionManager.shared.getSubscriptions()
@@ -382,63 +418,36 @@ class WebSocketService: ObservableObject {
             catchUpChannels.insert(channelId)
         }
         
-        // Check if we have sync state
-        var hasSyncState = false
-        var syncState: [String: [String: Any]] = [:]
-        
-        for sub in subscriptions {
-            let channelId = "\(sub.area)_\(sub.eventType)"
-            if let info = ChannelSyncState.shared.getSyncInfo(channelId: channelId) {
-                hasSyncState = true
-                syncState[channelId] = [
-                    "lastEventId": info.lastEventId as Any,
-                    "lastTimestamp": info.lastEventTimestamp,
-                    "lastSeq": info.highestSeq
-                ]
-            }
-        }
-        
-        let resetConsumers = !hasSyncState
-        
+        // ✅ CRITICAL: Always use resetConsumers=true for first connection
         var request: [String: Any] = [
             "clientId": clientId,
             "filters": filters,
-            "resetConsumers": resetConsumers
+            "resetConsumers": reset // ✅ NEW: Send reset flag
         ]
-        
-        if !syncState.isEmpty {
-            request["syncState"] = syncState
-        }
         
         if let jsonData = try? JSONSerialization.data(withJSONObject: request),
            let jsonString = String(data: jsonData, encoding: .utf8) {
             
-            if resetConsumers {
-                print("""
-                ⚠️ RESET MODE ACTIVE:
-                - No sync state found (fresh start)
-                - Server will DELETE old consumers
-                - Server will CREATE NEW consumers
-                """)
-            } else {
-                print("""
-                ✅ RESUME MODE:
-                - Sync state exists (\(syncState.count) channels)
-                - Server will RESUME existing consumers
-                """)
-            }
+            print("""
+            ✅ Sending subscription:
+            - Filters: \(filters.count)
+            - Reset: \(reset)
+            - Client ID: \(clientId)
+            """)
             
             send(message: jsonString) { [weak self] success in
                 if success {
-                    print("✅ Subscription sent (reset=\(resetConsumers))")
+                    print("✅ Subscription sent successfully")
                     self?.startCatchUpMonitoring()
+                } else {
+                    print("❌ Failed to send subscription")
                 }
             }
         }
     }
     
     func updateSubscriptions() {
-        sendSubscriptionV2()
+        sendSubscriptionV2(reset: false)
     }
     
     // MARK: - Catch-up Monitoring
@@ -501,17 +510,34 @@ class WebSocketService: ObservableObject {
     private func stopPingPong() {
         pingTimer?.invalidate()
         pingTimer = nil
+        missedPongs = 0
     }
     
     private func sendPing() {
-        webSocketTask?.sendPing { error in
+        webSocketTask?.sendPing { [weak self] error in
             if let error = error {
                 print("❌ Ping failed: \(error.localizedDescription)")
+                self?.missedPongs += 1
+                
+                if let missedPongs = self?.missedPongs, missedPongs >= self?.maxMissedPongs ?? 3 {
+                    print("⚠️ Too many missed pongs, reconnecting...")
+                    DispatchQueue.main.async {
+                        self?.reconnect()
+                    }
+                }
+            } else {
+                self?.missedPongs = 0
             }
         }
     }
     
     // MARK: - Reconnection
+    private func reconnect() {
+        print("🔄 Reconnecting...")
+        disconnect()
+        connect()
+    }
+    
     private func scheduleReconnect() {
         guard reconnectAttempts < maxReconnectAttempts else {
             connectionStatus = "Connection failed - Tap to retry"
