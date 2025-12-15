@@ -90,31 +90,40 @@ class AuthManager: ObservableObject {
         URLSession.shared.dataTask(with: request) { data, response, error in
             DispatchQueue.main.async {
                 if let error = error {
+                    print("❌ OTP Verification Network Error: \(error.localizedDescription)")
                     completion(false, error.localizedDescription)
                     return
                 }
                 
                 guard let data = data else {
+                    print("❌ No response data from OTP verification")
                     completion(false, "No response from server")
                     return
                 }
                 
                 guard let httpResponse = response as? HTTPURLResponse else {
+                    print("❌ Invalid HTTP response")
                     completion(false, "Invalid response")
                     return
                 }
                 
                 // DEBUG: Print raw response
                 if let jsonString = String(data: data, encoding: .utf8) {
-                    print("🔍 RAW RESPONSE: \(jsonString)")
+                    print("🔍 RAW RESPONSE from server: \(jsonString)")
                 }
+                
+                print("📊 HTTP Status Code: \(httpResponse.statusCode)")
                 
                 if httpResponse.statusCode == 200 {
                     // Parse response directly (no "data" wrapper)
                     do {
+                        print("🔄 Attempting to decode AuthResponse...")
                         let authResponse = try JSONDecoder().decode(AuthResponse.self, from: data)
                         print("✅ Successfully decoded AuthResponse")
+                        print("🔐 Token received: \(authResponse.token.prefix(20))...")
+                        print("👤 User: \(authResponse.user.username)")
                         self.saveAuthData(authResponse)
+                        print("💾 Auth data saved successfully")
                         completion(true, "Login successful")
                     } catch {
                         print("❌ Decoding error: \(error)")
@@ -138,8 +147,10 @@ class AuthManager: ObservableObject {
                     // Parse error message
                     if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                        let errorMsg = json["error"] as? String {
+                        print("❌ Server error: \(errorMsg)")
                         completion(false, errorMsg)
                     } else {
+                        print("❌ Invalid credentials or server error")
                         completion(false, "Invalid credentials")
                     }
                 }
@@ -253,12 +264,18 @@ class AuthManager: ObservableObject {
     
     private func saveAuthData(_ response: AuthResponse) {
         UserDefaults.standard.set(response.token, forKey: "auth_token")
-        UserDefaults.standard.set(response.expiresAt, forKey: "token_expiry")
+        
+        // If expiresAt is provided, use it; otherwise set to 24 hours from now
+        let expiresAt = response.expiresAt ?? Int64(Date().addingTimeInterval(24 * 60 * 60).timeIntervalSince1970)
+        UserDefaults.standard.set(expiresAt, forKey: "token_expiry")
+        
         if let userData = try? JSONEncoder().encode(response.user) {
             UserDefaults.standard.set(userData, forKey: "user_data")
         }
         currentUser = response.user
         isAuthenticated = true
+        
+        print("✅ Auth data saved successfully. Token expires at: \(Date(timeIntervalSince1970: TimeInterval(expiresAt)))")
     }
     
     private func loadUserData() {

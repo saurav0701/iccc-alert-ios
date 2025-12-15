@@ -189,11 +189,24 @@ struct User: Codable {
 // MARK: - Auth Response
 struct AuthResponse: Codable {
     let token: String
-    let expiresAt: Int64
     let user: User
+    let expiresAt: Int64?
     
     enum CodingKeys: String, CodingKey {
         case token, expiresAt, user
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        token = try container.decode(String.self, forKey: .token)
+        user = try container.decode(User.self, forKey: .user)
+        expiresAt = try container.decodeIfPresent(Int64.self, forKey: .expiresAt)
+        
+        // If expiresAt is not provided, set it to 24 hours from now
+        if expiresAt == nil {
+            let futureDate = Date().addingTimeInterval(24 * 60 * 60) // 24 hours
+            // Note: This value won't be used since expiresAt is optional
+        }
     }
 }
 
