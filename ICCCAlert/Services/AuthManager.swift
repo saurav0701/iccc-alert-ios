@@ -18,7 +18,7 @@ class AuthManager: ObservableObject {
     }
     
     func checkAuthStatus() {
-        if let token = UserDefaults.standard.string(forKey: "auth_token"),
+        if let _ = UserDefaults.standard.string(forKey: "auth_token"),
            let expiry = UserDefaults.standard.object(forKey: "token_expiry") as? Int64 {
             let now = Int64(Date().timeIntervalSince1970)
             isAuthenticated = expiry > now
@@ -104,57 +104,35 @@ class AuthManager: ObservableObject {
                     return
                 }
                 
-                // 🔍 DEBUG: Print the raw response
+                // DEBUG: Print raw response
                 if let jsonString = String(data: data, encoding: .utf8) {
                     print("🔍 RAW RESPONSE: \(jsonString)")
                 }
                 
                 if httpResponse.statusCode == 200 {
-                    // Parse the nested response structure
-                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                        print("🔍 JSON KEYS: \(json.keys)")
-                        
-                        if let dataDict = json["data"] as? [String: Any] {
-                            print("🔍 DATA DICT KEYS: \(dataDict.keys)")
-                            print("🔍 DATA DICT: \(dataDict)")
-                            
-                            // Try to decode with detailed error
-                            if let responseData = try? JSONSerialization.data(withJSONObject: dataDict) {
-                                do {
-                                    let authResponse = try JSONDecoder().decode(AuthResponse.self, from: responseData)
-                                    print("✅ Successfully decoded AuthResponse")
-                                    self.saveAuthData(authResponse)
-                                    completion(true, "Login successful")
-                                } catch {
-                                    print("❌ Decoding error: \(error)")
-                                    if let decodingError = error as? DecodingError {
-                                        switch decodingError {
-                                        case .keyNotFound(let key, let context):
-                                            print("❌ Key '\(key.stringValue)' not found: \(context.debugDescription)")
-                                        case .typeMismatch(let type, let context):
-                                            print("❌ Type mismatch for type \(type): \(context.debugDescription)")
-                                        case .valueNotFound(let type, let context):
-                                            print("❌ Value not found for type \(type): \(context.debugDescription)")
-                                        case .dataCorrupted(let context):
-                                            print("❌ Data corrupted: \(context.debugDescription)")
-                                        @unknown default:
-                                            print("❌ Unknown decoding error")
-                                        }
-                                    }
-                                    completion(false, "Invalid response format: \(error.localizedDescription)")
-                                }
-                            } else {
-                                print("❌ Failed to convert dataDict to Data")
-                                completion(false, "Invalid response format")
+                    // Parse response directly (no "data" wrapper)
+                    do {
+                        let authResponse = try JSONDecoder().decode(AuthResponse.self, from: data)
+                        print("✅ Successfully decoded AuthResponse")
+                        self.saveAuthData(authResponse)
+                        completion(true, "Login successful")
+                    } catch {
+                        print("❌ Decoding error: \(error)")
+                        if let decodingError = error as? DecodingError {
+                            switch decodingError {
+                            case .keyNotFound(let key, let context):
+                                print("❌ Key '\(key.stringValue)' not found: \(context.debugDescription)")
+                            case .typeMismatch(let type, let context):
+                                print("❌ Type mismatch for type \(type): \(context.debugDescription)")
+                            case .valueNotFound(let type, let context):
+                                print("❌ Value not found for type \(type): \(context.debugDescription)")
+                            case .dataCorrupted(let context):
+                                print("❌ Data corrupted: \(context.debugDescription)")
+                            @unknown default:
+                                print("❌ Unknown decoding error")
                             }
-                        } else {
-                            print("❌ 'data' key not found or not a dictionary")
-                            print("❌ Available keys: \(json.keys)")
-                            completion(false, "Invalid response format")
                         }
-                    } else {
-                        print("❌ Failed to parse JSON")
-                        completion(false, "Invalid response format")
+                        completion(false, "Invalid response format: \(error.localizedDescription)")
                     }
                 } else {
                     // Parse error message
@@ -250,14 +228,13 @@ class AuthManager: ObservableObject {
                 }
                 
                 if httpResponse.statusCode == 200 {
-                    // Parse nested response
-                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                       let dataDict = json["data"] as? [String: Any],
-                       let responseData = try? JSONSerialization.data(withJSONObject: dataDict),
-                       let authResponse = try? JSONDecoder().decode(AuthResponse.self, from: responseData) {
+                    // Parse response directly (no wrapper)
+                    do {
+                        let authResponse = try JSONDecoder().decode(AuthResponse.self, from: data)
                         self.saveAuthData(authResponse)
                         completion(true, "Registration completed successfully")
-                    } else {
+                    } catch {
+                        print("❌ Registration verification decode error: \(error)")
                         completion(false, "Invalid response format")
                     }
                 } else {
@@ -276,6 +253,7 @@ class AuthManager: ObservableObject {
     
     private func saveAuthData(_ response: AuthResponse) {
         UserDefaults.standard.set(response.token, forKey: "auth_token")
+        UserDefaults.standard.set(response.expiresAt, forKey: "token_expiry")
         if let userData = try? JSONEncoder().encode(response.user) {
             UserDefaults.standard.set(userData, forKey: "user_data")
         }

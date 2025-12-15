@@ -171,21 +171,18 @@ struct Channel: Identifiable, Codable, Equatable {
 
 // MARK: - User Model
 struct User: Codable {
-    let id: String
-    let username: String
-    let phone: String?
+    let id: Int
+    let name: String
+    let phone: String
     let area: String?
     let designation: String?
     let organisation: String?
-    let role: String?
+    let isActive: Bool?
     let createdAt: String?
-    
-    var name: String {
-        username
-    }
+    let updatedAt: String?
     
     enum CodingKeys: String, CodingKey {
-        case id, username, phone, area, designation, organisation, role, createdAt
+        case id, name, phone, area, designation, organisation, isActive, createdAt, updatedAt
     }
 }
 
@@ -194,6 +191,10 @@ struct AuthResponse: Codable {
     let token: String
     let expiresAt: Int64
     let user: User
+    
+    enum CodingKeys: String, CodingKey {
+        case token, expiresAt, user
+    }
 }
 
 // MARK: - Login Request
