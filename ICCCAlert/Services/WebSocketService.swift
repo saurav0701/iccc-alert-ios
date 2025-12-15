@@ -49,6 +49,10 @@ class WebSocketService: ObservableObject {
     private var catchUpChannels: Set<String> = []
     private var catchUpTimer: Timer?
     
+    // ✅ NEW: Add debouncing for subscription updates
+    private var subscriptionUpdateTimer: Timer?
+    private let subscriptionUpdateDebounceDelay: TimeInterval = 0.5
+    
     // Cancellables
     private var cancellables = Set<AnyCancellable>()
     
@@ -447,7 +451,14 @@ class WebSocketService: ObservableObject {
     }
     
     func updateSubscriptions() {
-        sendSubscriptionV2(reset: false)
+        // ✅ NEW: Debounce rapid subscription updates
+        subscriptionUpdateTimer?.invalidate()
+        
+        DispatchQueue.main.async { [weak self] in
+            self?.subscriptionUpdateTimer = Timer.scheduledTimer(withTimeInterval: self?.subscriptionUpdateDebounceDelay ?? 0.5, repeats: false) { [weak self] _ in
+                self?.sendSubscriptionV2(reset: false)
+            }
+        }
     }
     
     // MARK: - Catch-up Monitoring

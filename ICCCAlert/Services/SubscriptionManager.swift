@@ -22,6 +22,11 @@ class SubscriptionManager: ObservableObject {
     private var saveTimer: Timer?
     private let saveDelay: TimeInterval = 0.5
     
+    // ✅ NEW: Add debouncing for subscription updates
+    private var subscriptionUpdateTimer: Timer?
+    private let subscriptionDebounceDelay: TimeInterval = 0.3
+    private var pendingSubscriptionUpdate = false
+    
     // MARK: - Initialization
     private init() {
         loadSubscriptions()
@@ -39,17 +44,37 @@ class SubscriptionManager: ObservableObject {
         var updatedChannel = channel
         updatedChannel.isSubscribed = true
         
-        if !subscribedChannels.contains(where: { $0.id == channel.id }) {
-            subscribedChannels.append(updatedChannel)
-            saveSubscriptions()
-            
-            // Notify WebSocket to update subscriptions
-            DispatchQueue.main.async {
+        // Check if already subscribed
+        if subscribedChannels.contains(where: { $0.id == channel.id }) {
+            print("⚠️ Already subscribed to \(channel.id), skipping duplicate subscription")
+            return
+        }
+        
+        subscribedChannels.append(updatedChannel)
+        saveSubscriptions()
+        
+        print("✅ Subscribed to \(channel.id)")
+        
+        // ✅ NEW: Use debounced subscription update to prevent rapid re-subscription
+        debouncedSubscriptionUpdate()
+    }
+    
+    // ✅ NEW: Debounced subscription update
+    private func debouncedSubscriptionUpdate() {
+        pendingSubscriptionUpdate = true
+        
+        // Cancel existing timer
+        subscriptionUpdateTimer?.invalidate()
+        
+        // Schedule new update with delay
+        DispatchQueue.main.async { [weak self] in
+            self?.subscriptionUpdateTimer = Timer.scheduledTimer(withTimeInterval: self?.subscriptionDebounceDelay ?? 0.3, repeats: false) { [weak self] _ in
+                guard self?.pendingSubscriptionUpdate == true else { return }
+                self?.pendingSubscriptionUpdate = false
+                
                 WebSocketService.shared.updateSubscriptions()
                 NotificationCenter.default.post(name: .subscriptionsUpdated, object: nil)
             }
-            
-            print("✅ Subscribed to \(channel.id)")
         }
     }
     
@@ -78,13 +103,10 @@ class SubscriptionManager: ObservableObject {
         saveSubscriptions()
         scheduleSave()
         
-        // Notify WebSocket
-        DispatchQueue.main.async {
-            WebSocketService.shared.updateSubscriptions()
-            NotificationCenter.default.post(name: .subscriptionsUpdated, object: nil)
-        }
-        
         print("✅ Unsubscribed from \(channelId)")
+        
+        // ✅ NEW: Use debounced subscription update
+        debouncedSubscriptionUpdate()
     }
     
     func isSubscribed(channelId: String) -> Bool {
@@ -156,6 +178,12 @@ class SubscriptionManager: ObservableObject {
         scheduleSave()
         
         print("✅ Added event \(eventId) to \(channelId)")
+        
+        // ✅ CRITICAL: Trigger @Published update on main thread
+        DispatchQueue.main.async {
+            self.objectWillChange.send()
+        }
+        
         return true
     }
     
