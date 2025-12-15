@@ -16,7 +16,7 @@ class WebSocketService: ObservableObject {
     // MARK: - Private Properties
     private var webSocketTask: URLSessionWebSocketTask?
     private var session: URLSession?
-    private let wsURL = "ws://192.168.29.69:19999/ws"
+    private let wsURL = "ws://192.168.29.70:19999/ws"
     
     private var clientId: String = ""
     private var reconnectAttempts = 0
