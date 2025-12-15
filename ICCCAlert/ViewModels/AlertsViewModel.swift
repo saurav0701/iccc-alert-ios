@@ -7,7 +7,7 @@ class AlertsViewModel: ObservableObject {
     @Published var error: String?
     
     private let authManager: AuthManager
-    private let baseURL = "http://192.168.29.70:19998"
+    private let baseURL = "https://iccc-backend.onrender.com"
     private var cancellables = Set<AnyCancellable>()
     
     init(authManager: AuthManager) {
@@ -51,9 +51,7 @@ class AlertsViewModel: ObservableObject {
     func markAsRead(_ alert: Event) {
         guard let token = authManager.token else { return }
         
-        // FIX: Handle optional id properly
-        guard let alertId = alert.id,
-              let url = URL(string: "\(baseURL)/api/events/\(alertId)/read") else {
+        guard let url = URL(string: "\(baseURL)/api/events/\(alert.id)/read") else {
             return
         }
         
@@ -64,8 +62,8 @@ class AlertsViewModel: ObservableObject {
         URLSession.shared.dataTask(with: request) { [weak self] _, _, _ in
             DispatchQueue.main.async {
                 if let index = self?.alerts.firstIndex(where: { $0.id == alert.id }) {
-                    // FIX: Change to let
-                    let updatedAlert = alert
+                    var updatedAlert = alert
+                    // Note: You'll need to add isRead property to Event model
                     self?.alerts[index] = updatedAlert
                 }
             }

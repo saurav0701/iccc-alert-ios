@@ -97,16 +97,6 @@ struct SettingsView: View {
                     }
                 }
                 
-                // Debug Section
-                Section(header: Text("Debug")) {
-                    NavigationLink(destination: DebugLogsView()) {
-                        HStack {
-                            Image(systemName: "bug")
-                            Text("View Debug Logs")
-                        }
-                    }
-                }
-                
                 // Account Section
                 Section {
                     Button(action: {

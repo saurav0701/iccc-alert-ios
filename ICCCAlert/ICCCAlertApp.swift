@@ -2,7 +2,7 @@ import SwiftUI
 
 @main
 struct ICCCAlertApp: App {
-    @ObservedObject var authManager = AuthManager.shared
+    @StateObject private var authManager = AuthManager.shared
     @StateObject private var webSocketService = WebSocketService.shared
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     
@@ -10,8 +10,6 @@ struct ICCCAlertApp: App {
     
     init() {
         setupAppearance()
-        print("🚀 ICCCAlertApp initialized")
-        print("🔐 isAuthenticated: \(authManager.isAuthenticated)")
     }
     
     var body: some Scene {

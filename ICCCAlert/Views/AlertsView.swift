@@ -5,52 +5,46 @@ struct AlertsView: View {
     @StateObject private var webSocketService = WebSocketService.shared
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @State private var selectedFilter: AlertFilter = .all
-    @State private var refreshTrigger = false
     
     init(authManager: AuthManager) {
         _viewModel = StateObject(wrappedValue: AlertsViewModel(authManager: authManager))
     }
     
     var filteredAlerts: [Event] {
+        // Get all events from subscribed channels
         var allEvents: [Event] = []
-        
         for channel in subscriptionManager.subscribedChannels {
             let events = subscriptionManager.getEvents(channelId: channel.id)
             allEvents.append(contentsOf: events)
         }
         
+        // Sort by timestamp (newest first)
         allEvents.sort { $0.timestamp > $1.timestamp }
         
+        // Apply filter
         switch selectedFilter {
         case .all:
             return allEvents
         case .unread:
-            return allEvents.filter { event in
-                guard let channelName = event.channelName else { return false }
-                return subscriptionManager.getUnreadCount(channelId: channelName) > 0
-            }
+            return allEvents.filter { !$0.isRead }
         case .important:
             return allEvents.filter { $0.priority == "high" }
-        }
-    }
-    
-    var unreadCount: Int {
-        subscriptionManager.subscribedChannels.reduce(0) { total, channel in
-            total + subscriptionManager.getUnreadCount(channelId: channel.id)
         }
     }
     
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
+                // Filter Picker
                 Picker("Filter", selection: $selectedFilter) {
-                    Text("All (\(filteredAlerts.count))").tag(AlertFilter.all)
-                    Text("Unread (\(unreadCount))").tag(AlertFilter.unread)
+                    Text("All").tag(AlertFilter.all)
+                    Text("Unread").tag(AlertFilter.unread)
                     Text("Important").tag(AlertFilter.important)
                 }
                 .pickerStyle(SegmentedPickerStyle())
                 .padding()
                 
+                // Connection Status
                 if !webSocketService.isConnected {
                     HStack {
                         Image(systemName: "wifi.slash")
@@ -82,6 +76,7 @@ struct AlertsView: View {
                     .background(Color.green.opacity(0.1))
                 }
                 
+                // Alerts List
                 if filteredAlerts.isEmpty {
                     VStack(spacing: 16) {
                         Image(systemName: "bell.slash")
@@ -105,7 +100,6 @@ struct AlertsView: View {
                             }
                         }
                     }
-                    .id(refreshTrigger)
                 }
             }
             .navigationTitle("Alerts")
@@ -117,32 +111,28 @@ struct AlertsView: View {
                         Text("Mark All Read")
                             .font(.subheadline)
                     }
-                    .disabled(unreadCount == 0)
+                    .disabled(filteredAlerts.filter { !$0.isRead }.isEmpty)
                 }
             }
         }
         .onAppear {
+            // Connect WebSocket if not connected
             if !webSocketService.isConnected {
                 webSocketService.connect()
             }
         }
-        // FIX: Use refreshTrigger instead of objectWillChange
-        .onReceive(NotificationCenter.default.publisher(for: .newEventReceived)) { _ in
-            refreshTrigger.toggle()
-        }
     }
     
     private func markAsRead(_ alert: Event) {
-        guard let channelName = alert.channelName else { return }
-        subscriptionManager.markAsRead(channelId: channelName)
-        refreshTrigger.toggle()
+        // Mark event as read in subscription manager
+        guard let channelId = alert.channelName else { return }
+        subscriptionManager.markAsRead(channelId: channelId)
     }
     
     private func markAllAsRead() {
         for channel in subscriptionManager.subscribedChannels {
             subscriptionManager.markAsRead(channelId: channel.id)
         }
-        refreshTrigger.toggle()
     }
 }
 
@@ -156,14 +146,10 @@ struct AlertRowView: View {
     let alert: Event
     let onTap: () -> Void
     
-    private var isUnread: Bool {
-        guard let channelName = alert.channelName else { return false }
-        return SubscriptionManager.shared.getUnreadCount(channelId: channelName) > 0
-    }
-    
     var body: some View {
         Button(action: onTap) {
             HStack(alignment: .top, spacing: 12) {
+                // Priority Indicator
                 Circle()
                     .fill(priorityColor)
                     .frame(width: 12, height: 12)
@@ -175,7 +161,7 @@ struct AlertRowView: View {
                             .font(.headline)
                             .foregroundColor(.primary)
                         Spacer()
-                        if isUnread {
+                        if !alert.isRead {
                             Circle()
                                 .fill(Color.blue)
                                 .frame(width: 8, height: 8)
@@ -188,15 +174,13 @@ struct AlertRowView: View {
                         .lineLimit(2)
                     
                     HStack {
-                        if let channelName = alert.channelName {
-                            Text(channelName.replacingOccurrences(of: "_", with: " ").capitalized)
-                                .font(.caption)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(Color.blue.opacity(0.1))
-                                .foregroundColor(.blue)
-                                .cornerRadius(4)
-                        }
+                        Text(alert.channelName ?? "General")
+                            .font(.caption)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.blue.opacity(0.1))
+                            .foregroundColor(.blue)
+                            .cornerRadius(4)
                         
                         Spacer()
                         
