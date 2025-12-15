@@ -18,7 +18,7 @@ struct SettingsView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(user.name)
                                     .font(.headline)
-                                Text(user.phone)
+                                Text(user.phone ?? "No phone number")
                                     .font(.subheadline)
                                     .foregroundColor(.secondary)
                             }
