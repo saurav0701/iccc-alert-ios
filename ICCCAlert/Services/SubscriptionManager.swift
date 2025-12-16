@@ -1,3 +1,5 @@
+// MARK: - SubscriptionManager.swift - Complete Fixed Version
+
 import Foundation
 import Combine
 
@@ -115,6 +117,20 @@ class SubscriptionManager: ObservableObject {
         
         subscribedChannels.append(updatedChannel)
         saveSubscriptions()
+        
+        // ✅ CRITICAL: Initialize sync state for new channel immediately
+        let channelId = channel.id
+        if ChannelSyncState.shared.getSyncInfo(channelId: channelId) == nil {
+            // Create initial sync state to prevent RESET mode
+            _ = ChannelSyncState.shared.recordEventReceived(
+                channelId: channelId,
+                eventId: "init",
+                timestamp: Int64(Date().timeIntervalSince1970),
+                seq: 0
+            )
+            print("🆕 Initialized sync state for new channel: \(channelId)")
+        }
+        
         lock.unlock()
         
         print("✅ Subscribed to \(channel.id)")

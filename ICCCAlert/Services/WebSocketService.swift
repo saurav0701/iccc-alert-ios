@@ -429,30 +429,39 @@ class WebSocketService: ObservableObject {
             SubscriptionFilter(area: sub.area, eventType: sub.eventType)
         }
         
-        // Enable catch-up mode
+        // Enable catch-up mode for NEW channels only
         subscriptions.forEach { sub in
             let channelId = "\(sub.area)_\(sub.eventType)"
             ChannelSyncState.shared.enableCatchUpMode(channelId: channelId)
             catchUpChannels.insert(channelId)
         }
         
-        // Build sync state
-        var hasSyncState = false
+        // ✅ CRITICAL FIX: Build sync state for ALL channels, even new ones
         var syncState: [String: SyncStateInfo] = [:]
         
         for sub in subscriptions {
             let channelId = "\(sub.area)_\(sub.eventType)"
             if let info = ChannelSyncState.shared.getSyncInfo(channelId: channelId) {
-                hasSyncState = true
+                // Existing channel with state
                 syncState[channelId] = SyncStateInfo(
                     lastEventId: info.lastEventId,
                     lastTimestamp: info.lastEventTimestamp,
                     lastSeq: info.highestSeq
                 )
+            } else {
+                // ✅ NEW channel - send empty state (not nil)
+                syncState[channelId] = SyncStateInfo(
+                    lastEventId: nil,
+                    lastTimestamp: 0,
+                    lastSeq: 0
+                )
             }
         }
         
-        let resetConsumers = !hasSyncState
+        // ✅ CRITICAL: Only reset if we have NO sync state at all (first time ever)
+        // If we have even one channel with state, use RESUME mode
+        let hasAnySyncState = ChannelSyncState.shared.getAllSyncStates().count > 0
+        let resetConsumers = !hasAnySyncState
         
         let request = SubscriptionRequest(
             clientId: clientId,
