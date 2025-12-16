@@ -22,13 +22,84 @@ class SubscriptionManager: ObservableObject {
     private var saveTimer: Timer?
     private let saveDelay: TimeInterval = 0.5
     
+    // ✅ NEW: App kill detection
+    private let lastRuntimeCheckKey = "last_runtime_check"
+    private let serviceStartedAtKey = "service_started_at"
+    private var runtimeCheckTimer: Timer?
+    
     // MARK: - Initialization
     private init() {
+        // ✅ FIXED: Detect app kill before loading
+        let wasAppKilled = detectAppKillOrBackgroundClear()
+        
         loadSubscriptions()
         loadEvents()
         loadUnreadCounts()
-        buildRecentEventIds()
+        
+        if wasAppKilled {
+            print("""
+            ⚠️ APP WAS KILLED OR CLEARED FROM BACKGROUND:
+            - Clearing recent event IDs for catch-up
+            - Sync will resume from last known sequences
+            - Server will re-deliver missed events
+            """)
+            
+            recentEventIds.removeAll()
+            eventTimestamps.removeAll()
+        } else {
+            buildRecentEventIds()
+        }
+        
+        // ✅ Mark that we're now running
+        markServiceRunning()
+        
         startRecentEventCleanup()
+        startRuntimeChecker()
+        
+        print("SubscriptionManager initialized (wasKilled=\(wasAppKilled), recentIds=\(recentEventIds.count))")
+    }
+    
+    // ✅ NEW: Detect app kills and background clears
+    private func detectAppKillOrBackgroundClear() -> Bool {
+        let lastRuntimeCheck = defaults.double(forKey: lastRuntimeCheckKey)
+        let serviceStartedAt = defaults.double(forKey: serviceStartedAtKey)
+        let now = Date().timeIntervalSince1970
+        
+        // If service was marked as started but it's been >2 minutes since last runtime check
+        if serviceStartedAt > 0 && lastRuntimeCheck > 0 {
+            let timeSinceLastCheck = now - lastRuntimeCheck
+            
+            if timeSinceLastCheck > 2 * 60 {  // 2 minutes
+                print("""
+                🔴 DETECTED: App was killed or cleared from background
+                - Service started at: \(serviceStartedAt)
+                - Last runtime check: \(lastRuntimeCheck)
+                - Gap: \(timeSinceLastCheck)s
+                """)
+                
+                // Clear the service started flag since we're restarting
+                defaults.removeObject(forKey: serviceStartedAtKey)
+                return true
+            }
+        }
+        
+        return false
+    }
+    
+    // ✅ NEW: Mark that service is actively running
+    private func markServiceRunning() {
+        let now = Date().timeIntervalSince1970
+        defaults.set(now, forKey: serviceStartedAtKey)
+        defaults.set(now, forKey: lastRuntimeCheckKey)
+    }
+    
+    // ✅ NEW: Periodically update runtime check
+    private func startRuntimeChecker() {
+        DispatchQueue.main.async { [weak self] in
+            self?.runtimeCheckTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
+                self?.defaults.set(Date().timeIntervalSince1970, forKey: self?.lastRuntimeCheckKey ?? "")
+            }
+        }
     }
     
     // MARK: - Channel Subscription
@@ -296,6 +367,9 @@ class SubscriptionManager: ObservableObject {
         if let data = try? JSONEncoder().encode(unreadSnapshot) {
             defaults.set(data, forKey: unreadKey)
         }
+        
+        // ✅ Update runtime check on save
+        defaults.set(Date().timeIntervalSince1970, forKey: lastRuntimeCheckKey)
         
         let totalEvents = eventsSnapshot.values.reduce(0) { $0 + $1.count }
         print("💾 Saved \(totalEvents) events across \(eventsSnapshot.count) channels")

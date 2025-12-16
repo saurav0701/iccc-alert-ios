@@ -29,8 +29,6 @@ class AuthManager: ObservableObject {
         }
     }
     
-    // MARK: - Login Flow
-    
     func requestOTP(phone: String, completion: @escaping (Bool, String) -> Void) {
         guard let url = URL(string: "\(baseURL)/auth/login/request") else {
             completion(false, "Invalid URL")
@@ -55,8 +53,7 @@ class AuthManager: ObservableObject {
                     completion(false, "Invalid response")
                     return
                 }
-                
-                // Parse response for better error messages
+
                 if let data = data,
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let message = json["message"] as? String {
@@ -103,14 +100,13 @@ class AuthManager: ObservableObject {
                     completion(false, "Invalid response")
                     return
                 }
-                
-                // 🔍 DEBUG: Print the raw response
+                //raw response for debugging
+
                 if let jsonString = String(data: data, encoding: .utf8) {
                     print("🔍 RAW RESPONSE: \(jsonString)")
                 }
                 
                 if httpResponse.statusCode == 200 {
-                    // Parse the nested response structure
                     if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                         print("🔍 JSON KEYS: \(json.keys)")
                         
@@ -118,7 +114,6 @@ class AuthManager: ObservableObject {
                             print("🔍 DATA DICT KEYS: \(dataDict.keys)")
                             print("🔍 DATA DICT: \(dataDict)")
                             
-                            // Try to decode with detailed error
                             if let responseData = try? JSONSerialization.data(withJSONObject: dataDict) {
                                 do {
                                     let authResponse = try JSONDecoder().decode(AuthResponse.self, from: responseData)
@@ -168,8 +163,7 @@ class AuthManager: ObservableObject {
             }
         }.resume()
     }
-    
-    // MARK: - Registration Flow
+
     
     func registerUser(name: String, phone: String, area: String, designation: String, organisation: String, completion: @escaping (Bool, String) -> Void) {
         guard let url = URL(string: "\(baseURL)/auth/register/request") else {
@@ -290,8 +284,6 @@ class AuthManager: ObservableObject {
             currentUser = user
         }
     }
-    
-    // MARK: - Logout
     
     func logout(completion: ((Bool) -> Void)? = nil) {
         guard let token = token else {

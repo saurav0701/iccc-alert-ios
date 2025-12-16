@@ -149,23 +149,25 @@ struct SubscriptionFilter: Codable {
     let eventType: String
 }
 
-struct SubscriptionRequest: Codable {
-    let clientId: String
-    let filters: [SubscriptionFilter]
-    let syncState: [String: SyncStateInfo]?
-    let resetConsumers: Bool
-}
-
+// ✅ FIXED: Added SyncStateInfo structure matching backend expectation
 struct SyncStateInfo: Codable {
     let lastEventId: String?
     let lastTimestamp: Int64
     let lastSeq: Int64
 }
 
+// ✅ FIXED: Updated SubscriptionRequest to match backend structure
+struct SubscriptionRequest: Codable {
+    let clientId: String
+    let filters: [SubscriptionFilter]
+    let syncState: [String: SyncStateInfo]?  // ✅ Changed from SyncState to syncState
+    let resetConsumers: Bool
+}
+
 // MARK: - Auth Models
 
 struct User: Codable {
-    let id: Int  // ✅ Changed from String to Int to match backend
+    let id: Int
     let name: String
     let phone: String
     let area: String?
@@ -186,7 +188,7 @@ struct LoginRequest: Codable {
 
 struct OTPVerificationRequest: Codable {
     let phone: String
-    let otp: String  // ✅ Kept as String
+    let otp: String
     let deviceId: String
 }
 
