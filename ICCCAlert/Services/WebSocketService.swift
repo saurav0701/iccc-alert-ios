@@ -24,14 +24,15 @@ class WebSocketService: ObservableObject {
     private let maxReconnectAttempts = Int.max
     private let reconnectDelay: TimeInterval = 5.0
     
-    // ✅ FIX 1: Single serial queue for ALL operations
-    private let processingQueue = DispatchQueue(label: "com.iccc.processing", qos: .userInitiated)
+    // ✅ FIX 1: Separate queues for different priorities (like Android)
+    private let eventQueue = DispatchQueue(label: "com.iccc.eventProcessing", qos: .userInitiated, attributes: .concurrent)
+    private let ackQueue = DispatchQueue(label: "com.iccc.ackProcessing", qos: .utility)
     
-    // ✅ FIX 2: Simple buffer without complex locking
-    private var eventBuffer: [String] = []
-    
-    // ✅ FIX 3: Processing state without deadlock risk
-    private var isProcessingEvents = false
+    // ✅ FIX 2: Concurrent processing (like Android's 4 processors)
+    private let processorCount = 4
+    private var processingJobs: [DispatchWorkItem] = []
+    private let messageQueue = DispatchQueue(label: "com.iccc.messages")
+    private var pendingMessages: [String] = []
     
     // ACK batching
     private var pendingAcks: [String] = []
@@ -42,12 +43,12 @@ class WebSocketService: ObservableObject {
     private var pingTimer: Timer?
     private let pingInterval: TimeInterval = 30.0
     
-    // ✅ FIX 4: Proper catch-up monitoring
+    // ✅ FIX 3: Proper catch-up monitoring (like Android)
     private var catchUpChannels: Set<String> = []
     private var catchUpTimer: Timer?
-    private let catchUpCheckInterval: TimeInterval = 3.0
+    private let catchUpCheckInterval: TimeInterval = 5.0  // Match Android
     private var consecutiveEmptyChecks: [String: Int] = [:]
-    private let stableEmptyThreshold = 2
+    private let stableEmptyThreshold = 3  // Match Android
     
     // Connection state tracking
     private var lastConnectionTime: Date?
@@ -56,9 +57,6 @@ class WebSocketService: ObservableObject {
     
     private var cancellables = Set<AnyCancellable>()
     private let logger = DebugLogger.shared
-    
-    // ✅ FIX 5: Separate live event queue for immediate processing
-    private var liveEventQueue: [String] = []
     
     // MARK: - Initialization
     private init() {
@@ -85,7 +83,7 @@ class WebSocketService: ObservableObject {
     
     // MARK: - Connection Management
     func connect() {
-        logger.log("CONNECT", "Connect called - isConnected=\(isConnected), hasTask=\(webSocketTask != nil)")
+        logger.log("CONNECT", "Connect called - isConnected=\(isConnected)")
         
         if isConnected && webSocketTask != nil {
             logger.logWebSocket("⚠️ Already connected, skipping connect")
@@ -121,11 +119,11 @@ class WebSocketService: ObservableObject {
         startReceiving()
         startPingPong()
         startAckFlusher()
-        startEventProcessor()
+        startEventProcessors()  // ✅ Start concurrent processors
         startStatsLogging()
         
-        // Send subscription immediately after connection
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+        // ✅ FIX 4: Send subscription immediately (like Android)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             self?.sendSubscriptionV2()
         }
     }
@@ -136,6 +134,10 @@ class WebSocketService: ObservableObject {
         webSocketTask = nil
         isConnected = false
         hasSubscribed = false
+        
+        // Stop processors
+        processingJobs.forEach { $0.cancel() }
+        processingJobs.removeAll()
         
         DispatchQueue.main.async { [weak self] in
             self?.connectionStatus = "Disconnected"
@@ -193,66 +195,46 @@ class WebSocketService: ObservableObject {
             self?.receivedCount += 1
         }
         
-        // ✅ FIX 6: Add to buffer on serial queue (no locks needed)
-        processingQueue.async { [weak self] in
-            guard let self = self else { return }
-            
-            // Check if any channel is in catch-up mode
-            let inCatchUpMode = SubscriptionManager.shared.subscribedChannels.contains { channel in
-                ChannelSyncState.shared.isInCatchUpMode(channelId: channel.id)
-            }
-            
-            if inCatchUpMode {
-                self.eventBuffer.append(messageText)
-            } else {
-                // Live mode - prioritize immediate processing
-                self.liveEventQueue.append(messageText)
-            }
+        // ✅ FIX 5: Queue message for concurrent processing (like Android)
+        messageQueue.async { [weak self] in
+            self?.pendingMessages.append(messageText)
         }
     }
     
-    // ✅ FIX 7: Single processor with priority handling
-    private func startEventProcessor() {
-        processingQueue.async { [weak self] in
-            self?.eventProcessorLoop()
+    // ✅ FIX 6: Concurrent event processors (like Android's 4 processors)
+    private func startEventProcessors() {
+        for i in 0..<processorCount {
+            let workItem = DispatchWorkItem { [weak self] in
+                self?.processEventsLoop(processorId: i)
+            }
+            processingJobs.append(workItem)
+            eventQueue.async(execute: workItem)
         }
+        logger.log("PROCESSORS", "✅ Started \(processorCount) concurrent processors")
     }
     
-    // ✅ FIX 8: Non-blocking processor with live event priority
-    private func eventProcessorLoop() {
+    private func processEventsLoop(processorId: Int) {
         while isConnected {
             autoreleasepool {
-                // Check if already processing
-                guard !isProcessingEvents else {
-                    Thread.sleep(forTimeInterval: 0.01)
-                    return
+                var message: String?
+                
+                messageQueue.sync {
+                    if !pendingMessages.isEmpty {
+                        message = pendingMessages.removeFirst()
+                    }
                 }
                 
-                isProcessingEvents = true
-                defer { isProcessingEvents = false }
-                
-                // ✅ PRIORITY 1: Process live events first
-                if !liveEventQueue.isEmpty {
-                    let messageText = liveEventQueue.removeFirst()
-                    processEvent(messageText, isLive: true)
-                    return
+                if let msg = message {
+                    processEvent(msg)
+                } else {
+                    Thread.sleep(forTimeInterval: 0.005) // 5ms (faster than Android's 10ms)
                 }
-                
-                // ✅ PRIORITY 2: Process catch-up events
-                if !eventBuffer.isEmpty {
-                    let messageText = eventBuffer.removeFirst()
-                    processEvent(messageText, isLive: false)
-                    return
-                }
-                
-                // No events, sleep briefly
-                Thread.sleep(forTimeInterval: 0.01)
             }
         }
     }
     
-    // ✅ FIX 9: Streamlined event processing with live mode flag
-    private func processEvent(_ text: String, isLive: Bool) {
+    // ✅ FIX 7: Streamlined processing (like Android)
+    private func processEvent(_ text: String) {
         // Check for subscription confirmation
         if text.contains("\"status\":\"subscribed\"") || text.contains("\"status\":\"ok\"") {
             DispatchQueue.main.async { [weak self] in
@@ -311,7 +293,7 @@ class WebSocketService: ObservableObject {
         
         let timestamp = json["timestamp"] as? Int64 ?? 0
         
-        // ✅ Record in sync state FIRST
+        // ✅ CRITICAL: Record event (like Android)
         let isNew = ChannelSyncState.shared.recordEventReceived(
             channelId: channelId,
             eventId: eventId,
@@ -335,7 +317,7 @@ class WebSocketService: ObservableObject {
             return
         }
         
-        // ✅ CRITICAL: Add to storage
+        // ✅ CRITICAL: Add to storage FIRST (like Android)
         let added = SubscriptionManager.shared.addEvent(event: event)
         
         if added {
@@ -343,14 +325,18 @@ class WebSocketService: ObservableObject {
                 self?.processedCount += 1
             }
             
-            // ✅ FIX 10: For live events, send notification immediately
-            if isLive {
+            // ✅ Check if in catch-up mode
+            let inCatchUpMode = ChannelSyncState.shared.isInCatchUpMode(channelId: channelId)
+            
+            // ✅ Send notification based on mode (like Android)
+            if !inCatchUpMode {
+                // LIVE mode - send notification immediately
                 DispatchQueue.main.async { [weak self] in
                     self?.broadcastEvent(event, channelId: channelId)
                     self?.sendLocalNotification(for: event, channelId: channelId)
                 }
             } else {
-                // Catch-up events - broadcast only (batch notifications)
+                // CATCH-UP mode - only broadcast (no notifications during bulk sync)
                 DispatchQueue.main.async { [weak self] in
                     self?.broadcastEvent(event, channelId: channelId)
                 }
@@ -361,7 +347,7 @@ class WebSocketService: ObservableObject {
             }
         }
         
-        // Send ACK
+        // ✅ Always ACK after storage (like Android)
         if requireAck {
             sendAck(eventId: eventId)
         }
@@ -409,7 +395,7 @@ class WebSocketService: ObservableObject {
     
     // MARK: - ACK Management
     private func sendAck(eventId: String) {
-        processingQueue.async { [weak self] in
+        ackQueue.async { [weak self] in
             guard let self = self else { return }
             self.pendingAcks.append(eventId)
             
@@ -420,7 +406,7 @@ class WebSocketService: ObservableObject {
     }
     
     private func flushAcks() {
-        processingQueue.async { [weak self] in
+        ackQueue.async { [weak self] in
             guard let self = self else { return }
             guard !self.pendingAcks.isEmpty else { return }
             
@@ -451,7 +437,7 @@ class WebSocketService: ObservableObject {
                         }
                     } else {
                         self?.logger.logError("ACK", "Failed to send, re-queuing")
-                        self?.processingQueue.async {
+                        self?.ackQueue.async {
                             self?.pendingAcks.insert(contentsOf: acksToSend, at: 0)
                         }
                     }
@@ -484,10 +470,9 @@ class WebSocketService: ObservableObject {
         }
         
         let now = Date().timeIntervalSince1970
-        if hasSubscribed && (now - lastSubscriptionTime) < 5.0 {
-            logger.log("SUBSCRIPTION", "⚠️ Skipping duplicate subscription")
-            return
-        }
+        
+        // ✅ FIX 8: Removed debouncing - subscribe immediately (like Android)
+        // Android doesn't debounce subscriptions
         
         let subscriptions = SubscriptionManager.shared.getSubscriptions()
         guard !subscriptions.isEmpty else {
@@ -557,12 +542,12 @@ class WebSocketService: ObservableObject {
         }
     }
     
-    // MARK: - Catch-up Monitoring
+    // MARK: - Catch-up Monitoring (FIXED - Match Android)
     private func startCatchUpMonitoring() {
         stopCatchUpMonitoring()
         
         DispatchQueue.main.async { [weak self] in
-            self?.catchUpTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+            self?.catchUpTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
                 self?.checkCatchUpProgress()
             }
         }
@@ -573,28 +558,29 @@ class WebSocketService: ObservableObject {
         catchUpTimer = nil
     }
     
+    // ✅ FIX 9: Match Android's catch-up detection logic EXACTLY
     private func checkCatchUpProgress() {
         var allComplete = true
+        var activeCatchUps = 0
         
-        processingQueue.async { [weak self] in
-            guard let self = self else { return }
-            
-            for channelId in self.catchUpChannels {
-                if ChannelSyncState.shared.isInCatchUpMode(channelId: channelId) {
-                    let progress = ChannelSyncState.shared.getCatchUpProgress(channelId: channelId)
+        for channelId in catchUpChannels {
+            if ChannelSyncState.shared.isInCatchUpMode(channelId: channelId) {
+                activeCatchUps += 1
+                let progress = ChannelSyncState.shared.getCatchUpProgress(channelId: channelId)
+                
+                // ✅ Check if queue is empty AND no processing happening (like Android)
+                messageQueue.sync {
+                    let queueEmpty = pendingMessages.isEmpty
                     
-                    let bufferEmpty = self.eventBuffer.isEmpty
-                    let notProcessing = !self.isProcessingEvents
-                    
-                    if progress > 0 && bufferEmpty && notProcessing {
-                        let count = (self.consecutiveEmptyChecks[channelId] ?? 0) + 1
-                        self.consecutiveEmptyChecks[channelId] = count
+                    if progress > 0 && queueEmpty {
+                        let count = (consecutiveEmptyChecks[channelId] ?? 0) + 1
+                        consecutiveEmptyChecks[channelId] = count
                         
-                        if count >= self.stableEmptyThreshold {
+                        if count >= stableEmptyThreshold {
                             ChannelSyncState.shared.disableCatchUpMode(channelId: channelId)
-                            self.catchUpChannels.remove(channelId)
-                            self.consecutiveEmptyChecks.removeValue(forKey: channelId)
-                            self.logger.log("CATCHUP", "✅ Complete for \(channelId) (\(progress) events)")
+                            catchUpChannels.remove(channelId)
+                            consecutiveEmptyChecks.removeValue(forKey: channelId)
+                            logger.log("CATCHUP", "✅ Complete for \(channelId) (\(progress) events)")
                             
                             DispatchQueue.main.async {
                                 NotificationCenter.default.post(name: .catchUpComplete, object: nil)
@@ -603,17 +589,17 @@ class WebSocketService: ObservableObject {
                             allComplete = false
                         }
                     } else {
-                        self.consecutiveEmptyChecks[channelId] = 0
+                        consecutiveEmptyChecks[channelId] = 0
                         allComplete = false
                     }
                 }
             }
-            
-            if allComplete && self.catchUpChannels.isEmpty {
-                self.logger.log("CATCHUP", "🎉 ALL CHANNELS CAUGHT UP")
-                DispatchQueue.main.async { [weak self] in
-                    self?.stopCatchUpMonitoring()
-                }
+        }
+        
+        if activeCatchUps > 0 && allComplete && catchUpChannels.isEmpty {
+            logger.log("CATCHUP", "🎉 ALL CHANNELS CAUGHT UP")
+            DispatchQueue.main.async { [weak self] in
+                self?.stopCatchUpMonitoring()
             }
         }
     }
@@ -688,19 +674,21 @@ class WebSocketService: ObservableObject {
     private func logStats() {
         guard isConnected else { return }
         
-        processingQueue.async { [weak self] in
-            guard let self = self else { return }
-            
-            let bufferCount = self.eventBuffer.count
-            let liveCount = self.liveEventQueue.count
-            let pendingAckCount = self.pendingAcks.count
-            
-            self.logger.log("STATS", """
-                Received: \(self.receivedCount), Buffered: \(bufferCount), Live: \(liveCount),
-                Processed: \(self.processedCount), Dropped: \(self.droppedCount), 
-                Pending ACKs: \(pendingAckCount)
-                """)
+        var queueCount = 0
+        messageQueue.sync {
+            queueCount = pendingMessages.count
         }
+        
+        var pendingAckCount = 0
+        ackQueue.sync {
+            pendingAckCount = pendingAcks.count
+        }
+        
+        logger.log("STATS", """
+            Received: \(receivedCount), Queued: \(queueCount),
+            Processed: \(processedCount), Dropped: \(droppedCount), 
+            Pending ACKs: \(pendingAckCount)
+            """)
         
         DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 10.0) { [weak self] in
             self?.logStats()
