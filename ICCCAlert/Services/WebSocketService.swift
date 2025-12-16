@@ -1,12 +1,11 @@
 import Foundation
 import Combine
-import UIKit
 import UserNotifications
 
 class WebSocketService: ObservableObject {
     static let shared = WebSocketService()
     
-    // MARK: - Published Properties for UI
+    // MARK: - Published Properties
     @Published var isConnected = false
     @Published var connectionStatus = "Disconnected"
     @Published var receivedCount = 0
@@ -25,42 +24,30 @@ class WebSocketService: ObservableObject {
     private let maxReconnectAttempts = Int.max
     private let reconnectDelay: TimeInterval = 5.0
     
-    // ✅ CRITICAL: Serial queue ONLY - absolutely no parallel processing
-    private let serialQueue = DispatchQueue(label: "com.iccc.websocket.serial", qos: .userInitiated)
+    // ✅ FIX 1: Single serial queue for ALL operations
+    private let processingQueue = DispatchQueue(label: "com.iccc.processing", qos: .userInitiated)
     
-    // ✅ OPTIMIZED: Use concurrent queues for actual event processing (like Android's thread pool)
-    private let processingQueue = DispatchQueue(
-        label: "com.iccc.websocket.processing",
-        qos: .userInitiated,
-        attributes: .concurrent
-    )
-    private let numProcessors: Int
-    private var processingTasks: [DispatchSourceTimer] = []
+    // ✅ FIX 2: Simple buffer without complex locking
+    private var eventBuffer: [String] = []
     
-    // ✅ CRITICAL: Use proper concurrent queues, not arrays
-    private let eventQueue = DispatchQueue(label: "com.iccc.websocket.events")
-    private var queuedEvents: [String] = []
-    private var liveEventCount = 0
-    
-    // ✅ Processing state tracking
-    private var isReceiving = false
-    private var isProcessorActive = false
+    // ✅ FIX 3: Processing state without deadlock risk
+    private var isProcessingEvents = false
     
     // ACK batching
     private var pendingAcks: [String] = []
-    private let ackBatchSize = 100
-    private var ackTimer: DispatchSourceTimer?
+    private let ackBatchSize = 50
+    private var ackTimer: Timer?
     
     // Ping/Pong
-    private var pingTimer: DispatchSourceTimer?
+    private var pingTimer: Timer?
     private let pingInterval: TimeInterval = 30.0
     
-    // ✅ Catch-up monitoring
+    // ✅ FIX 4: Proper catch-up monitoring
     private var catchUpChannels: Set<String> = []
-    private var catchUpTimer: DispatchSourceTimer?
-    private let catchUpCheckInterval: TimeInterval = 5.0
+    private var catchUpTimer: Timer?
+    private let catchUpCheckInterval: TimeInterval = 3.0
     private var consecutiveEmptyChecks: [String: Int] = [:]
-    private let stableEmptyThreshold = 3
+    private let stableEmptyThreshold = 2
     
     // Connection state tracking
     private var lastConnectionTime: Date?
@@ -70,19 +57,14 @@ class WebSocketService: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private let logger = DebugLogger.shared
     
-    // ✅ Background task for processing
-    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    // ✅ FIX 5: Separate live event queue for immediate processing
+    private var liveEventQueue: [String] = []
     
     // MARK: - Initialization
     private init() {
-        // Calculate optimal number of processors (4-8 like Android)
-        let cpuCount = ProcessInfo.processInfo.activeProcessorCount
-        numProcessors = max(4, min(cpuCount, 8))
-        
-        logger.log("INIT", "WebSocketService initializing with \(numProcessors) processors...")
+        logger.log("INIT", "WebSocketService initializing...")
         setupClientId()
         setupSession()
-        setupNotificationObservers()
         logger.log("INIT", "WebSocketService initialized with clientId: \(clientId)")
     }
     
@@ -101,177 +83,92 @@ class WebSocketService: ObservableObject {
         logger.log("SESSION", "URLSession configured")
     }
     
-    // ✅ FIX 6: Setup app lifecycle observers
-    private func setupNotificationObservers() {
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(appDidEnterBackground),
-            name: UIApplication.didEnterBackgroundNotification,
-            object: nil
-        )
-        
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(appWillEnterForeground),
-            name: UIApplication.willEnterForegroundNotification,
-            object: nil
-        )
-        
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(appDidBecomeActive),
-            name: UIApplication.didBecomeActiveNotification,
-            object: nil
-        )
-    }
-    
-    @objc private func appDidEnterBackground() {
-        logger.log("LIFECYCLE", "App entering background")
-        
-        // Start background task
-        backgroundTask = UIApplication.shared.beginBackgroundTask { [weak self] in
-            self?.endBackgroundTask()
-        }
-        
-        // Force save state
-        SubscriptionManager.shared.forceSave()
-        ChannelSyncState.shared.forceSave()
-    }
-    
-    @objc private func appWillEnterForeground() {
-        logger.log("LIFECYCLE", "App entering foreground")
-    }
-    
-    @objc private func appDidBecomeActive() {
-        logger.log("LIFECYCLE", "App became active")
-        
-        // End background task
-        endBackgroundTask()
-        
-        // Reconnect if disconnected
-        if !isConnected {
-            logger.log("LIFECYCLE", "Reconnecting after foreground...")
-            connect()
-        }
-    }
-    
-    private func endBackgroundTask() {
-        if backgroundTask != .invalid {
-            UIApplication.shared.endBackgroundTask(backgroundTask)
-            backgroundTask = .invalid
-        }
-    }
-    
     // MARK: - Connection Management
     func connect() {
-        serialQueue.async { [weak self] in
-            guard let self = self else { return }
-            
-            if self.isConnected && self.webSocketTask != nil {
-                self.logger.logWebSocket("⚠️ Already connected, skipping connect")
-                return
-            }
-            
-            self.disconnect()
-            
-            // ✅ Add clientId to WebSocket URL for authentication
-            let urlWithClient = "\(self.wsURL)?clientId=\(self.clientId)"
-            guard let url = URL(string: urlWithClient) else {
-                self.logger.logError("CONNECT", "Invalid WebSocket URL: \(urlWithClient)")
-                return
-            }
-            
-            self.logger.logWebSocket("🔌 Connecting to \(urlWithClient)")
-            
-            DispatchQueue.main.async {
-                self.connectionStatus = "Connecting..."
-            }
-            
-            var request = URLRequest(url: url)
-            request.timeoutInterval = 30
-            
-            self.webSocketTask = self.session?.webSocketTask(with: request)
-            self.webSocketTask?.resume()
-            
-            self.isConnected = true
-            self.isReceiving = true
-            self.reconnectAttempts = 0
-            self.lastConnectionTime = Date()
-            
-            DispatchQueue.main.async {
-                self.connectionStatus = "Connected - Monitoring alerts"
-            }
-            
-            self.logger.logWebSocket("✅ WebSocket connected, starting services...")
-            
-            self.startReceiving()
-            self.startEventProcessors()
-            self.startPingPong()
-            self.startAckFlusher()
-            self.startStatsLogging()
-            
-            // ✅ Send subscription after connection is established
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                self?.sendSubscriptionV2()
-            }
+        logger.log("CONNECT", "Connect called - isConnected=\(isConnected), hasTask=\(webSocketTask != nil)")
+        
+        if isConnected && webSocketTask != nil {
+            logger.logWebSocket("⚠️ Already connected, skipping connect")
+            return
+        }
+        
+        disconnect()
+        
+        guard let url = URL(string: wsURL) else {
+            logger.logError("CONNECT", "Invalid WebSocket URL: \(wsURL)")
+            return
+        }
+        
+        logger.logWebSocket("🔌 Connecting to \(wsURL) with client ID: \(clientId)")
+        
+        DispatchQueue.main.async { [weak self] in
+            self?.connectionStatus = "Connecting..."
+        }
+        
+        webSocketTask = session?.webSocketTask(with: url)
+        webSocketTask?.resume()
+        
+        isConnected = true
+        reconnectAttempts = 0
+        lastConnectionTime = Date()
+        
+        DispatchQueue.main.async { [weak self] in
+            self?.connectionStatus = "Connected - Monitoring alerts"
+        }
+        
+        logger.logWebSocket("✅ WebSocket connected, starting receivers...")
+        
+        startReceiving()
+        startPingPong()
+        startAckFlusher()
+        startEventProcessor()
+        startStatsLogging()
+        
+        // Send subscription immediately after connection
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.sendSubscriptionV2()
         }
     }
     
     func disconnect() {
-        serialQueue.async { [weak self] in
-            guard let self = self else { return }
-            
-            self.logger.logWebSocket("🔌 Disconnecting...")
-            self.isReceiving = false
-            self.webSocketTask?.cancel(with: .goingAway, reason: nil)
-            self.webSocketTask = nil
-            self.isConnected = false
-            self.hasSubscribed = false
-            
-            DispatchQueue.main.async {
-                self.connectionStatus = "Disconnected"
-            }
-            
-            self.stopEventProcessors()
-            self.stopPingPong()
-            self.stopAckFlusher()
-            self.stopCatchUpMonitoring()
-            
-            self.logger.logWebSocket("✅ WebSocket disconnected")
+        logger.logWebSocket("Disconnecting...")
+        webSocketTask?.cancel(with: .goingAway, reason: nil)
+        webSocketTask = nil
+        isConnected = false
+        hasSubscribed = false
+        
+        DispatchQueue.main.async { [weak self] in
+            self?.connectionStatus = "Disconnected"
         }
+        
+        stopPingPong()
+        stopAckFlusher()
+        stopCatchUpMonitoring()
+        
+        logger.logWebSocket("🔌 WebSocket disconnected")
     }
     
-    // ✅ CRITICAL: Continuous receiver loop (non-blocking)
     private func startReceiving() {
-        serialQueue.async { [weak self] in
-            self?.receiveMessage()
-        }
+        logger.logWebSocket("Starting message receiver...")
+        receiveMessage()
     }
     
     private func receiveMessage() {
-        guard isReceiving else { return }
-        
         webSocketTask?.receive { [weak self] result in
             guard let self = self else { return }
             
             switch result {
             case .success(let message):
                 self.handleMessage(message)
-                // Continue receiving immediately
-                self.receiveMessage()
+                self.receiveMessage() // Continue receiving
                 
             case .failure(let error):
                 self.logger.logError("WS_RECEIVE", "❌ WebSocket error: \(error.localizedDescription)")
-                
-                self.serialQueue.async {
+                DispatchQueue.main.async {
                     self.isConnected = false
-                    self.isReceiving = false
                     self.hasSubscribed = false
-                    
-                    DispatchQueue.main.async {
-                        self.connectionStatus = "Disconnected - Reconnecting..."
-                        self.scheduleReconnect()
-                    }
+                    self.connectionStatus = "Disconnected - Reconnecting..."
+                    self.scheduleReconnect()
                 }
             }
         }
@@ -296,55 +193,67 @@ class WebSocketService: ObservableObject {
             self?.receivedCount += 1
         }
         
-        // ✅ Queue event for processing
-        eventQueue.async { [weak self] in
+        // ✅ FIX 6: Add to buffer on serial queue (no locks needed)
+        processingQueue.async { [weak self] in
             guard let self = self else { return }
-            self.queuedEvents.append(messageText)
-        }
-    }
-    
-    // ✅ CRITICAL: Start multiple event processors (like Android's thread pool)
-    private func startEventProcessors() {
-        stopEventProcessors()
-        
-        // ✅ Start one processor per optimal CPU core
-        for i in 0..<numProcessors {
-            let timer = DispatchSource.makeTimerSource(queue: processingQueue)
-            timer.schedule(deadline: .now() + Double(i) * 0.001, repeating: 0.01)
-            timer.setEventHandler { [weak self] in
-                self?.processEventBatch(processorId: i)
+            
+            // Check if any channel is in catch-up mode
+            let inCatchUpMode = SubscriptionManager.shared.subscribedChannels.contains { channel in
+                ChannelSyncState.shared.isInCatchUpMode(channelId: channel.id)
             }
-            timer.resume()
-            processingTasks.append(timer)
-        }
-        
-        logger.log("PROCESSORS", "✅ Started \(numProcessors) event processors")
-    }
-    
-    private func stopEventProcessors() {
-        processingTasks.forEach { $0.cancel() }
-        processingTasks.removeAll()
-    }
-    
-    // ✅ CRITICAL: Process one event at a time per processor (no blocking)
-    private func processEventBatch(processorId: Int) {
-        eventQueue.async { [weak self] in
-            guard let self = self else { return }
             
-            // Get ONE event from queue
-            guard !self.queuedEvents.isEmpty else { return }
-            let messageText = self.queuedEvents.removeFirst()
-            
-            // Process it
-            self.processingQueue.async {
-                self.processEvent(messageText)
+            if inCatchUpMode {
+                self.eventBuffer.append(messageText)
+            } else {
+                // Live mode - prioritize immediate processing
+                self.liveEventQueue.append(messageText)
             }
         }
     }
     
-    // ✅ CRITICAL: Streamlined event processing - ZERO blocking
-    private func processEvent(_ text: String) {
-        // Skip subscription confirmations
+    // ✅ FIX 7: Single processor with priority handling
+    private func startEventProcessor() {
+        processingQueue.async { [weak self] in
+            self?.eventProcessorLoop()
+        }
+    }
+    
+    // ✅ FIX 8: Non-blocking processor with live event priority
+    private func eventProcessorLoop() {
+        while isConnected {
+            autoreleasepool {
+                // Check if already processing
+                guard !isProcessingEvents else {
+                    Thread.sleep(forTimeInterval: 0.01)
+                    return
+                }
+                
+                isProcessingEvents = true
+                defer { isProcessingEvents = false }
+                
+                // ✅ PRIORITY 1: Process live events first
+                if !liveEventQueue.isEmpty {
+                    let messageText = liveEventQueue.removeFirst()
+                    processEvent(messageText, isLive: true)
+                    return
+                }
+                
+                // ✅ PRIORITY 2: Process catch-up events
+                if !eventBuffer.isEmpty {
+                    let messageText = eventBuffer.removeFirst()
+                    processEvent(messageText, isLive: false)
+                    return
+                }
+                
+                // No events, sleep briefly
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+        }
+    }
+    
+    // ✅ FIX 9: Streamlined event processing with live mode flag
+    private func processEvent(_ text: String, isLive: Bool) {
+        // Check for subscription confirmation
         if text.contains("\"status\":\"subscribed\"") || text.contains("\"status\":\"ok\"") {
             DispatchQueue.main.async { [weak self] in
                 self?.hasSubscribed = true
@@ -361,7 +270,6 @@ class WebSocketService: ObservableObject {
             return
         }
         
-        // Parse JSON (on processing queue, not main)
         guard let data = text.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             DispatchQueue.main.async { [weak self] in
@@ -370,7 +278,6 @@ class WebSocketService: ObservableObject {
             return
         }
         
-        // Extract event data
         guard let eventId = json["id"] as? String,
               let area = json["area"] as? String,
               let type = json["type"] as? String else {
@@ -383,9 +290,8 @@ class WebSocketService: ObservableObject {
         let channelId = "\(area)_\(type)"
         let eventData = json["data"] as? [String: Any] ?? [:]
         let requireAck = eventData["_requireAck"] as? Bool ?? true
-        let timestamp = json["timestamp"] as? Int64 ?? 0
         
-        // ✅ Check subscription
+        // Check if subscribed
         guard SubscriptionManager.shared.isSubscribed(channelId: channelId) else {
             DispatchQueue.main.async { [weak self] in
                 self?.droppedCount += 1
@@ -403,7 +309,9 @@ class WebSocketService: ObservableObject {
             return 0
         }()
         
-        // ✅ CRITICAL: Record in sync state FIRST
+        let timestamp = json["timestamp"] as? Int64 ?? 0
+        
+        // ✅ Record in sync state FIRST
         let isNew = ChannelSyncState.shared.recordEventReceived(
             channelId: channelId,
             eventId: eventId,
@@ -427,7 +335,7 @@ class WebSocketService: ObservableObject {
             return
         }
         
-        // ✅ CRITICAL: Add to storage (FAST - no blocking)
+        // ✅ CRITICAL: Add to storage
         let added = SubscriptionManager.shared.addEvent(event: event)
         
         if added {
@@ -435,16 +343,16 @@ class WebSocketService: ObservableObject {
                 self?.processedCount += 1
             }
             
-            // ✅ Check if in catch-up mode
-            let inCatchUp = ChannelSyncState.shared.isInCatchUpMode(channelId: channelId)
-            
-            // Notify UI (always on main thread)
-            DispatchQueue.main.async { [weak self] in
-                self?.broadcastEvent(event, channelId: channelId)
-                
-                // Only send notification if live and notifications enabled
-                if !inCatchUp {
+            // ✅ FIX 10: For live events, send notification immediately
+            if isLive {
+                DispatchQueue.main.async { [weak self] in
+                    self?.broadcastEvent(event, channelId: channelId)
                     self?.sendLocalNotification(for: event, channelId: channelId)
+                }
+            } else {
+                // Catch-up events - broadcast only (batch notifications)
+                DispatchQueue.main.async { [weak self] in
+                    self?.broadcastEvent(event, channelId: channelId)
                 }
             }
         } else {
@@ -501,7 +409,7 @@ class WebSocketService: ObservableObject {
     
     // MARK: - ACK Management
     private func sendAck(eventId: String) {
-        serialQueue.async { [weak self] in
+        processingQueue.async { [weak self] in
             guard let self = self else { return }
             self.pendingAcks.append(eventId)
             
@@ -511,12 +419,10 @@ class WebSocketService: ObservableObject {
         }
     }
     
-    // ✅ CRITICAL: Batch ACKs properly
     private func flushAcks() {
-        serialQueue.async { [weak self] in
+        processingQueue.async { [weak self] in
             guard let self = self else { return }
             guard !self.pendingAcks.isEmpty else { return }
-            guard self.isConnected, self.webSocketTask != nil else { return }
             
             let acksToSend = Array(self.pendingAcks.prefix(100))
             self.pendingAcks.removeFirst(min(100, self.pendingAcks.count))
@@ -543,12 +449,9 @@ class WebSocketService: ObservableObject {
                         DispatchQueue.main.async {
                             self?.ackedCount += acksToSend.count
                         }
-                        if acksToSend.count > 50 {
-                            self?.logger.log("ACK", "✅ Sent BULK ACK for \(acksToSend.count) events")
-                        }
                     } else {
-                        self?.logger.logError("ACK", "❌ Failed to send ACK, re-queuing \(acksToSend.count) events")
-                        self?.serialQueue.async {
+                        self?.logger.logError("ACK", "Failed to send, re-queuing")
+                        self?.processingQueue.async {
                             self?.pendingAcks.insert(contentsOf: acksToSend, at: 0)
                         }
                     }
@@ -558,109 +461,98 @@ class WebSocketService: ObservableObject {
     }
     
     private func startAckFlusher() {
-        stopAckFlusher()
-        
-        let timer = DispatchSource.makeTimerSource(queue: serialQueue)
-        timer.schedule(deadline: .now(), repeating: 0.1)
-        timer.setEventHandler { [weak self] in
-            self?.flushAcks()
+        DispatchQueue.main.async { [weak self] in
+            self?.ackTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+                self?.flushAcks()
+            }
         }
-        timer.resume()
-        ackTimer = timer
     }
     
     private func stopAckFlusher() {
-        ackTimer?.cancel()
+        ackTimer?.invalidate()
         ackTimer = nil
         flushAcks()
     }
     
     // MARK: - Subscription Management
     func sendSubscriptionV2() {
-        serialQueue.async { [weak self] in
-            guard let self = self else { return }
-            
-            guard self.isConnected, self.webSocketTask != nil else {
-                self.logger.logError("SUBSCRIPTION", "Cannot subscribe - not connected")
-                return
-            }
-            
-            let now = Date().timeIntervalSince1970
-            if self.hasSubscribed && (now - self.lastSubscriptionTime) < 5.0 {
-                self.logger.log("SUBSCRIPTION", "⚠️ Skipping duplicate subscription")
-                return
-            }
-            
-            let subscriptions = SubscriptionManager.shared.getSubscriptions()
-            guard !subscriptions.isEmpty else {
-                self.logger.logError("SUBSCRIPTION", "No subscriptions to send")
-                return
-            }
-            
-            self.logger.log("SUBSCRIPTION", "📤 Subscribing to \(subscriptions.count) channels")
-            
-            let filters = subscriptions.map { sub in
-                SubscriptionFilter(area: sub.area, eventType: sub.eventType)
-            }
-            
-            // ✅ Enable catch-up mode for ALL channels
-            subscriptions.forEach { sub in
-                let channelId = "\(sub.area)_\(sub.eventType)"
-                ChannelSyncState.shared.enableCatchUpMode(channelId: channelId)
-                self.catchUpChannels.insert(channelId)
-            }
-            
-            var syncState: [String: SyncStateInfo] = [:]
-            
-            for sub in subscriptions {
-                let channelId = "\(sub.area)_\(sub.eventType)"
-                if let info = ChannelSyncState.shared.getSyncInfo(channelId: channelId) {
-                    syncState[channelId] = SyncStateInfo(
-                        lastEventId: info.lastEventId,
-                        lastTimestamp: info.lastEventTimestamp,
-                        lastSeq: info.highestSeq
-                    )
-                } else {
-                    syncState[channelId] = SyncStateInfo(
-                        lastEventId: nil,
-                        lastTimestamp: 0,
-                        lastSeq: 0
-                    )
-                }
-            }
-            
-            let hasAnySyncState = ChannelSyncState.shared.getAllSyncStates().count > 0
-            let resetConsumers = !hasAnySyncState
-            
-            let request = SubscriptionRequest(
-                clientId: self.clientId,
-                filters: filters,
-                syncState: syncState.isEmpty ? nil : syncState,
-                resetConsumers: resetConsumers
-            )
-            
-            guard let jsonData = try? JSONEncoder().encode(request),
-                  let jsonString = String(data: jsonData, encoding: .utf8) else {
-                self.logger.logError("SUBSCRIPTION", "Failed to encode request")
-                return
-            }
-            
-            self.logger.log("SUBSCRIPTION", "Mode: \(resetConsumers ? "RESET" : "RESUME")")
-            if resetConsumers {
-                self.logger.log("SUBSCRIPTION", "⚠️ RESET MODE - Will delete old consumers")
+        logger.log("SUBSCRIPTION", "sendSubscriptionV2 called")
+        
+        guard isConnected, webSocketTask != nil else {
+            logger.logError("SUBSCRIPTION", "Cannot subscribe - not connected")
+            return
+        }
+        
+        let now = Date().timeIntervalSince1970
+        if hasSubscribed && (now - lastSubscriptionTime) < 5.0 {
+            logger.log("SUBSCRIPTION", "⚠️ Skipping duplicate subscription")
+            return
+        }
+        
+        let subscriptions = SubscriptionManager.shared.getSubscriptions()
+        guard !subscriptions.isEmpty else {
+            logger.logError("SUBSCRIPTION", "No subscriptions to send")
+            return
+        }
+        
+        logger.log("SUBSCRIPTION", "Subscribing to \(subscriptions.count) channels")
+        
+        let filters = subscriptions.map { sub in
+            SubscriptionFilter(area: sub.area, eventType: sub.eventType)
+        }
+        
+        // ✅ Enable catch-up mode for ALL channels
+        subscriptions.forEach { sub in
+            let channelId = "\(sub.area)_\(sub.eventType)"
+            ChannelSyncState.shared.enableCatchUpMode(channelId: channelId)
+            catchUpChannels.insert(channelId)
+        }
+        
+        var syncState: [String: SyncStateInfo] = [:]
+        
+        for sub in subscriptions {
+            let channelId = "\(sub.area)_\(sub.eventType)"
+            if let info = ChannelSyncState.shared.getSyncInfo(channelId: channelId) {
+                syncState[channelId] = SyncStateInfo(
+                    lastEventId: info.lastEventId,
+                    lastTimestamp: info.lastEventTimestamp,
+                    lastSeq: info.highestSeq
+                )
             } else {
-                self.logger.log("SUBSCRIPTION", "✅ RESUME MODE - \(syncState.count) channels with state")
+                syncState[channelId] = SyncStateInfo(
+                    lastEventId: nil,
+                    lastTimestamp: 0,
+                    lastSeq: 0
+                )
             }
-            
-            self.send(message: jsonString) { [weak self] success in
-                if success {
-                    self?.hasSubscribed = true
-                    self?.lastSubscriptionTime = Date().timeIntervalSince1970
-                    self?.logger.log("SUBSCRIPTION", "✅ Subscription sent successfully")
-                    self?.startCatchUpMonitoring()
-                } else {
-                    self?.logger.logError("SUBSCRIPTION", "Failed to send")
-                }
+        }
+        
+        let hasAnySyncState = ChannelSyncState.shared.getAllSyncStates().count > 0
+        let resetConsumers = !hasAnySyncState
+        
+        let request = SubscriptionRequest(
+            clientId: clientId,
+            filters: filters,
+            syncState: syncState.isEmpty ? nil : syncState,
+            resetConsumers: resetConsumers
+        )
+        
+        guard let jsonData = try? JSONEncoder().encode(request),
+              let jsonString = String(data: jsonData, encoding: .utf8) else {
+            logger.logError("SUBSCRIPTION", "Failed to encode request")
+            return
+        }
+        
+        logger.log("SUBSCRIPTION", "Sending: \(jsonString)")
+        
+        send(message: jsonString) { [weak self] success in
+            if success {
+                self?.hasSubscribed = true
+                self?.lastSubscriptionTime = Date().timeIntervalSince1970
+                self?.logger.log("SUBSCRIPTION", "✅ Subscription sent successfully")
+                self?.startCatchUpMonitoring()
+            } else {
+                self?.logger.logError("SUBSCRIPTION", "Failed to send")
             }
         }
     }
@@ -669,118 +561,119 @@ class WebSocketService: ObservableObject {
     private func startCatchUpMonitoring() {
         stopCatchUpMonitoring()
         
-        let timer = DispatchSource.makeTimerSource(queue: serialQueue)
-        timer.schedule(deadline: .now(), repeating: catchUpCheckInterval)
-        timer.setEventHandler { [weak self] in
-            self?.checkCatchUpProgress()
+        DispatchQueue.main.async { [weak self] in
+            self?.catchUpTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+                self?.checkCatchUpProgress()
+            }
         }
-        timer.resume()
-        catchUpTimer = timer
     }
     
     private func stopCatchUpMonitoring() {
-        catchUpTimer?.cancel()
+        catchUpTimer?.invalidate()
         catchUpTimer = nil
     }
     
-    // ✅ CRITICAL: Proper catch-up detection
     private func checkCatchUpProgress() {
         var allComplete = true
         
-        for channelId in catchUpChannels {
-            if ChannelSyncState.shared.isInCatchUpMode(channelId: channelId) {
-                let progress = ChannelSyncState.shared.getCatchUpProgress(channelId: channelId)
-                
-                let queueEmpty = eventQueue.sync { queuedEvents.isEmpty }
-                let notProcessing = !isProcessorActive
-                
-                if progress > 0 && queueEmpty && notProcessing {
-                    let count = (consecutiveEmptyChecks[channelId] ?? 0) + 1
-                    consecutiveEmptyChecks[channelId] = count
+        processingQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            for channelId in self.catchUpChannels {
+                if ChannelSyncState.shared.isInCatchUpMode(channelId: channelId) {
+                    let progress = ChannelSyncState.shared.getCatchUpProgress(channelId: channelId)
                     
-                    if count >= stableEmptyThreshold {
-                        ChannelSyncState.shared.disableCatchUpMode(channelId: channelId)
-                        catchUpChannels.remove(channelId)
-                        consecutiveEmptyChecks.removeValue(forKey: channelId)
-                        logger.log("CATCHUP", "✅ Complete for \(channelId) (\(progress) events)")
+                    let bufferEmpty = self.eventBuffer.isEmpty
+                    let notProcessing = !self.isProcessingEvents
+                    
+                    if progress > 0 && bufferEmpty && notProcessing {
+                        let count = (self.consecutiveEmptyChecks[channelId] ?? 0) + 1
+                        self.consecutiveEmptyChecks[channelId] = count
                         
-                        DispatchQueue.main.async {
-                            NotificationCenter.default.post(name: .catchUpComplete, object: nil)
+                        if count >= self.stableEmptyThreshold {
+                            ChannelSyncState.shared.disableCatchUpMode(channelId: channelId)
+                            self.catchUpChannels.remove(channelId)
+                            self.consecutiveEmptyChecks.removeValue(forKey: channelId)
+                            self.logger.log("CATCHUP", "✅ Complete for \(channelId) (\(progress) events)")
+                            
+                            DispatchQueue.main.async {
+                                NotificationCenter.default.post(name: .catchUpComplete, object: nil)
+                            }
+                        } else {
+                            allComplete = false
                         }
                     } else {
+                        self.consecutiveEmptyChecks[channelId] = 0
                         allComplete = false
                     }
-                } else {
-                    consecutiveEmptyChecks[channelId] = 0
-                    allComplete = false
                 }
             }
-        }
-        
-        if allComplete && catchUpChannels.isEmpty {
-            logger.log("CATCHUP", "🎉 ALL CHANNELS CAUGHT UP")
-            stopCatchUpMonitoring()
+            
+            if allComplete && self.catchUpChannels.isEmpty {
+                self.logger.log("CATCHUP", "🎉 ALL CHANNELS CAUGHT UP")
+                DispatchQueue.main.async { [weak self] in
+                    self?.stopCatchUpMonitoring()
+                }
+            }
         }
     }
     
     // MARK: - Ping/Pong
     private func startPingPong() {
-        stopPingPong()
-        
-        let timer = DispatchSource.makeTimerSource(queue: serialQueue)
-        timer.schedule(deadline: .now(), repeating: pingInterval)
-        timer.setEventHandler { [weak self] in
-            self?.sendPing()
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.pingTimer = Timer.scheduledTimer(withTimeInterval: self.pingInterval, repeats: true) { [weak self] _ in
+                self?.sendPing()
+            }
         }
-        timer.resume()
-        pingTimer = timer
     }
     
     private func stopPingPong() {
-        pingTimer?.cancel()
+        pingTimer?.invalidate()
         pingTimer = nil
     }
     
     private func sendPing() {
-        webSocketTask?.sendPing { [weak self] error in
+        webSocketTask?.sendPing { error in
             if let error = error {
-                self?.logger.logError("PING", "❌ Ping failed: \(error.localizedDescription)")
+                self.logger.logError("PING", "❌ Ping failed: \(error.localizedDescription)")
             }
         }
     }
     
     // MARK: - Reconnection
     private func scheduleReconnect() {
-        serialQueue.async { [weak self] in
-            guard let self = self else { return }
-            
-            guard self.reconnectAttempts < self.maxReconnectAttempts else {
-                DispatchQueue.main.async {
-                    self.connectionStatus = "Connection failed - Tap to retry"
-                }
-                return
-            }
-            
-            self.reconnectAttempts += 1
-            let delay = self.reconnectDelay * Double(min(self.reconnectAttempts, 12))
-            
-            self.logger.log("RECONNECT", "Reconnecting in \(Int(delay))s (attempt \(self.reconnectAttempts))")
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                self?.connect()
-            }
+        guard reconnectAttempts < maxReconnectAttempts else {
+            connectionStatus = "Connection failed - Tap to retry"
+            return
+        }
+        
+        reconnectAttempts += 1
+        let delay = reconnectDelay * Double(min(reconnectAttempts, 12))
+        
+        logger.log("RECONNECT", "Reconnecting in \(delay)s (attempt \(reconnectAttempts))")
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.connect()
         }
     }
     
     // MARK: - Message Sending
     private func send(message: String, completion: ((Bool) -> Void)? = nil) {
-        let wsMessage = URLSessionWebSocketTask.Message.string(message)
-        webSocketTask?.send(wsMessage) { [weak self] error in
-            if let error = error {
-                self?.logger.logError("SEND", "❌ Failed: \(error.localizedDescription)")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else {
                 completion?(false)
-            } else {
-                completion?(true)
+                return
+            }
+            
+            let wsMessage = URLSessionWebSocketTask.Message.string(message)
+            self.webSocketTask?.send(wsMessage) { error in
+                if let error = error {
+                    self.logger.logError("SEND", "Failed: \(error.localizedDescription)")
+                    completion?(false)
+                } else {
+                    completion?(true)
+                }
             }
         }
     }
@@ -795,16 +688,16 @@ class WebSocketService: ObservableObject {
     private func logStats() {
         guard isConnected else { return }
         
-        serialQueue.async { [weak self] in
+        processingQueue.async { [weak self] in
             guard let self = self else { return }
             
-            let queueCount = self.eventQueue.sync { self.queuedEvents.count }
+            let bufferCount = self.eventBuffer.count
+            let liveCount = self.liveEventQueue.count
             let pendingAckCount = self.pendingAcks.count
             
             self.logger.log("STATS", """
-                📊 Received: \(self.receivedCount), Queue: \(queueCount),
-                Processed: \(self.processedCount), Dropped: \(self.droppedCount),
-                ACKed: \(self.ackedCount), Errors: \(self.errorCount),
+                Received: \(self.receivedCount), Buffered: \(bufferCount), Live: \(liveCount),
+                Processed: \(self.processedCount), Dropped: \(self.droppedCount), 
                 Pending ACKs: \(pendingAckCount)
                 """)
         }
@@ -812,11 +705,6 @@ class WebSocketService: ObservableObject {
         DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 10.0) { [weak self] in
             self?.logStats()
         }
-    }
-    
-    deinit {
-        NotificationCenter.default.removeObserver(self)
-        endBackgroundTask()
     }
 }
 
