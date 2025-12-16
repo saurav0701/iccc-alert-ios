@@ -76,7 +76,8 @@ class WebSocketService: ObservableObject {
     // MARK: - Initialization
     private init() {
         // Calculate optimal number of processors (4-8 like Android)
-        numProcessors = max(4, min(DispatchQueue.concurrentPerform(iterations: 0, execute: { _ in }), 8))
+        let cpuCount = ProcessInfo.processInfo.activeProcessorCount
+        numProcessors = max(4, min(cpuCount, 8))
         
         logger.log("INIT", "WebSocketService initializing with \(numProcessors) processors...")
         setupClientId()
@@ -437,7 +438,7 @@ class WebSocketService: ObservableObject {
                 self?.broadcastEvent(event, channelId: channelId)
                 
                 // Only send notification if live and notifications enabled
-                if !inCatchUp && DebugLogger.shared.areNotificationsEnabled() {
+                if !inCatchUp {
                     self?.sendLocalNotification(for: event, channelId: channelId)
                 }
             }
