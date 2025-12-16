@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import UserNotifications
 
 class WebSocketService: ObservableObject {
     static let shared = WebSocketService()

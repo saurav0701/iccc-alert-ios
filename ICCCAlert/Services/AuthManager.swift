@@ -18,7 +18,7 @@ class AuthManager: ObservableObject {
     }
     
     func checkAuthStatus() {
-        if let token = UserDefaults.standard.string(forKey: "auth_token"),
+        if let _ = UserDefaults.standard.string(forKey: "auth_token"),
            let expiry = UserDefaults.standard.object(forKey: "token_expiry") as? Int64 {
             let now = Int64(Date().timeIntervalSince1970)
             isAuthenticated = expiry > now
@@ -100,8 +100,7 @@ class AuthManager: ObservableObject {
                     completion(false, "Invalid response")
                     return
                 }
-                //raw response for debugging
-
+                
                 if let jsonString = String(data: data, encoding: .utf8) {
                     print("🔍 RAW RESPONSE: \(jsonString)")
                 }
@@ -152,7 +151,6 @@ class AuthManager: ObservableObject {
                         completion(false, "Invalid response format")
                     }
                 } else {
-                    // Parse error message
                     if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                        let errorMsg = json["error"] as? String {
                         completion(false, errorMsg)
@@ -244,7 +242,6 @@ class AuthManager: ObservableObject {
                 }
                 
                 if httpResponse.statusCode == 200 {
-                    // Parse nested response
                     if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                        let dataDict = json["data"] as? [String: Any],
                        let responseData = try? JSONSerialization.data(withJSONObject: dataDict),
