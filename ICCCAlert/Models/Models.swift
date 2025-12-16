@@ -28,8 +28,10 @@ struct Event: Identifiable, Codable, Equatable {
         return location
     }
     
+    // ✅ FIXED: Added channelName computed property
     var channelName: String? {
-        return areaDisplay ?? area
+        guard let area = area, let type = type else { return nil }
+        return "\(area)_\(type)"
     }
     
     var priority: String? {
@@ -149,18 +151,16 @@ struct SubscriptionFilter: Codable {
     let eventType: String
 }
 
-// ✅ FIXED: Added SyncStateInfo structure matching backend expectation
 struct SyncStateInfo: Codable {
     let lastEventId: String?
     let lastTimestamp: Int64
     let lastSeq: Int64
 }
 
-// ✅ FIXED: Updated SubscriptionRequest to match backend structure
 struct SubscriptionRequest: Codable {
     let clientId: String
     let filters: [SubscriptionFilter]
-    let syncState: [String: SyncStateInfo]?  // ✅ Changed from SyncState to syncState
+    let syncState: [String: SyncStateInfo]?
     let resetConsumers: Bool
 }
 
