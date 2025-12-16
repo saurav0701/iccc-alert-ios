@@ -15,10 +15,17 @@ struct ContentView: View {
                     Text("Channels")
                 }
             
-            SettingsView()
+                            SettingsView()
                 .tabItem {
                     Image(systemName: "gear")
                     Text("Settings")
+                }
+            
+            // ✅ DEBUG TAB (remove in production)
+            DebugView()
+                .tabItem {
+                    Image(systemName: "ladybug")
+                    Text("Debug")
                 }
         }
     }
