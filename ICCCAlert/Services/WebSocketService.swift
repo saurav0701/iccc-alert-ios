@@ -357,13 +357,48 @@ class WebSocketService: ObservableObject {
         }
     }
     
-    private func parseEvent(json: [String: Any]) -> Event? {
-        guard let jsonData = try? JSONSerialization.data(withJSONObject: json),
-              let event = try? JSONDecoder().decode(Event.self, from: jsonData) else {
-            return nil
+   // Replace the parseEvent function in WebSocketService.swift with this:
+
+private func parseEvent(json: [String: Any]) -> Event? {
+    do {
+        let jsonData = try JSONSerialization.data(withJSONObject: json)
+        
+        // Log the raw JSON for debugging
+        if let jsonString = String(data: jsonData, encoding: .utf8) {
+            logger.log("PARSE", "Attempting to parse JSON: \(jsonString.prefix(500))")
         }
+        
+        let decoder = JSONDecoder()
+        let event = try decoder.decode(Event.self, from: jsonData)
+        
+        logger.log("PARSE", "✅ Successfully parsed event: \(event.id ?? "nil")")
         return event
+        
+    } catch let DecodingError.keyNotFound(key, context) {
+        logger.logError("PARSE", "Missing key '\(key.stringValue)' - \(context.debugDescription)")
+        logger.logError("PARSE", "Coding path: \(context.codingPath)")
+        return nil
+        
+    } catch let DecodingError.typeMismatch(type, context) {
+        logger.logError("PARSE", "Type mismatch for type '\(type)' - \(context.debugDescription)")
+        logger.logError("PARSE", "Coding path: \(context.codingPath)")
+        return nil
+        
+    } catch let DecodingError.valueNotFound(type, context) {
+        logger.logError("PARSE", "Value not found for type '\(type)' - \(context.debugDescription)")
+        logger.logError("PARSE", "Coding path: \(context.codingPath)")
+        return nil
+        
+    } catch let DecodingError.dataCorrupted(context) {
+        logger.logError("PARSE", "Data corrupted - \(context.debugDescription)")
+        logger.logError("PARSE", "Coding path: \(context.codingPath)")
+        return nil
+        
+    } catch {
+        logger.logError("PARSE", "Unknown error: \(error.localizedDescription)")
+        return nil
     }
+}
     
     // MARK: - ACK Management
     private func sendAck(eventId: String) {

@@ -16,6 +16,72 @@ struct Event: Identifiable, Codable, Equatable {
     let data: [String: AnyCodable]
     var isRead: Bool = false
     
+    // Custom coding keys to handle optional isRead
+    enum CodingKeys: String, CodingKey {
+        case id, timestamp, source, area, areaDisplay, type, typeDisplay
+        case groupId, vehicleNumber, vehicleTransporter, data, isRead
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        
+        id = try container.decodeIfPresent(String.self, forKey: .id)
+        timestamp = try container.decode(Int64.self, forKey: .timestamp)
+        source = try container.decodeIfPresent(String.self, forKey: .source)
+        area = try container.decodeIfPresent(String.self, forKey: .area)
+        areaDisplay = try container.decodeIfPresent(String.self, forKey: .areaDisplay)
+        type = try container.decodeIfPresent(String.self, forKey: .type)
+        typeDisplay = try container.decodeIfPresent(String.self, forKey: .typeDisplay)
+        groupId = try container.decodeIfPresent(String.self, forKey: .groupId)
+        vehicleNumber = try container.decodeIfPresent(String.self, forKey: .vehicleNumber)
+        vehicleTransporter = try container.decodeIfPresent(String.self, forKey: .vehicleTransporter)
+        
+        // Decode data - handle both empty and populated cases
+        if let dataDict = try? container.decode([String: AnyCodable].self, forKey: .data) {
+            data = dataDict
+        } else {
+            data = [:]
+        }
+        
+        isRead = (try? container.decode(Bool.self, forKey: .isRead)) ?? false
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        
+        try container.encodeIfPresent(id, forKey: .id)
+        try container.encode(timestamp, forKey: .timestamp)
+        try container.encodeIfPresent(source, forKey: .source)
+        try container.encodeIfPresent(area, forKey: .area)
+        try container.encodeIfPresent(areaDisplay, forKey: .areaDisplay)
+        try container.encodeIfPresent(type, forKey: .type)
+        try container.encodeIfPresent(typeDisplay, forKey: .typeDisplay)
+        try container.encodeIfPresent(groupId, forKey: .groupId)
+        try container.encodeIfPresent(vehicleNumber, forKey: .vehicleTransporter)
+        try container.encodeIfPresent(vehicleTransporter, forKey: .vehicleTransporter)
+        try container.encode(data, forKey: .data)
+        try container.encode(isRead, forKey: .isRead)
+    }
+    
+    // Manual initializer for creating events programmatically
+    init(id: String?, timestamp: Int64, source: String?, area: String?, 
+         areaDisplay: String?, type: String?, typeDisplay: String?, 
+         groupId: String?, vehicleNumber: String?, vehicleTransporter: String?,
+         data: [String: AnyCodable], isRead: Bool = false) {
+        self.id = id
+        self.timestamp = timestamp
+        self.source = source
+        self.area = area
+        self.areaDisplay = areaDisplay
+        self.type = type
+        self.typeDisplay = typeDisplay
+        self.groupId = groupId
+        self.vehicleNumber = vehicleNumber
+        self.vehicleTransporter = vehicleTransporter
+        self.data = data
+        self.isRead = isRead
+    }
+    
     // Computed properties
     var title: String {
         return typeDisplay ?? type ?? "Alert"
@@ -28,7 +94,6 @@ struct Event: Identifiable, Codable, Equatable {
         return location
     }
     
-    // ✅ FIXED: Added channelName computed property
     var channelName: String? {
         guard let area = area, let type = type else { return nil }
         return "\(area)_\(type)"
@@ -198,7 +263,7 @@ struct AuthResponse: Codable {
     let user: User
 }
 
-// MARK: - AnyCodable Helper
+// MARK: - AnyCodable Helper (FIXED VERSION)
 
 struct AnyCodable: Codable {
     let value: Any
@@ -208,33 +273,65 @@ struct AnyCodable: Codable {
     }
     
     var stringValue: String? {
-        return value as? String
+        if let str = value as? String {
+            return str
+        }
+        if let num = value as? NSNumber {
+            return num.stringValue
+        }
+        return nil
     }
     
     var intValue: Int? {
-        return value as? Int
+        if let int = value as? Int {
+            return int
+        }
+        if let str = value as? String, let int = Int(str) {
+            return int
+        }
+        return nil
     }
     
     var int64Value: Int64? {
+        if let int64 = value as? Int64 {
+            return int64
+        }
         if let int = value as? Int {
             return Int64(int)
         }
-        return value as? Int64
+        if let str = value as? String, let int64 = Int64(str) {
+            return int64
+        }
+        return nil
     }
     
     var doubleValue: Double? {
         if let double = value as? Double {
             return double
-        } else if let int = value as? Int {
+        }
+        if let int = value as? Int {
             return Double(int)
-        } else if let float = value as? Float {
+        }
+        if let float = value as? Float {
             return Double(float)
+        }
+        if let str = value as? String, let double = Double(str) {
+            return double
         }
         return nil
     }
     
     var boolValue: Bool? {
-        return value as? Bool
+        if let bool = value as? Bool {
+            return bool
+        }
+        if let int = value as? Int {
+            return int != 0
+        }
+        if let str = value as? String {
+            return str.lowercased() == "true" || str == "1"
+        }
+        return nil
     }
     
     var arrayValue: [Any]? {
@@ -251,7 +348,10 @@ struct AnyCodable: Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         
-        if let bool = try? container.decode(Bool.self) {
+        // Try to decode in order of specificity
+        if container.decodeNil() {
+            value = NSNull()
+        } else if let bool = try? container.decode(Bool.self) {
             value = bool
         } else if let int = try? container.decode(Int.self) {
             value = int
@@ -265,8 +365,6 @@ struct AnyCodable: Codable {
             value = array.map { $0.value }
         } else if let dict = try? container.decode([String: AnyCodable].self) {
             value = dict.mapValues { $0.value }
-        } else if container.decodeNil() {
-            value = NSNull()
         } else {
             throw DecodingError.dataCorruptedError(
                 in: container,
@@ -279,6 +377,8 @@ struct AnyCodable: Codable {
         var container = encoder.singleValueContainer()
         
         switch value {
+        case is NSNull:
+            try container.encodeNil()
         case let bool as Bool:
             try container.encode(bool)
         case let int as Int:
@@ -295,8 +395,6 @@ struct AnyCodable: Codable {
         case let dict as [String: Any]:
             let codableDict = dict.mapValues { AnyCodable($0) }
             try container.encode(codableDict)
-        case is NSNull:
-            try container.encodeNil()
         default:
             let context = EncodingError.Context(
                 codingPath: container.codingPath,
