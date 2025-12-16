@@ -1,261 +1,297 @@
 import SwiftUI
 
 struct DebugView: View {
-    @State private var logContents = ""
-    @State private var showShareSheet = false
-    @State private var autoRefresh = false
-    @State private var refreshTimer: Timer?
-    
-    private let logger = DebugLogger.shared
+    @StateObject private var webSocketService = WebSocketService.shared
+    @StateObject private var subscriptionManager = SubscriptionManager.shared
+    @State private var logs: [String] = []
+    @State private var autoRefresh = true
     
     var body: some View {
         NavigationView {
-            VStack(spacing: 0) {
-                // Controls
-                HStack(spacing: 12) {
-                    Button(action: refreshLogs) {
-                        HStack {
-                            Image(systemName: "arrow.clockwise")
-                            Text("Refresh")
-                        }
-                        .font(.caption)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(8)
+            List {
+                // Connection Section
+                Section(header: Text("WebSocket Status")) {
+                    HStack {
+                        Text("Connected")
+                        Spacer()
+                        Circle()
+                            .fill(webSocketService.isConnected ? Color.green : Color.red)
+                            .frame(width: 12, height: 12)
+                        Text(webSocketService.isConnected ? "Yes" : "No")
+                            .foregroundColor(webSocketService.isConnected ? .green : .red)
                     }
                     
-                    Toggle("Auto", isOn: $autoRefresh)
-                        .font(.caption)
-                        .frame(width: 80)
-                    
-                    Button(action: clearLogs) {
-                        HStack {
-                            Image(systemName: "trash")
-                            Text("Clear")
-                        }
-                        .font(.caption)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.red)
-                        .foregroundColor(.white)
-                        .cornerRadius(8)
-                    }
-                    
-                    Button(action: { showShareSheet = true }) {
-                        HStack {
-                            Image(systemName: "square.and.arrow.up")
-                            Text("Share")
-                        }
-                        .font(.caption)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.green)
-                        .foregroundColor(.white)
-                        .cornerRadius(8)
-                    }
-                }
-                .padding()
-                .background(Color(.systemGray6))
-                
-                // Log file path
-                if let url = logger.getLogFileURL() {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Log File Location:")
-                            .font(.caption)
+                    HStack {
+                        Text("Status")
+                        Spacer()
+                        Text(webSocketService.connectionStatus)
                             .foregroundColor(.secondary)
-                        Text(url.path)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(.blue)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .background(Color(.systemBackground))
+                    
+                    Button(webSocketService.isConnected ? "Disconnect" : "Connect") {
+                        if webSocketService.isConnected {
+                            webSocketService.disconnect()
+                        } else {
+                            webSocketService.connect()
+                        }
+                    }
                 }
                 
-                // Quick Actions - iOS 14 compatible button styling
-                HStack(spacing: 8) {
-                    Button("Dump Channels") {
-                        logger.logChannelEvents()
-                        refreshLogs()
-                    }
-                    .font(.caption)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color(.systemGray5))
-                    .foregroundColor(.primary)
-                    .cornerRadius(6)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color(.systemGray3), lineWidth: 1)
-                    )
-                    
-                    Button("WS Status") {
-                        logger.logWebSocketStatus()
-                        refreshLogs()
-                    }
-                    .font(.caption)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color(.systemGray5))
-                    .foregroundColor(.primary)
-                    .cornerRadius(6)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color(.systemGray3), lineWidth: 1)
-                    )
-                    
-                    Button("Test Event") {
-                        testEventStorage()
-                    }
-                    .font(.caption)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color(.systemGray5))
-                    .foregroundColor(.primary)
-                    .cornerRadius(6)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color(.systemGray3), lineWidth: 1)
-                    )
+                // Event Stats
+                Section(header: Text("Event Statistics")) {
+                    StatRow(label: "Received", value: "\(webSocketService.receivedCount)")
+                    StatRow(label: "Processed", value: "\(webSocketService.processedCount)")
+                    StatRow(label: "Dropped", value: "\(webSocketService.droppedCount)")
+                    StatRow(label: "Errors", value: "\(webSocketService.errorCount)")
+                    StatRow(label: "ACKed", value: "\(webSocketService.ackedCount)")
                 }
-                .padding(.horizontal)
-                .padding(.bottom, 8)
                 
-                Divider()
+                // Subscription Stats
+                Section(header: Text("Subscriptions")) {
+                    StatRow(label: "Channels", value: "\(subscriptionManager.subscribedChannels.count)")
+                    StatRow(label: "Total Events", value: "\(subscriptionManager.getTotalEventCount())")
+                    
+                    ForEach(subscriptionManager.subscribedChannels) { channel in
+                        let eventCount = subscriptionManager.getEventCount(channelId: channel.id)
+                        let unreadCount = subscriptionManager.getUnreadCount(channelId: channel.id)
+                        
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(channel.areaDisplay) - \(channel.eventTypeDisplay)")
+                                .font(.subheadline)
+                            HStack {
+                                Text("Events: \(eventCount)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Text("Unread: \(unreadCount)")
+                                    .font(.caption)
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
                 
-                // Log contents
-                ScrollView {
-                    ScrollViewReader { proxy in
-                        Text(logContents)
-                            .font(.system(size: 10, design: .monospaced))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding()
-                            .id("logBottom")
-                            .onChange(of: logContents) { _ in
-                                if autoRefresh {
-                                    withAnimation {
-                                        proxy.scrollTo("logBottom", anchor: .bottom)
-                                    }
+                // Sync State
+                Section(header: Text("Sync State")) {
+                    let states = ChannelSyncState.shared.getAllSyncStates()
+                    StatRow(label: "Synced Channels", value: "\(states.count)")
+                    
+                    ForEach(Array(states.keys.sorted()), id: \.self) { channelId in
+                        if let state = states[channelId] {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(channelId)
+                                    .font(.caption)
+                                    .fontWeight(.semibold)
+                                HStack {
+                                    Text("Seq: \(state.highestSeq)")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    Spacer()
+                                    Text("Total: \(state.totalReceived)")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
                                 }
                             }
+                        }
                     }
                 }
-                .background(Color(.systemBackground))
-            }
-            .navigationTitle("Debug Logs")
-            .navigationBarTitleDisplayMode(.inline)
-            .onAppear {
-                refreshLogs()
-                if autoRefresh {
-                    startAutoRefresh()
+                
+                // Actions
+                Section(header: Text("Actions")) {
+                    Button("Force Refresh") {
+                        subscriptionManager.forceSave()
+                        ChannelSyncState.shared.forceSave()
+                    }
+                    
+                    Button("Clear All Data") {
+                        clearAllData()
+                    }
+                    .foregroundColor(.red)
+                    
+                    Button("Test Notification") {
+                        testNotification()
+                    }
+                }
+                
+                // Logs
+                Section(header: HStack {
+                    Text("Recent Logs")
+                    Spacer()
+                    Toggle("Auto Refresh", isOn: $autoRefresh)
+                        .labelsHidden()
+                }) {
+                    ForEach(logs.suffix(20).reversed(), id: \.self) { log in
+                        Text(log)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
-            .onDisappear {
-                stopAutoRefresh()
-            }
-            .onChange(of: autoRefresh) { enabled in
-                if enabled {
-                    startAutoRefresh()
-                } else {
-                    stopAutoRefresh()
+            .navigationTitle("Debug Info")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Export Logs") {
+                        exportLogs()
+                    }
                 }
             }
-            .sheet(isPresented: $showShareSheet) {
-                if let url = logger.shareLogs() {
-                    ShareSheet(items: [url])
-                }
+        }
+        .onAppear {
+            loadLogs()
+            if autoRefresh {
+                startAutoRefresh()
             }
         }
     }
     
-    private func refreshLogs() {
-        logContents = logger.getLogContents()
-    }
-    
-    private func clearLogs() {
-        logger.clearLogs()
-        refreshLogs()
+    private func loadLogs() {
+        // Get logs from DebugLogger
+        logs = DebugLogger.shared.getAllLogs()
     }
     
     private func startAutoRefresh() {
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
-            refreshLogs()
+        Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
+            if autoRefresh {
+                loadLogs()
+            }
         }
     }
     
-    private func stopAutoRefresh() {
-        refreshTimer?.invalidate()
-        refreshTimer = nil
+    private func clearAllData() {
+        // Clear all stored data
+        UserDefaults.standard.removeObject(forKey: "subscribed_channels")
+        UserDefaults.standard.removeObject(forKey: "channel_events")
+        UserDefaults.standard.removeObject(forKey: "unread_counts")
+        
+        ChannelSyncState.shared.clearAll()
+        
+        // Reconnect
+        webSocketService.disconnect()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            webSocketService.connect()
+        }
     }
     
-    private func testEventStorage() {
-        logger.log("TEST", "=== TESTING EVENT STORAGE ===")
-        
-        // Create a test event
-        let testEvent = Event(
-            id: "test-\(UUID().uuidString)",
-            timestamp: Int64(Date().timeIntervalSince1970),
-            source: "test",
-            area: "giridih",
-            areaDisplay: "Giridih",
-            type: "id",
-            typeDisplay: "Intrusion Detection",
-            groupId: nil,
-            vehicleNumber: nil,
-            vehicleTransporter: nil,
-            data: [
-                "location": AnyCodable("Test Location"),
-                "description": AnyCodable("Test event for debugging")
-            ],
-            isRead: false
-        )
-        
-        logger.logEvent(testEvent, action: "TEST EVENT CREATED")
-        
-        // Try to add it
-        let channelId = "giridih_id"
-        let added = SubscriptionManager.shared.addEvent(event: testEvent)
-        
-        logger.log("TEST", "Add result: \(added)")
-        
-        // Check if it's there
-        let events = SubscriptionManager.shared.getEvents(channelId: channelId)
-        logger.log("TEST", "Events in channel after add: \(events.count)")
-        
-        if let firstEvent = events.first {
-            logger.log("TEST", "First event ID: \(firstEvent.id ?? "nil")")
-        }
-        
-        // Force a notification
+    private func testNotification() {
         NotificationCenter.default.post(
             name: .newEventReceived,
             object: nil,
-            userInfo: ["event": testEvent, "channelId": channelId]
+            userInfo: [
+                "channelId": "test_channel",
+                "event": Event(
+                    id: "test_\(UUID().uuidString)",
+                    timestamp: Int64(Date().timeIntervalSince1970),
+                    source: "test",
+                    area: "test",
+                    areaDisplay: "Test Area",
+                    type: "cd",
+                    typeDisplay: "Test Event",
+                    groupId: nil,
+                    vehicleNumber: nil,
+                    vehicleTransporter: nil,
+                    data: ["location": AnyCodable("Test Location")],
+                    isRead: false
+                )
+            ]
+        )
+    }
+    
+    private func exportLogs() {
+        let logsText = logs.joined(separator: "\n")
+        let activityVC = UIActivityViewController(
+            activityItems: [logsText],
+            applicationActivities: nil
         )
         
-        logger.log("TEST", "✅ Broadcast test event notification")
-        logger.log("TEST", "=== END TEST ===")
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let window = windowScene.windows.first,
+           let rootVC = window.rootViewController {
+            rootVC.present(activityVC, animated: true)
+        }
+    }
+}
+
+struct StatRow: View {
+    let label: String
+    let value: String
+    
+    var body: some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(value)
+                .fontWeight(.semibold)
+                .foregroundColor(.blue)
+        }
+    }
+}
+
+// Debug Logger Helper
+class DebugLogger {
+    static let shared = DebugLogger()
+    
+    private var logs: [String] = []
+    private let maxLogs = 500
+    private let lock = NSLock()
+    
+    func log(_ category: String, _ message: String) {
+        lock.lock()
+        defer { lock.unlock() }
         
-        refreshLogs()
+        let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        let logMessage = "[\(timestamp)] [\(category)] \(message)"
+        
+        logs.append(logMessage)
+        
+        if logs.count > maxLogs {
+            logs.removeFirst(logs.count - maxLogs)
+        }
+        
+        print(logMessage)
     }
-}
-
-struct ShareSheet: UIViewControllerRepresentable {
-    let items: [Any]
     
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
-        return controller
+    func logError(_ category: String, _ message: String) {
+        log(category, "❌ \(message)")
     }
     
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
-}
-
-struct DebugView_Previews: PreviewProvider {
-    static var previews: some View {
-        DebugView()
+    func logWebSocket(_ message: String) {
+        log("WS", message)
+    }
+    
+    func logEvent(_ event: Event, action: String) {
+        log("EVENT", "\(action): \(event.id ?? "unknown") - \(event.title)")
+    }
+    
+    func logWebSocketStatus() {
+        let ws = WebSocketService.shared
+        log("STATUS", """
+            Connected: \(ws.isConnected)
+            Received: \(ws.receivedCount)
+            Processed: \(ws.processedCount)
+            Dropped: \(ws.droppedCount)
+            """)
+    }
+    
+    func logChannelEvents() {
+        let sm = SubscriptionManager.shared
+        log("CHANNELS", "Total events stored: \(sm.getTotalEventCount())")
+        
+        for channel in sm.subscribedChannels {
+            let count = sm.getEventCount(channelId: channel.id)
+            log("CHANNEL", "\(channel.id): \(count) events")
+        }
+    }
+    
+    func getAllLogs() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return logs
+    }
+    
+    func clearLogs() {
+        lock.lock()
+        defer { lock.unlock() }
+        logs.removeAll()
     }
 }
