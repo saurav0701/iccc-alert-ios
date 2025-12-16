@@ -39,17 +39,17 @@ struct DebugView: View {
                 
                 // Event Stats
                 Section(header: Text("Event Statistics")) {
-                    StatRow(label: "Received", value: "\(webSocketService.receivedCount)")
-                    StatRow(label: "Processed", value: "\(webSocketService.processedCount)")
-                    StatRow(label: "Dropped", value: "\(webSocketService.droppedCount)")
-                    StatRow(label: "Errors", value: "\(webSocketService.errorCount)")
-                    StatRow(label: "ACKed", value: "\(webSocketService.ackedCount)")
+                    DebugStatRow(label: "Received", value: "\(webSocketService.receivedCount)")
+                    DebugStatRow(label: "Processed", value: "\(webSocketService.processedCount)")
+                    DebugStatRow(label: "Dropped", value: "\(webSocketService.droppedCount)")
+                    DebugStatRow(label: "Errors", value: "\(webSocketService.errorCount)")
+                    DebugStatRow(label: "ACKed", value: "\(webSocketService.ackedCount)")
                 }
                 
                 // Subscription Stats
                 Section(header: Text("Subscriptions")) {
-                    StatRow(label: "Channels", value: "\(subscriptionManager.subscribedChannels.count)")
-                    StatRow(label: "Total Events", value: "\(subscriptionManager.getTotalEventCount())")
+                    DebugStatRow(label: "Channels", value: "\(subscriptionManager.subscribedChannels.count)")
+                    DebugStatRow(label: "Total Events", value: "\(subscriptionManager.getTotalEventCount())")
                     
                     ForEach(subscriptionManager.subscribedChannels) { channel in
                         let eventCount = subscriptionManager.getEventCount(channelId: channel.id)
@@ -75,7 +75,7 @@ struct DebugView: View {
                 // Sync State
                 Section(header: Text("Sync State")) {
                     let states = ChannelSyncState.shared.getAllSyncStates()
-                    StatRow(label: "Synced Channels", value: "\(states.count)")
+                    DebugStatRow(label: "Synced Channels", value: "\(states.count)")
                     
                     ForEach(Array(states.keys.sorted()), id: \.self) { channelId in
                         if let state = states[channelId] {
@@ -146,7 +146,6 @@ struct DebugView: View {
     }
     
     private func loadLogs() {
-        // Get logs from DebugLogger
         logs = DebugLogger.shared.getAllLogs()
     }
     
@@ -159,14 +158,12 @@ struct DebugView: View {
     }
     
     private func clearAllData() {
-        // Clear all stored data
         UserDefaults.standard.removeObject(forKey: "subscribed_channels")
         UserDefaults.standard.removeObject(forKey: "channel_events")
         UserDefaults.standard.removeObject(forKey: "unread_counts")
         
         ChannelSyncState.shared.clearAll()
         
-        // Reconnect
         webSocketService.disconnect()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             webSocketService.connect()
@@ -212,7 +209,8 @@ struct DebugView: View {
     }
 }
 
-struct StatRow: View {
+// Renamed to avoid conflict
+struct DebugStatRow: View {
     let label: String
     let value: String
     
@@ -224,74 +222,5 @@ struct StatRow: View {
                 .fontWeight(.semibold)
                 .foregroundColor(.blue)
         }
-    }
-}
-
-// Debug Logger Helper
-class DebugLogger {
-    static let shared = DebugLogger()
-    
-    private var logs: [String] = []
-    private let maxLogs = 500
-    private let lock = NSLock()
-    
-    func log(_ category: String, _ message: String) {
-        lock.lock()
-        defer { lock.unlock() }
-        
-        let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
-        let logMessage = "[\(timestamp)] [\(category)] \(message)"
-        
-        logs.append(logMessage)
-        
-        if logs.count > maxLogs {
-            logs.removeFirst(logs.count - maxLogs)
-        }
-        
-        print(logMessage)
-    }
-    
-    func logError(_ category: String, _ message: String) {
-        log(category, "❌ \(message)")
-    }
-    
-    func logWebSocket(_ message: String) {
-        log("WS", message)
-    }
-    
-    func logEvent(_ event: Event, action: String) {
-        log("EVENT", "\(action): \(event.id ?? "unknown") - \(event.title)")
-    }
-    
-    func logWebSocketStatus() {
-        let ws = WebSocketService.shared
-        log("STATUS", """
-            Connected: \(ws.isConnected)
-            Received: \(ws.receivedCount)
-            Processed: \(ws.processedCount)
-            Dropped: \(ws.droppedCount)
-            """)
-    }
-    
-    func logChannelEvents() {
-        let sm = SubscriptionManager.shared
-        log("CHANNELS", "Total events stored: \(sm.getTotalEventCount())")
-        
-        for channel in sm.subscribedChannels {
-            let count = sm.getEventCount(channelId: channel.id)
-            log("CHANNEL", "\(channel.id): \(count) events")
-        }
-    }
-    
-    func getAllLogs() -> [String] {
-        lock.lock()
-        defer { lock.unlock() }
-        return logs
-    }
-    
-    func clearLogs() {
-        lock.lock()
-        defer { lock.unlock() }
-        logs.removeAll()
     }
 }

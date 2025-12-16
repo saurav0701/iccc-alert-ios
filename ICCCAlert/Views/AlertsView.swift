@@ -22,10 +22,10 @@ struct AlertsView: View {
             }
         }
         
-        // Sort by most recent event
+        // Sort by most recent event - Fixed tuple access
         return groups.sorted(by: { group1, group2 in
-            let time1 = group1.events.first?.timestamp ?? 0
-            let time2 = group2.events.first?.timestamp ?? 0
+            let time1 = group1.1.first?.timestamp ?? 0  // group1.1 = events array
+            let time2 = group2.1.first?.timestamp ?? 0  // group2.1 = events array
             return time1 > time2
         })
     }
@@ -382,10 +382,10 @@ struct AlertChannelRow: View {
             
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
+                    // iOS 14 compatible bold text
                     if unreadCount > 0 {
                         Text("\(channel.areaDisplay)")
-                            .font(.headline)
-                            .fontWeight(.bold)
+                            .font(.system(size: 17, weight: .bold))
                     } else {
                         Text("\(channel.areaDisplay)")
                             .font(.headline)
@@ -401,12 +401,12 @@ struct AlertChannelRow: View {
                 }
                 
                 if let event = lastEvent {
+                    // iOS 14 compatible semibold text
                     if unreadCount > 0 {
                         Text(event.message)
-                            .font(.subheadline)
+                            .font(.system(size: 15, weight: .semibold))
                             .foregroundColor(.secondary)
                             .lineLimit(2)
-                            .fontWeight(.semibold)
                     } else {
                         Text(event.message)
                             .font(.subheadline)
