@@ -522,7 +522,7 @@ class WebSocketService: ObservableObject {
         let hasAnySyncState = ChannelSyncState.shared.getAllSyncStates().count > 0
         let resetConsumers = !hasAnySyncState
         
-        let request = SubscriptionRequestV2(
+        let request = SubscriptionRequest(
             clientId: clientId,
             filters: filters,
             syncState: syncState.isEmpty ? nil : syncState,

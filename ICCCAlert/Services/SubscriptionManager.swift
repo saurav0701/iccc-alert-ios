@@ -19,7 +19,7 @@ class SubscriptionManager: ObservableObject {
     
     private let lock = NSLock()
     private var recentEventIds: Set<String> = []
-    private var eventTimestamps: [String: TimeInterval] = []
+    private var eventTimestamps: [String: TimeInterval] = [:]
     
     private var saveTimer: Timer?
     private let saveDelay: TimeInterval = 0.5

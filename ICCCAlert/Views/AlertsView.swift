@@ -284,7 +284,7 @@ struct AlertsView: View {
         List {
             ForEach(channelGroups, id: \.channel.id) { group in
                 NavigationLink(
-                    destination: ChannelEventsView(channel: group.channel, events: group.events)
+                    destination: ChannelDetailView(channel: group.channel, events: group.events)
                 ) {
                     AlertChannelRow(
                         channel: group.channel,
