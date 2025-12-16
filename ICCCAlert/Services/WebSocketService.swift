@@ -174,18 +174,23 @@ class WebSocketService: ObservableObject {
             
             self.disconnect()
             
-            guard let url = URL(string: self.wsURL) else {
-                self.logger.logError("CONNECT", "Invalid WebSocket URL: \(self.wsURL)")
+            // ✅ Add clientId to WebSocket URL for authentication
+            let urlWithClient = "\(self.wsURL)?clientId=\(self.clientId)"
+            guard let url = URL(string: urlWithClient) else {
+                self.logger.logError("CONNECT", "Invalid WebSocket URL: \(urlWithClient)")
                 return
             }
             
-            self.logger.logWebSocket("🔌 Connecting to \(self.wsURL) with client ID: \(self.clientId)")
+            self.logger.logWebSocket("🔌 Connecting to \(urlWithClient)")
             
             DispatchQueue.main.async {
                 self.connectionStatus = "Connecting..."
             }
             
-            self.webSocketTask = self.session?.webSocketTask(with: url)
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 30
+            
+            self.webSocketTask = self.session?.webSocketTask(with: request)
             self.webSocketTask?.resume()
             
             self.isConnected = true
