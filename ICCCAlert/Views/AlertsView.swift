@@ -149,9 +149,6 @@ struct AlertsView: View {
                 }
             }
         }
-        .refreshable {
-            forceRefresh()
-        }
     }
     
     // MARK: - Event Handling
