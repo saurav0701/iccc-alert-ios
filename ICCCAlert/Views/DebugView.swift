@@ -75,27 +75,51 @@ struct DebugView: View {
                     .background(Color(.systemBackground))
                 }
                 
-                // Quick Actions
+                // Quick Actions - iOS 14 compatible button styling
                 HStack(spacing: 8) {
                     Button("Dump Channels") {
                         logger.logChannelEvents()
                         refreshLogs()
                     }
-                    .buttonStyle(.bordered)
                     .font(.caption)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color(.systemGray5))
+                    .foregroundColor(.primary)
+                    .cornerRadius(6)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color(.systemGray3), lineWidth: 1)
+                    )
                     
                     Button("WS Status") {
                         logger.logWebSocketStatus()
                         refreshLogs()
                     }
-                    .buttonStyle(.bordered)
                     .font(.caption)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color(.systemGray5))
+                    .foregroundColor(.primary)
+                    .cornerRadius(6)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color(.systemGray3), lineWidth: 1)
+                    )
                     
                     Button("Test Event") {
                         testEventStorage()
                     }
-                    .buttonStyle(.bordered)
                     .font(.caption)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color(.systemGray5))
+                    .foregroundColor(.primary)
+                    .cornerRadius(6)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color(.systemGray3), lineWidth: 1)
+                    )
                 }
                 .padding(.horizontal)
                 .padding(.bottom, 8)
