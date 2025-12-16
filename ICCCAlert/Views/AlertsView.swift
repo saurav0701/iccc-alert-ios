@@ -8,8 +8,9 @@ struct AlertsView: View {
     @State private var isInitialLoad = true
     @State private var isCatchingUp = false
     
-    // ✅ CRITICAL: Add proper notification observer cleanup
-    @State private var notificationObservers: [NSObjectProtocol] = []
+    // ✅ FIX: Proper cleanup tracking
+    @State private var eventObserver: NSObjectProtocol?
+    @State private var catchUpObserver: NSObjectProtocol?
     
     // Group events by channel
     private var channelGroups: [(channel: Channel, events: [Event])] {
@@ -329,13 +330,13 @@ struct AlertsView: View {
         }
     }
     
-    // ✅ CRITICAL FIX: Proper notification observers with cleanup
+    // ✅ FIX: Properly store and remove observers
     private func setupNotificationObservers() {
         // Remove any existing observers first
         removeNotificationObservers()
         
         // Event received observer
-        let eventObserver = NotificationCenter.default.addObserver(
+        eventObserver = NotificationCenter.default.addObserver(
             forName: .newEventReceived,
             object: nil,
             queue: .main
@@ -344,10 +345,9 @@ struct AlertsView: View {
                 self.refreshTrigger = UUID()
             }
         }
-        notificationObservers.append(eventObserver)
         
         // Catch-up complete observer
-        let catchUpObserver = NotificationCenter.default.addObserver(
+        catchUpObserver = NotificationCenter.default.addObserver(
             forName: .catchUpComplete,
             object: nil,
             queue: .main
@@ -356,16 +356,21 @@ struct AlertsView: View {
             isCatchingUp = false
             self.refreshTrigger = UUID()
         }
-        notificationObservers.append(catchUpObserver)
         
         print("📱 AlertsView: Notification observers setup complete")
     }
     
     private func removeNotificationObservers() {
-        notificationObservers.forEach { observer in
+        if let observer = eventObserver {
             NotificationCenter.default.removeObserver(observer)
+            eventObserver = nil
         }
-        notificationObservers.removeAll()
+        
+        if let observer = catchUpObserver {
+            NotificationCenter.default.removeObserver(observer)
+            catchUpObserver = nil
+        }
+        
         print("📱 AlertsView: Notification observers removed")
     }
     
