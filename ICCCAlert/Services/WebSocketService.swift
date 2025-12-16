@@ -409,52 +409,66 @@ class WebSocketService: ObservableObject {
     
     // MARK: - ACK Management
     private func sendAck(eventId: String) {
+        // ✅ FIX: Add to pending ACKs on serial queue (thread-safe, non-blocking)
         processingQueue.async { [weak self] in
             guard let self = self else { return }
             self.pendingAcks.append(eventId)
-            
-            if self.pendingAcks.count >= self.ackBatchSize {
-                self.flushAcks()
-            }
         }
     }
     
     private func flushAcks() {
-        processingQueue.async { [weak self] in
+        // ✅ FIX: Extract ACKs synchronously, send asynchronously
+        var acksToSend: [String] = []
+        
+        processingQueue.sync { [weak self] in
             guard let self = self else { return }
             guard !self.pendingAcks.isEmpty else { return }
             
-            let acksToSend = Array(self.pendingAcks.prefix(100))
-            self.pendingAcks.removeFirst(min(100, self.pendingAcks.count))
-            
-            let ackMessage: [String: Any]
-            if acksToSend.count == 1 {
-                ackMessage = [
-                    "type": "ack",
-                    "eventId": acksToSend[0],
-                    "clientId": self.clientId
-                ]
-            } else {
-                ackMessage = [
-                    "type": "batch_ack",
-                    "eventIds": acksToSend,
-                    "clientId": self.clientId
-                ]
+            let batchSize = min(50, self.pendingAcks.count)
+            acksToSend = Array(self.pendingAcks.prefix(batchSize))
+            self.pendingAcks.removeFirst(batchSize)
+        }
+        
+        guard !acksToSend.isEmpty else { return }
+        
+        let ackMessage: [String: Any]
+        if acksToSend.count == 1 {
+            ackMessage = [
+                "type": "ack",
+                "eventId": acksToSend[0],
+                "clientId": clientId
+            ]
+        } else {
+            ackMessage = [
+                "type": "batch_ack",
+                "eventIds": acksToSend,
+                "clientId": clientId
+            ]
+        }
+        
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: ackMessage),
+              let jsonString = String(data: jsonData, encoding: .utf8) else {
+            logger.logError("ACK", "Failed to encode ACK message")
+            // Re-queue if encoding fails
+            processingQueue.async { [weak self] in
+                self?.pendingAcks.insert(contentsOf: acksToSend, at: 0)
             }
-            
-            if let jsonData = try? JSONSerialization.data(withJSONObject: ackMessage),
-               let jsonString = String(data: jsonData, encoding: .utf8) {
-                self.send(message: jsonString) { [weak self] success in
-                    if success {
-                        DispatchQueue.main.async {
-                            self?.ackedCount += acksToSend.count
-                        }
-                    } else {
-                        self?.logger.logError("ACK", "Failed to send, re-queuing")
-                        self?.processingQueue.async {
-                            self?.pendingAcks.insert(contentsOf: acksToSend, at: 0)
-                        }
-                    }
+            return
+        }
+        
+        logger.logWebSocket("📤 Sending \(acksToSend.count) ACK(s)")
+        
+        send(message: jsonString) { [weak self] success in
+            if success {
+                DispatchQueue.main.async {
+                    self?.ackedCount += acksToSend.count
+                    self?.logger.logWebSocket("✅ ACK batch confirmed: \(acksToSend.count)")
+                }
+            } else {
+                // ✅ FIX: Re-queue on failure
+                self?.logger.logError("ACK", "Failed to send, re-queuing \(acksToSend.count)")
+                self?.processingQueue.async {
+                    self?.pendingAcks.insert(contentsOf: acksToSend, at: 0)
                 }
             }
         }
@@ -462,7 +476,7 @@ class WebSocketService: ObservableObject {
     
     private func startAckFlusher() {
         DispatchQueue.main.async { [weak self] in
-            self?.ackTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            self?.ackTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
                 self?.flushAcks()
             }
         }
@@ -471,7 +485,20 @@ class WebSocketService: ObservableObject {
     private func stopAckFlusher() {
         ackTimer?.invalidate()
         ackTimer = nil
+        
+        // ✅ FIX: Flush remaining ACKs on disconnect
         flushAcks()
+        
+        // Give it a moment to send
+        usleep(100000) // 100ms
+        
+        // Check if any ACKs were left unflushed
+        processingQueue.sync { [weak self] in
+            guard let self = self else { return }
+            if !self.pendingAcks.isEmpty {
+                self.logger.logWebSocket("⚠️ CRITICAL: \(self.pendingAcks.count) ACKs left unflushed on disconnect")
+            }
+        }
     }
     
     // MARK: - Subscription Management
