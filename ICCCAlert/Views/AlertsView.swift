@@ -4,24 +4,19 @@ struct AlertsView: View {
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @StateObject private var webSocketService = WebSocketService.shared
     @State private var selectedFilter: AlertFilter = .all
-    @State private var refreshID = UUID() // ✅ Force refresh trigger
+    @State private var refreshTrigger = UUID() // ✅ Force refresh mechanism
     
-    // ✅ FIXED: Listen to real-time event updates
-    private let eventPublisher = NotificationCenter.default
-        .publisher(for: .newEventReceived)
+    // ✅ CRITICAL: Direct observation of subscription manager changes
+    private var allEvents: [Event] {
+        var events: [Event] = []
+        for channel in subscriptionManager.subscribedChannels {
+            let channelEvents = subscriptionManager.getEvents(channelId: channel.id)
+            events.append(contentsOf: channelEvents)
+        }
+        return events.sorted { $0.timestamp > $1.timestamp }
+    }
     
     var filteredAlerts: [Event] {
-        // Get all events from subscribed channels
-        var allEvents: [Event] = []
-        for channel in subscriptionManager.subscribedChannels {
-            let events = subscriptionManager.getEvents(channelId: channel.id)
-            allEvents.append(contentsOf: events)
-        }
-        
-        // Sort by timestamp (newest first)
-        allEvents.sort { $0.timestamp > $1.timestamp }
-        
-        // Apply filter
         switch selectedFilter {
         case .all:
             return allEvents
@@ -66,16 +61,16 @@ struct AlertsView: View {
             }
         }
         .onAppear {
-            setupEventListeners()
+            print("📱 AlertsView: Appeared")
             connectIfNeeded()
+            setupNotificationObserver()
         }
         .onDisappear {
-            removeEventListeners()
+            print("📱 AlertsView: Disappeared")
+            removeNotificationObserver()
         }
-        // ✅ CRITICAL: Listen to real-time events
-        .onReceive(eventPublisher) { notification in
-            handleNewEvent(notification)
-        }
+        // ✅ CRITICAL: Force refresh when subscription manager updates
+        .id(refreshTrigger)
     }
     
     // MARK: - Connection Status Banner
@@ -130,6 +125,16 @@ struct AlertsView: View {
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
+            
+            if !subscriptionManager.subscribedChannels.isEmpty {
+                Button("Refresh") {
+                    forceRefresh()
+                }
+                .padding()
+                .background(Color.blue)
+                .foregroundColor(.white)
+                .cornerRadius(8)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -142,37 +147,53 @@ struct AlertsView: View {
                 AlertRowView(alert: alert) {
                     markAsRead(alert)
                 }
-                .id("\(alert.id ?? "")-\(refreshID)") // ✅ Force refresh with unique ID
             }
         }
-        .id(refreshID) // ✅ Force list refresh
+        .refreshable {
+            forceRefresh()
+        }
     }
     
     // MARK: - Event Handling
     
-    private func setupEventListeners() {
-        // Already handled by .onReceive
-        print("📱 AlertsView: Event listeners active")
+    private func setupNotificationObserver() {
+        NotificationCenter.default.addObserver(
+            forName: .newEventReceived,
+            object: nil,
+            queue: .main
+        ) { notification in
+            handleNewEvent(notification)
+        }
+        
+        print("📱 AlertsView: Notification observer setup complete")
     }
     
-    private func removeEventListeners() {
-        // Handled automatically by .onReceive
-        print("📱 AlertsView: Event listeners removed")
+    private func removeNotificationObserver() {
+        NotificationCenter.default.removeObserver(self, name: .newEventReceived, object: nil)
+        print("📱 AlertsView: Notification observer removed")
     }
     
     private func handleNewEvent(_ notification: Notification) {
-        print("📱 AlertsView: Received new event notification")
+        print("📱 AlertsView: ⚡️ NEW EVENT NOTIFICATION RECEIVED!")
         
-        // ✅ Force UI refresh with animation
-        withAnimation(.easeInOut(duration: 0.3)) {
-            refreshID = UUID()
-        }
-        
-        // Optional: Show toast or banner for new event
         if let userInfo = notification.userInfo,
-           let event = userInfo["event"] as? Event {
-            print("📱 New event: \(event.title) at \(event.location)")
+           let event = userInfo["event"] as? Event,
+           let channelId = userInfo["channelId"] as? String {
+            print("📱 AlertsView: New event: \(event.title) in channel \(channelId)")
+            print("📱 AlertsView: Current event count: \(allEvents.count)")
         }
+        
+        // ✅ CRITICAL: Force complete UI refresh
+        withAnimation(.easeInOut(duration: 0.3)) {
+            refreshTrigger = UUID()
+        }
+        
+        // Also trigger a secondary refresh after a short delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            refreshTrigger = UUID()
+        }
+        
+        print("📱 AlertsView: ✅ UI refresh triggered")
     }
     
     private func connectIfNeeded() {
@@ -184,13 +205,27 @@ struct AlertsView: View {
         }
     }
     
+    private func forceRefresh() {
+        print("📱 AlertsView: Manual refresh triggered")
+        refreshTrigger = UUID()
+        
+        // Also log current state
+        print("📱 AlertsView: Subscribed channels: \(subscriptionManager.subscribedChannels.count)")
+        print("📱 AlertsView: Total events: \(allEvents.count)")
+        
+        for channel in subscriptionManager.subscribedChannels {
+            let events = subscriptionManager.getEvents(channelId: channel.id)
+            print("📱 AlertsView: Channel \(channel.id) has \(events.count) events")
+        }
+    }
+    
     private func markAsRead(_ alert: Event) {
         guard let channelId = alert.channelName else { return }
         subscriptionManager.markAsRead(channelId: channelId)
         
-        // ✅ Force refresh
+        // Force refresh
         withAnimation {
-            refreshID = UUID()
+            refreshTrigger = UUID()
         }
     }
     
@@ -199,9 +234,9 @@ struct AlertsView: View {
             subscriptionManager.markAsRead(channelId: channel.id)
         }
         
-        // ✅ Force refresh
+        // Force refresh
         withAnimation {
-            refreshID = UUID()
+            refreshTrigger = UUID()
         }
     }
 }
