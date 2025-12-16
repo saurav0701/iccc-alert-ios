@@ -23,11 +23,11 @@ struct AlertsView: View {
         }
         
         // Sort by most recent event
-        return groups.sorted { group1, group2 in
+        return groups.sorted(by: { group1, group2 in
             let time1 = group1.events.first?.timestamp ?? 0
             let time2 = group2.events.first?.timestamp ?? 0
             return time1 > time2
-        }
+        })
     }
     
     private var hasSubscriptions: Bool {
@@ -86,19 +86,14 @@ struct AlertsView: View {
     @ViewBuilder
     private var contentView: some View {
         if isInitialLoad && !webSocketService.isConnected {
-            // Loading state
             loadingView
         } else if !hasSubscriptions {
-            // No subscriptions
             noSubscriptionsView
         } else if channelGroups.isEmpty && totalEventCount == 0 {
-            // Connected but no events yet
             waitingForEventsView
         } else if channelGroups.isEmpty {
-            // Has events but filter excluded them
             noFilteredEventsView
         } else {
-            // Show channels
             channelsList
         }
     }
@@ -172,15 +167,6 @@ struct AlertsView: View {
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
-            
-            Button("Browse Channels") {
-                // Switch to Channels tab
-                NotificationCenter.default.post(name: NSNotification.Name("SwitchToChannelsTab"), object: nil)
-            }
-            .padding()
-            .background(Color.blue)
-            .foregroundColor(.white)
-            .cornerRadius(8)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -267,7 +253,7 @@ struct AlertsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     
-    // MARK: - Channels List (Telegram-style)
+    // MARK: - Channels List
     
     private var channelsList: some View {
         List {
@@ -275,7 +261,7 @@ struct AlertsView: View {
                 NavigationLink(
                     destination: ChannelEventsView(channel: group.channel, events: group.events)
                 ) {
-                    ChannelRowView(
+                    AlertChannelRow(
                         channel: group.channel,
                         lastEvent: group.events.first,
                         unreadCount: subscriptionManager.getUnreadCount(channelId: group.channel.id)
@@ -312,7 +298,6 @@ struct AlertsView: View {
         connectIfNeeded()
         setupNotificationObserver()
         
-        // Stop showing initial load after connection attempt
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             isInitialLoad = false
         }
@@ -323,8 +308,8 @@ struct AlertsView: View {
             forName: .newEventReceived,
             object: nil,
             queue: .main
-        ) { notification in
-            handleNewEvent(notification)
+        ) { [self] notification in
+            self.handleNewEvent(notification)
         }
         
         print("📱 AlertsView: Notification observer setup complete")
@@ -345,9 +330,8 @@ struct AlertsView: View {
             print("📱 AlertsView: Current total events: \(totalEventCount)")
         }
         
-        withAnimation(.easeInOut(duration: 0.3)) {
-            refreshTrigger = UUID()
-        }
+        // Simple refresh without animation to prevent UI freeze
+        refreshTrigger = UUID()
         
         print("📱 AlertsView: ✅ UI refresh triggered")
     }
@@ -366,15 +350,13 @@ struct AlertsView: View {
             subscriptionManager.markAsRead(channelId: channel.id)
         }
         
-        withAnimation {
-            refreshTrigger = UUID()
-        }
+        refreshTrigger = UUID()
     }
 }
 
-// MARK: - Channel Row View (Telegram-style)
+// MARK: - Alert Channel Row (renamed to avoid conflict)
 
-struct ChannelRowView: View {
+struct AlertChannelRow: View {
     let channel: Channel
     let lastEvent: Event?
     let unreadCount: Int
@@ -400,9 +382,14 @@ struct ChannelRowView: View {
             
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Text("\(channel.areaDisplay)")
-                        .font(.headline)
-                        .fontWeight(unreadCount > 0 ? .bold : .regular)
+                    if unreadCount > 0 {
+                        Text("\(channel.areaDisplay)")
+                            .font(.headline)
+                            .fontWeight(.bold)
+                    } else {
+                        Text("\(channel.areaDisplay)")
+                            .font(.headline)
+                    }
                     
                     Spacer()
                     
@@ -414,11 +401,18 @@ struct ChannelRowView: View {
                 }
                 
                 if let event = lastEvent {
-                    Text(event.message)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .lineLimit(2)
-                        .fontWeight(unreadCount > 0 ? .semibold : .regular)
+                    if unreadCount > 0 {
+                        Text(event.message)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .lineLimit(2)
+                            .fontWeight(.semibold)
+                    } else {
+                        Text(event.message)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .lineLimit(2)
+                    }
                 }
                 
                 HStack {
@@ -474,7 +468,7 @@ struct ChannelRowView: View {
     }
 }
 
-// MARK: - Channel Events View (shows events for a specific channel)
+// MARK: - Channel Events View
 
 struct ChannelEventsView: View {
     let channel: Channel
@@ -502,7 +496,7 @@ struct ChannelEventsView: View {
     }
 }
 
-// MARK: - Event Card View (shows individual event with image)
+// MARK: - Event Card View
 
 struct EventCardView: View {
     let event: Event
@@ -628,31 +622,4 @@ enum AlertFilter {
     case all
     case unread
     case important
-}
-
-// Helper for hex colors
-extension Color {
-    init(hex: String) {
-        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var int: UInt64 = 0
-        Scanner(string: hex).scanHexInt64(&int)
-        let a, r, g, b: UInt64
-        switch hex.count {
-        case 3:
-            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
-        case 6:
-            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
-        case 8:
-            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
-        default:
-            (a, r, g, b) = (255, 0, 0, 0)
-        }
-        self.init(
-            .sRGB,
-            red: Double(r) / 255,
-            green: Double(g) / 255,
-            blue: Double(b) / 255,
-            opacity: Double(a) / 255
-        )
-    }
 }
