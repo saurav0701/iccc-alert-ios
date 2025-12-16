@@ -24,28 +24,32 @@ class WebSocketService: ObservableObject {
     private let maxReconnectAttempts = Int.max
     private let reconnectDelay: TimeInterval = 5.0
     
-    // Event processing
-    private let eventQueue = DispatchQueue(label: "com.iccc.eventQueue", attributes: .concurrent)
-    private let processingQueue = DispatchQueue(label: "com.iccc.processing", qos: .userInitiated)
-    private var eventBuffer: [String] = []
+    // ✅ OPTIMIZED: Background queue for event processing
+    private let processingQueue = DispatchQueue(label: "com.iccc.processing", qos: .userInitiated, attributes: .concurrent)
+    private let eventBuffer = NSMutableArray() // Thread-safe array
     private let bufferLock = NSLock()
+    
+    // ✅ NEW: Batch processing for UI updates
+    private var pendingUIUpdates = Set<String>() // channelIds
+    private var uiBatchTimer: Timer?
+    private let uiBatchDelay: TimeInterval = 0.5 // Batch UI updates every 500ms during catch-up
     
     // ACK batching
     private var pendingAcks: [String] = []
     private let ackLock = NSLock()
-    private let ackBatchSize = 50
+    private let ackBatchSize = 100 // ✅ Increased from 50
     private var ackTimer: Timer?
     
     // Ping/Pong
     private var pingTimer: Timer?
     private let pingInterval: TimeInterval = 30.0
     
-    // Catch-up monitoring
+    // ✅ OPTIMIZED: Catch-up monitoring
     private var catchUpChannels: Set<String> = []
     private var catchUpTimer: Timer?
-    private var catchUpStartTime: [String: TimeInterval] = [:]  // Track when catch-up started per channel
-    private let catchUpTimeout: TimeInterval = 60.0  // 60 second timeout per channel
-    private var lastCatchUpProgressCheck: [String: TimeInterval] = [:]
+    private let catchUpCheckInterval: TimeInterval = 3.0 // ✅ Reduced from 5s
+    private var consecutiveEmptyChecks: [String: Int] = [:]
+    private let stableEmptyThreshold = 2 // ✅ Reduced from 3
     
     // Connection state tracking
     private var lastConnectionTime: Date?
@@ -54,9 +58,10 @@ class WebSocketService: ObservableObject {
     private var hasSubscribed = false
     private var lastSubscriptionTime: TimeInterval = 0
     
-    // Event processing state
-    private var lastEventProcessedTime: TimeInterval = 0
-    private let eventProcessingTimeout: TimeInterval = 30.0
+    // ✅ NEW: Processing control
+    private var isProcessingBatch = false
+    private let maxConcurrentProcessors = 4
+    private var activeProcessors = 0
     
     // Cancellables
     private var cancellables = Set<AnyCancellable>()
@@ -120,6 +125,8 @@ class WebSocketService: ObservableObject {
         startReceiving()
         startPingPong()
         startAckFlusher()
+        startEventProcessors() // ✅ NEW: Start background processors
+        startUIBatcher() // ✅ NEW: Start UI update batcher
         startStatsLogging()
         
         // Send subscription after connection
@@ -140,6 +147,7 @@ class WebSocketService: ObservableObject {
         stopPingPong()
         stopAckFlusher()
         stopCatchUpMonitoring()
+        stopUIBatcher() // ✅ NEW
         
         logger.logWebSocket("🔌 WebSocket disconnected")
     }
@@ -155,27 +163,11 @@ class WebSocketService: ObservableObject {
             
             switch result {
             case .success(let message):
-                self.logger.log("WS_RECEIVE", "✅ Message received")
                 self.handleMessage(message)
                 self.receiveMessage()
                 
             case .failure(let error):
                 self.logger.logError("WS_RECEIVE", "❌ WebSocket error: \(error.localizedDescription)")
-                
-                // ✅ NEW: Graceful recovery during catch-up
-                let isCatchingUp = !self.catchUpChannels.isEmpty
-                if isCatchingUp {
-                    self.logger.logError("WS_RECEIVE", "❌ ERROR DURING CATCH-UP - Forcing completion and reconnect")
-                    
-                    // Force disable catch-up for all channels
-                    for channelId in self.catchUpChannels {
-                        self.logger.log("CATCHUP", "🔄 Force-disabling catch-up for \(channelId) due to connection error")
-                        ChannelSyncState.shared.disableCatchUpMode(channelId: channelId)
-                    }
-                    self.catchUpChannels.removeAll()
-                    self.stopCatchUpMonitoring()
-                }
-                
                 DispatchQueue.main.async {
                     self.isConnected = false
                     self.hasSubscribed = false
@@ -187,44 +179,64 @@ class WebSocketService: ObservableObject {
     }
     
     private func handleMessage(_ message: URLSessionWebSocketTask.Message) {
+        var text: String?
+        
         switch message {
-        case .string(let text):
-            receivedCount += 1
-            logger.log("MESSAGE", "📨 String message received (total: \(receivedCount))")
-            logger.log("MESSAGE_RAW", "Content: \(text.prefix(200))...") // Log first 200 chars
-            
-            bufferLock.lock()
-            eventBuffer.append(text)
-            bufferLock.unlock()
-            
-            processingQueue.async { [weak self] in
-                self?.processEvent(text)
-            }
-            
+        case .string(let str):
+            text = str
         case .data(let data):
-            if let text = String(data: data, encoding: .utf8) {
-                receivedCount += 1
-                logger.log("MESSAGE", "📨 Data message received (total: \(receivedCount))")
-                
-                bufferLock.lock()
-                eventBuffer.append(text)
-                bufferLock.unlock()
-                
-                processingQueue.async { [weak self] in
-                    self?.processEvent(text)
-                }
-            }
-            
+            text = String(data: data, encoding: .utf8)
         @unknown default:
             logger.logError("MESSAGE", "Unknown message type")
-            break
+            return
+        }
+        
+        guard let messageText = text else { return }
+        
+        DispatchQueue.main.async { [weak self] in
+            self?.receivedCount += 1
+        }
+        
+        // ✅ CRITICAL: Add to buffer WITHOUT blocking
+        bufferLock.lock()
+        eventBuffer.add(messageText)
+        bufferLock.unlock()
+    }
+    
+    // MARK: - ✅ NEW: Background Event Processors
+    
+    private func startEventProcessors() {
+        for i in 0..<maxConcurrentProcessors {
+            processingQueue.async { [weak self] in
+                self?.eventProcessorLoop(id: i)
+            }
+        }
+        logger.log("PROCESSORS", "Started \(maxConcurrentProcessors) background processors")
+    }
+    
+    private func eventProcessorLoop(id: Int) {
+        while isConnected {
+            autoreleasepool {
+                bufferLock.lock()
+                let text = eventBuffer.count > 0 ? eventBuffer.firstObject as? String : nil
+                if text != nil {
+                    eventBuffer.removeObject(at: 0)
+                }
+                bufferLock.unlock()
+                
+                if let messageText = text {
+                    processEvent(messageText)
+                } else {
+                    // No events, sleep briefly
+                    Thread.sleep(forTimeInterval: 0.01)
+                }
+            }
         }
     }
     
-    // MARK: - Event Processing
+    // MARK: - ✅ OPTIMIZED: Event Processing
+    
     private func processEvent(_ text: String) {
-        logger.log("PROCESS", "🔄 Processing event...")
-        
         // Check for subscription confirmation
         if text.contains("\"status\":\"subscribed\"") || text.contains("\"status\":\"ok\"") {
             DispatchQueue.main.async { [weak self] in
@@ -234,61 +246,44 @@ class WebSocketService: ObservableObject {
             return
         }
         
-        // ✅ NEW: Check for catch-up completion signal
-        if text.contains("\"type\":\"sync_complete\"") || text.contains("\"catchUpComplete\":true") {
-            if let data = text.data(using: .utf8),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let channelId = json["channelId"] as? String {
-                logger.log("CATCHUP", "🎉 Server signaled catch-up complete for \(channelId)")
-                ChannelSyncState.shared.disableCatchUpMode(channelId: channelId)
-                catchUpChannels.remove(channelId)
-                catchUpStartTime.removeValue(forKey: channelId)
-                return
-            }
-        }
-        
         // Skip error messages
         if text.contains("\"error\"") {
-            DispatchQueue.main.async {
-                self.errorCount += 1
+            DispatchQueue.main.async { [weak self] in
+                self?.errorCount += 1
             }
-            logger.logError("PROCESS", "❌ Received error message: \(text)")
             return
         }
         
         guard let data = text.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            logger.logError("PROCESS", "Failed to parse JSON")
-            DispatchQueue.main.async { self.droppedCount += 1 }
+            DispatchQueue.main.async { [weak self] in
+                self?.droppedCount += 1
+            }
             return
         }
         
         guard let eventId = json["id"] as? String,
               let area = json["area"] as? String,
               let type = json["type"] as? String else {
-            logger.logError("PROCESS", "Missing required fields: id/area/type")
-            DispatchQueue.main.async { self.droppedCount += 1 }
+            DispatchQueue.main.async { [weak self] in
+                self?.droppedCount += 1
+            }
             return
         }
         
         let channelId = "\(area)_\(type)"
-        logger.log("PROCESS", "Event: id=\(eventId), channel=\(channelId)")
-        
-        // Update last event processed time
-        lastEventProcessedTime = Date().timeIntervalSince1970
         
         let eventData = json["data"] as? [String: Any] ?? [:]
         let requireAck = eventData["_requireAck"] as? Bool ?? true
         
         // Check if subscribed
         guard SubscriptionManager.shared.isSubscribed(channelId: channelId) else {
-            logger.log("PROCESS", "⏭️ Not subscribed to \(channelId), dropping")
-            DispatchQueue.main.async { self.droppedCount += 1 }
+            DispatchQueue.main.async { [weak self] in
+                self?.droppedCount += 1
+            }
             if requireAck { sendAck(eventId: eventId) }
             return
         }
-        
-        logger.log("PROCESS", "✅ Subscribed to \(channelId), processing...")
         
         // Get sequence number
         let sequence: Int64
@@ -308,7 +303,7 @@ class WebSocketService: ObservableObject {
         
         let timestamp = json["timestamp"] as? Int64 ?? 0
         
-        // Record event in sync state
+        // ✅ CRITICAL: Record in sync state FIRST (thread-safe)
         let isNew = ChannelSyncState.shared.recordEventReceived(
             channelId: channelId,
             eventId: eventId,
@@ -316,61 +311,98 @@ class WebSocketService: ObservableObject {
             seq: sequence
         )
         
-        logger.log("SYNC", "Sync check: isNew=\(isNew), seq=\(sequence)")
-        
         // Duplicate check
         if !isNew && sequence > 0 {
-            logger.log("PROCESS", "⏭️ Duplicate event \(eventId) (seq=\(sequence))")
-            DispatchQueue.main.async { self.droppedCount += 1 }
+            DispatchQueue.main.async { [weak self] in
+                self?.droppedCount += 1
+            }
             if requireAck { sendAck(eventId: eventId) }
             return
         }
         
         // Convert to Event object
         guard let event = parseEvent(json: json) else {
-            logger.logError("PROCESS", "Failed to parse event object")
-            DispatchQueue.main.async { self.droppedCount += 1 }
+            DispatchQueue.main.async { [weak self] in
+                self?.droppedCount += 1
+            }
             return
         }
         
-        logger.logEvent(event, action: "PARSED EVENT")
-        
-        // ✅ CRITICAL: Add to subscription manager
+        // ✅ CRITICAL: Add to storage (thread-safe)
         let added = SubscriptionManager.shared.addEvent(event: event)
         
-        logger.log("STORAGE", "Storage result: added=\(added)")
-        
         if added {
-            DispatchQueue.main.async {
-                self.processedCount += 1
-                self.logger.log("SUCCESS", "✅ Event \(eventId) processed successfully (total: \(self.processedCount))")
-                self.sendLocalNotification(for: event, channelId: channelId)
+            DispatchQueue.main.async { [weak self] in
+                self?.processedCount += 1
             }
             
-            // ✅ CRITICAL: Post notification for UI update
-            logger.log("BROADCAST", "📡 Broadcasting event to UI...")
-            NotificationCenter.default.post(
-                name: .newEventReceived,
-                object: nil,
-                userInfo: ["event": event, "channelId": channelId]
-            )
+            // ✅ OPTIMIZED: Queue UI update (don't block)
+            let inCatchUpMode = ChannelSyncState.shared.isInCatchUpMode(channelId: channelId)
             
-            logger.log("BROADCAST", "✅ Event broadcast complete")
-            
+            if inCatchUpMode {
+                // During catch-up: batch UI updates
+                queueUIUpdate(for: channelId)
+            } else {
+                // Live mode: immediate UI update
+                DispatchQueue.main.async { [weak self] in
+                    self?.broadcastEvent(event, channelId: channelId)
+                    self?.sendLocalNotification(for: event, channelId: channelId)
+                }
+            }
         } else {
-            logger.log("STORAGE", "⚠️ Event \(eventId) was NOT added (duplicate?)")
-            DispatchQueue.main.async { self.droppedCount += 1 }
+            DispatchQueue.main.async { [weak self] in
+                self?.droppedCount += 1
+            }
         }
         
         // Send ACK
         if requireAck {
             sendAck(eventId: eventId)
         }
-        
-        // Log current state
+    }
+    
+    // ✅ NEW: Queue UI Update for Batching
+    private func queueUIUpdate(for channelId: String) {
         DispatchQueue.main.async { [weak self] in
-            self?.logger.logChannelEvents()
+            self?.pendingUIUpdates.insert(channelId)
         }
+    }
+    
+    // ✅ NEW: UI Update Batcher
+    private func startUIBatcher() {
+        DispatchQueue.main.async { [weak self] in
+            self?.uiBatchTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+                self?.flushUIUpdates()
+            }
+        }
+    }
+    
+    private func stopUIBatcher() {
+        uiBatchTimer?.invalidate()
+        uiBatchTimer = nil
+        flushUIUpdates() // Final flush
+    }
+    
+    private func flushUIUpdates() {
+        guard !pendingUIUpdates.isEmpty else { return }
+        
+        let channelsToUpdate = pendingUIUpdates
+        pendingUIUpdates.removeAll()
+        
+        // Single UI update for multiple channels
+        for channelId in channelsToUpdate {
+            if let lastEvent = SubscriptionManager.shared.getLastEvent(channelId: channelId) {
+                broadcastEvent(lastEvent, channelId: channelId)
+            }
+        }
+    }
+    
+    private func broadcastEvent(_ event: Event, channelId: String) {
+        NotificationCenter.default.post(
+            name: .newEventReceived,
+            object: nil,
+            userInfo: ["event": event, "channelId": channelId]
+        )
     }
     
     private func sendLocalNotification(for event: Event, channelId: String) {
@@ -389,54 +421,21 @@ class WebSocketService: ObservableObject {
         UNUserNotificationCenter.current().add(request) { error in
             if let error = error {
                 self.logger.logError("NOTIFICATION", "❌ Failed to send: \(error.localizedDescription)")
-            } else {
-                self.logger.log("NOTIFICATION", "✅ Notification sent for \(event.id ?? "?")")
             }
         }
     }
     
-   // Replace the parseEvent function in WebSocketService.swift with this:
-
-private func parseEvent(json: [String: Any]) -> Event? {
-    do {
-        let jsonData = try JSONSerialization.data(withJSONObject: json)
-        
-        // Log the raw JSON for debugging
-        if let jsonString = String(data: jsonData, encoding: .utf8) {
-            logger.log("PARSE", "Attempting to parse JSON: \(jsonString.prefix(500))")
+    private func parseEvent(json: [String: Any]) -> Event? {
+        do {
+            let jsonData = try JSONSerialization.data(withJSONObject: json)
+            let decoder = JSONDecoder()
+            let event = try decoder.decode(Event.self, from: jsonData)
+            return event
+        } catch {
+            logger.logError("PARSE", "Failed to parse event: \(error.localizedDescription)")
+            return nil
         }
-        
-        let decoder = JSONDecoder()
-        let event = try decoder.decode(Event.self, from: jsonData)
-        
-        logger.log("PARSE", "✅ Successfully parsed event: \(event.id ?? "nil")")
-        return event
-        
-    } catch let DecodingError.keyNotFound(key, context) {
-        logger.logError("PARSE", "Missing key '\(key.stringValue)' - \(context.debugDescription)")
-        logger.logError("PARSE", "Coding path: \(context.codingPath)")
-        return nil
-        
-    } catch let DecodingError.typeMismatch(type, context) {
-        logger.logError("PARSE", "Type mismatch for type '\(type)' - \(context.debugDescription)")
-        logger.logError("PARSE", "Coding path: \(context.codingPath)")
-        return nil
-        
-    } catch let DecodingError.valueNotFound(type, context) {
-        logger.logError("PARSE", "Value not found for type '\(type)' - \(context.debugDescription)")
-        logger.logError("PARSE", "Coding path: \(context.codingPath)")
-        return nil
-        
-    } catch let DecodingError.dataCorrupted(context) {
-        logger.logError("PARSE", "Data corrupted - \(context.debugDescription)")
-        logger.logError("PARSE", "Coding path: \(context.codingPath)")
-        return nil
-        
-    } catch {
-        logger.logError("PARSE", "Unknown error: \(error.localizedDescription)")
-        return nil
     }
-}
     
     // MARK: - ACK Management
     private func sendAck(eventId: String) {
@@ -483,7 +482,7 @@ private func parseEvent(json: [String: Any]) -> Event? {
                     DispatchQueue.main.async {
                         self?.ackedCount += acksToSend.count
                     }
-                    if acksToSend.count > 10 {
+                    if acksToSend.count > 50 {
                         self?.logger.log("ACK", "✅ Sent ACK for \(acksToSend.count) events")
                     }
                 } else {
@@ -537,14 +536,11 @@ private func parseEvent(json: [String: Any]) -> Event? {
             SubscriptionFilter(area: sub.area, eventType: sub.eventType)
         }
         
-        // Enable catch-up mode and track start time
-        let catchUpStartTime_now = Date().timeIntervalSince1970
+        // ✅ Enable catch-up mode for ALL channels
         subscriptions.forEach { sub in
             let channelId = "\(sub.area)_\(sub.eventType)"
             ChannelSyncState.shared.enableCatchUpMode(channelId: channelId)
             catchUpChannels.insert(channelId)
-            self.catchUpStartTime[channelId] = catchUpStartTime_now
-            logger.log("SUBSCRIPTION", "🔄 Enabled catch-up for \(channelId)")
         }
         
         var syncState: [String: SyncStateInfo] = [:]
@@ -588,7 +584,6 @@ private func parseEvent(json: [String: Any]) -> Event? {
             if success {
                 self?.hasSubscribed = true
                 self?.lastSubscriptionTime = Date().timeIntervalSince1970
-                self?.lastEventProcessedTime = Date().timeIntervalSince1970
                 self?.logger.log("SUBSCRIPTION", "✅ Subscription sent successfully")
                 self?.startCatchUpMonitoring()
             } else {
@@ -597,12 +592,13 @@ private func parseEvent(json: [String: Any]) -> Event? {
         }
     }
     
-    // MARK: - Catch-up Monitoring
+    // MARK: - ✅ OPTIMIZED: Catch-up Monitoring
+    
     private func startCatchUpMonitoring() {
         stopCatchUpMonitoring()
         
         DispatchQueue.main.async { [weak self] in
-            self?.catchUpTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            self?.catchUpTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
                 self?.checkCatchUpProgress()
             }
         }
@@ -611,64 +607,55 @@ private func parseEvent(json: [String: Any]) -> Event? {
     private func stopCatchUpMonitoring() {
         catchUpTimer?.invalidate()
         catchUpTimer = nil
-        catchUpStartTime.removeAll()
-        lastCatchUpProgressCheck.removeAll()
     }
     
     private func checkCatchUpProgress() {
-        let now = Date().timeIntervalSince1970
         var allComplete = true
-        var channelsToCheck = Array(catchUpChannels)
         
-        for channelId in channelsToCheck {
-            // Check for timeout
-            if let startTime = catchUpStartTime[channelId] {
-                let elapsed = now - startTime
-                
-                if elapsed > catchUpTimeout {
-                    logger.logError("CATCHUP", "❌ TIMEOUT for \(channelId) after \(Int(elapsed))s - Force disabling catch-up")
-                    ChannelSyncState.shared.disableCatchUpMode(channelId: channelId)
-                    catchUpChannels.remove(channelId)
-                    catchUpStartTime.removeValue(forKey: channelId)
-                    continue
-                }
-            }
-            
-            // Check if still in catch-up mode
+        for channelId in catchUpChannels {
             if ChannelSyncState.shared.isInCatchUpMode(channelId: channelId) {
                 let progress = ChannelSyncState.shared.getCatchUpProgress(channelId: channelId)
                 
-                // Log progress at reduced frequency
-                let lastCheck = lastCatchUpProgressCheck[channelId] ?? 0
-                if now - lastCheck > 5.0 {  // Log every 5 seconds
-                    logger.log("CATCHUP", "⏳ \(channelId): \(progress) events tracked")
-                    lastCatchUpProgressCheck[channelId] = now
-                }
+                bufferLock.lock()
+                let bufferEmpty = eventBuffer.count == 0
+                bufferLock.unlock()
                 
-                // ✅ NEW: Check if no events received for a while - indicates catch-up complete
-                let timeSinceLastEvent = now - lastEventProcessedTime
-                if progress > 0 && timeSinceLastEvent > eventProcessingTimeout {
-                    logger.log("CATCHUP", "⏳ \(channelId): No new events for \(Int(timeSinceLastEvent))s, assuming catch-up complete")
-                    ChannelSyncState.shared.disableCatchUpMode(channelId: channelId)
-                    catchUpChannels.remove(channelId)
-                    catchUpStartTime.removeValue(forKey: channelId)
+                if progress > 0 && bufferEmpty {
+                    let count = (consecutiveEmptyChecks[channelId] ?? 0) + 1
+                    consecutiveEmptyChecks[channelId] = count
+                    
+                    if count >= stableEmptyThreshold {
+                        // ✅ Catch-up complete!
+                        ChannelSyncState.shared.disableCatchUpMode(channelId: channelId)
+                        catchUpChannels.remove(channelId)
+                        consecutiveEmptyChecks.removeValue(forKey: channelId)
+                        logger.log("CATCHUP", "✅ Complete for \(channelId) (\(progress) events)")
+                        
+                        // Final UI refresh for this channel
+                        if let lastEvent = SubscriptionManager.shared.getLastEvent(channelId: channelId) {
+                            DispatchQueue.main.async { [weak self] in
+                                self?.broadcastEvent(lastEvent, channelId: channelId)
+                            }
+                        }
+                    } else {
+                        allComplete = false
+                    }
                 } else {
+                    consecutiveEmptyChecks[channelId] = 0
                     allComplete = false
                 }
-            } else {
-                // Not in catch-up mode anymore
-                logger.log("CATCHUP", "✅ \(channelId) exited catch-up mode")
-                catchUpChannels.remove(channelId)
-                catchUpStartTime.removeValue(forKey: channelId)
             }
         }
         
-        if allComplete && !catchUpChannels.isEmpty {
+        if allComplete && catchUpChannels.isEmpty {
             logger.log("CATCHUP", "🎉 ALL CHANNELS CAUGHT UP")
             stopCatchUpMonitoring()
-        } else if catchUpChannels.isEmpty {
-            logger.log("CATCHUP", "✅ Catch-up monitoring complete")
-            stopCatchUpMonitoring()
+            
+            // Final UI update
+            DispatchQueue.main.async { [weak self] in
+                self?.flushUIUpdates()
+                NotificationCenter.default.post(name: .catchUpComplete, object: nil)
+            }
         }
     }
     
@@ -742,8 +729,15 @@ private func parseEvent(json: [String: Any]) -> Event? {
     private func logStats() {
         guard isConnected else { return }
         
-        logger.logWebSocketStatus()
-        logger.logChannelEvents()
+        bufferLock.lock()
+        let bufferCount = eventBuffer.count
+        bufferLock.unlock()
+        
+        logger.log("STATS", """
+            Received: \(receivedCount), Buffered: \(bufferCount), 
+            Processed: \(processedCount), Dropped: \(droppedCount), 
+            Pending ACKs: \(pendingAcks.count)
+            """)
         
         DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 10.0) { [weak self] in
             self?.logStats()
@@ -755,4 +749,5 @@ private func parseEvent(json: [String: Any]) -> Event? {
 extension Notification.Name {
     static let newEventReceived = Notification.Name("newEventReceived")
     static let subscriptionsUpdated = Notification.Name("subscriptionsUpdated")
+    static let catchUpComplete = Notification.Name("catchUpComplete") // ✅ NEW
 }

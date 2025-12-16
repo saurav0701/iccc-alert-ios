@@ -6,6 +6,7 @@ struct AlertsView: View {
     @State private var selectedFilter: AlertFilter = .all
     @State private var refreshTrigger = UUID()
     @State private var isInitialLoad = true
+    @State private var isCatchingUp = false // ✅ NEW: Track catch-up state
     
     // Group events by channel
     private var channelGroups: [(channel: Channel, events: [Event])] {
@@ -22,10 +23,10 @@ struct AlertsView: View {
             }
         }
         
-        // Sort by most recent event - Fixed tuple access
+        // Sort by most recent event
         return groups.sorted(by: { group1, group2 in
-            let time1 = group1.1.first?.timestamp ?? 0  // group1.1 = events array
-            let time2 = group2.1.first?.timestamp ?? 0  // group2.1 = events array
+            let time1 = group1.1.first?.timestamp ?? 0
+            let time2 = group2.1.first?.timestamp ?? 0
             return time1 > time2
         })
     }
@@ -52,6 +53,11 @@ struct AlertsView: View {
                     .padding()
                 }
                 
+                // ✅ NEW: Catch-up Banner
+                if isCatchingUp {
+                    catchUpBanner
+                }
+                
                 // Connection Status
                 connectionStatusBanner
                 
@@ -76,9 +82,28 @@ struct AlertsView: View {
         }
         .onDisappear {
             print("📱 AlertsView: Disappeared")
-            removeNotificationObserver()
+            removeNotificationObservers()
         }
         .id(refreshTrigger)
+    }
+    
+    // MARK: - ✅ NEW: Catch-up Banner
+    
+    private var catchUpBanner: some View {
+        HStack {
+            ProgressView()
+                .scaleEffect(0.8)
+            Text("Syncing events...")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Spacer()
+            Text("\(totalEventCount) received")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(Color.blue.opacity(0.1))
     }
     
     // MARK: - Content View
@@ -296,44 +321,56 @@ struct AlertsView: View {
     
     private func handleViewAppear() {
         connectIfNeeded()
-        setupNotificationObserver()
+        setupNotificationObservers()
+        
+        // Check if any channels are in catch-up mode
+        updateCatchUpState()
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             isInitialLoad = false
         }
     }
     
-    private func setupNotificationObserver() {
+    // ✅ OPTIMIZED: Setup notification observers
+    private func setupNotificationObservers() {
+        // Event received observer
         NotificationCenter.default.addObserver(
             forName: .newEventReceived,
             object: nil,
             queue: .main
         ) { [self] notification in
-            self.handleNewEvent(notification)
+            // ✅ Throttled refresh - only update if not catching up
+            if !isCatchingUp {
+                self.refreshTrigger = UUID()
+            }
         }
         
-        print("📱 AlertsView: Notification observer setup complete")
+        // ✅ NEW: Catch-up complete observer
+        NotificationCenter.default.addObserver(
+            forName: .catchUpComplete,
+            object: nil,
+            queue: .main
+        ) { [self] _ in
+            print("📱 AlertsView: Catch-up complete!")
+            isCatchingUp = false
+            self.refreshTrigger = UUID() // Final refresh
+        }
+        
+        print("📱 AlertsView: Notification observers setup complete")
     }
     
-    private func removeNotificationObserver() {
+    private func removeNotificationObservers() {
         NotificationCenter.default.removeObserver(self, name: .newEventReceived, object: nil)
-        print("📱 AlertsView: Notification observer removed")
+        NotificationCenter.default.removeObserver(self, name: .catchUpComplete, object: nil)
+        print("📱 AlertsView: Notification observers removed")
     }
     
-    private func handleNewEvent(_ notification: Notification) {
-        print("📱 AlertsView: ⚡️ NEW EVENT NOTIFICATION RECEIVED!")
-        
-        if let userInfo = notification.userInfo,
-           let event = userInfo["event"] as? Event,
-           let channelId = userInfo["channelId"] as? String {
-            print("📱 AlertsView: New event: \(event.title) in channel \(channelId)")
-            print("📱 AlertsView: Current total events: \(totalEventCount)")
+    // ✅ NEW: Update catch-up state
+    private func updateCatchUpState() {
+        let anyChannelCatchingUp = subscriptionManager.subscribedChannels.contains { channel in
+            ChannelSyncState.shared.isInCatchUpMode(channelId: channel.id)
         }
-        
-        // Simple refresh without animation to prevent UI freeze
-        refreshTrigger = UUID()
-        
-        print("📱 AlertsView: ✅ UI refresh triggered")
+        isCatchingUp = anyChannelCatchingUp
     }
     
     private func connectIfNeeded() {
@@ -354,7 +391,7 @@ struct AlertsView: View {
     }
 }
 
-// MARK: - Alert Channel Row (renamed to avoid conflict)
+// MARK: - Alert Channel Row (unchanged from original)
 
 struct AlertChannelRow: View {
     let channel: Channel
@@ -369,7 +406,6 @@ struct AlertChannelRow: View {
     
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            // Channel Icon
             ZStack {
                 Circle()
                     .fill(iconColor.opacity(0.2))
@@ -382,7 +418,6 @@ struct AlertChannelRow: View {
             
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    // iOS 14 compatible bold text
                     if unreadCount > 0 {
                         Text("\(channel.areaDisplay)")
                             .font(.system(size: 17, weight: .bold))
@@ -401,7 +436,6 @@ struct AlertChannelRow: View {
                 }
                 
                 if let event = lastEvent {
-                    // iOS 14 compatible semibold text
                     if unreadCount > 0 {
                         Text(event.message)
                             .font(.system(size: 15, weight: .semibold))
@@ -468,7 +502,7 @@ struct AlertChannelRow: View {
     }
 }
 
-// MARK: - Channel Events View
+// MARK: - Other Views (unchanged)
 
 struct ChannelEventsView: View {
     let channel: Channel
@@ -496,8 +530,6 @@ struct ChannelEventsView: View {
     }
 }
 
-// MARK: - Event Card View
-
 struct EventCardView: View {
     let event: Event
     @State private var showFullImage = false
@@ -510,7 +542,6 @@ struct EventCardView: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // Event Header
             HStack {
                 Text(event.title)
                     .font(.headline)
@@ -522,14 +553,12 @@ struct EventCardView: View {
                     .frame(width: 8, height: 8)
             }
             
-            // Event Image (if not GPS event)
             if event.type != "off-route" && event.type != "tamper" && event.type != "overspeed" {
                 Button(action: { showFullImage = true }) {
                     AsyncImageView(event: event)
                 }
                 .buttonStyle(PlainButtonStyle())
             } else {
-                // GPS Event indicator
                 HStack {
                     Image(systemName: "location.fill")
                         .foregroundColor(.orange)
@@ -543,7 +572,6 @@ struct EventCardView: View {
                 .cornerRadius(8)
             }
             
-            // Event Details
             VStack(alignment: .leading, spacing: 8) {
                 Text(event.message)
                     .font(.subheadline)
@@ -582,8 +610,6 @@ struct EventCardView: View {
         }
     }
 }
-
-// MARK: - Full Image View
 
 struct FullImageView: View {
     let event: Event
