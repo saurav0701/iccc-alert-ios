@@ -14,22 +14,24 @@ class SubscriptionManager: ObservableObject {
     private let channelsKey = "subscribed_channels"
     private let eventsKey = "channel_events"
     private let unreadKey = "unread_counts"
+    private let lastRuntimeCheckKey = "last_runtime_check"
+    private let serviceStartedAtKey = "service_started_at"
     
     private let lock = NSLock()
     private var recentEventIds: Set<String> = []
-    private var eventTimestamps: [String: TimeInterval] = [:]
+    private var eventTimestamps: [String: TimeInterval] = []
     
     private var saveTimer: Timer?
     private let saveDelay: TimeInterval = 0.5
     
-    // ✅ FIXED: Debounced subscription updates (like Android)
+    // ✅ CRITICAL FIX: Debounced subscription updates
     private var subscriptionUpdateTimer: Timer?
     private let subscriptionUpdateDelay: TimeInterval = 0.3
     
-    // App kill detection
-    private let lastRuntimeCheckKey = "last_runtime_check"
-    private let serviceStartedAtKey = "service_started_at"
+    // Runtime checker
     private var runtimeCheckTimer: Timer?
+    
+    private var wasAppKilled = false
     
     // MARK: - Initialization
     private init() {
@@ -60,6 +62,7 @@ class SubscriptionManager: ObservableObject {
         print("SubscriptionManager initialized (wasKilled=\(wasAppKilled), recentIds=\(recentEventIds.count))")
     }
     
+    // ✅ CRITICAL: Detect app kills and background clears
     private func detectAppKillOrBackgroundClear() -> Bool {
         let lastRuntimeCheck = defaults.double(forKey: lastRuntimeCheckKey)
         let serviceStartedAt = defaults.double(forKey: serviceStartedAtKey)
@@ -99,7 +102,6 @@ class SubscriptionManager: ObservableObject {
     }
     
     // MARK: - Channel Subscription
-    
     func subscribe(channel: Channel) {
         lock.lock()
         
@@ -116,10 +118,9 @@ class SubscriptionManager: ObservableObject {
         subscribedChannels.append(updatedChannel)
         saveSubscriptions()
         
-        // ✅ CRITICAL: Initialize sync state for new channel immediately
+        // ✅ CRITICAL: Initialize sync state for new channel
         let channelId = channel.id
         if ChannelSyncState.shared.getSyncInfo(channelId: channelId) == nil {
-            // Create initial sync state to prevent RESET mode
             _ = ChannelSyncState.shared.recordEventReceived(
                 channelId: channelId,
                 eventId: "init",
@@ -133,7 +134,7 @@ class SubscriptionManager: ObservableObject {
         
         print("✅ Subscribed to \(channel.id)")
         
-        // ✅ FIXED: Debounce like Android (allows multiple rapid subscribes)
+        // ✅ Debounce subscription update
         scheduleSubscriptionUpdate()
     }
     
@@ -155,7 +156,6 @@ class SubscriptionManager: ObservableObject {
         channelEvents.removeValue(forKey: channelId)
         unreadCounts.removeValue(forKey: channelId)
         
-        // Clear sync state
         ChannelSyncState.shared.clearChannel(channelId: channelId)
         
         saveSubscriptions()
@@ -164,13 +164,11 @@ class SubscriptionManager: ObservableObject {
         
         print("✅ Unsubscribed from \(channelId)")
         
-        // ✅ FIXED: Debounce like Android
         scheduleSubscriptionUpdate()
     }
     
-    // ✅ NEW: Debounced subscription update (non-blocking)
+    // ✅ NEW: Debounced subscription update
     private func scheduleSubscriptionUpdate() {
-        // Cancel any pending update
         subscriptionUpdateTimer?.invalidate()
         
         DispatchQueue.main.async { [weak self] in
@@ -180,7 +178,6 @@ class SubscriptionManager: ObservableObject {
                 withTimeInterval: self.subscriptionUpdateDelay,
                 repeats: false
             ) { [weak self] _ in
-                // ✅ CRITICAL: Perform update on background queue
                 DispatchQueue.global(qos: .userInitiated).async {
                     self?.performSubscriptionUpdate()
                 }
@@ -191,10 +188,8 @@ class SubscriptionManager: ObservableObject {
     private func performSubscriptionUpdate() {
         print("📡 Performing debounced subscription update")
         
-        // ✅ Send subscription (already async internally)
         WebSocketService.shared.sendSubscriptionV2()
         
-        // Notify on main thread
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: .subscriptionsUpdated, object: nil)
         }
@@ -363,7 +358,6 @@ class SubscriptionManager: ObservableObject {
             print("🧹 Cleaned \(cleaned) old event IDs from memory")
         }
         
-        // Schedule next cleanup
         DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 60.0) { [weak self] in
             self?.cleanupRecentEvents()
         }
@@ -400,17 +394,14 @@ class SubscriptionManager: ObservableObject {
         let unreadSnapshot = unreadCounts
         lock.unlock()
         
-        // Save events
         if let data = try? JSONEncoder().encode(eventsSnapshot) {
             defaults.set(data, forKey: eventsKey)
         }
         
-        // Save unread counts
         if let data = try? JSONEncoder().encode(unreadSnapshot) {
             defaults.set(data, forKey: unreadKey)
         }
         
-        // Update runtime check on save
         defaults.set(Date().timeIntervalSince1970, forKey: lastRuntimeCheckKey)
         
         let totalEvents = eventsSnapshot.values.reduce(0) { $0 + $1.count }

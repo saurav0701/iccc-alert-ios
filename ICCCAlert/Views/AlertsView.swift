@@ -6,7 +6,10 @@ struct AlertsView: View {
     @State private var selectedFilter: AlertFilter = .all
     @State private var refreshTrigger = UUID()
     @State private var isInitialLoad = true
-    @State private var isCatchingUp = false // ✅ NEW: Track catch-up state
+    @State private var isCatchingUp = false
+    
+    // ✅ CRITICAL: Add proper notification observer cleanup
+    @State private var notificationObservers: [NSObjectProtocol] = []
     
     // Group events by channel
     private var channelGroups: [(channel: Channel, events: [Event])] {
@@ -14,8 +17,6 @@ struct AlertsView: View {
         
         for channel in subscriptionManager.subscribedChannels {
             let channelEvents = subscriptionManager.getEvents(channelId: channel.id)
-            
-            // Apply filters
             let filtered = filterEvents(channelEvents)
             
             if !filtered.isEmpty {
@@ -23,12 +24,11 @@ struct AlertsView: View {
             }
         }
         
-        // Sort by most recent event
-        return groups.sorted(by: { group1, group2 in
+        return groups.sorted { group1, group2 in
             let time1 = group1.1.first?.timestamp ?? 0
             let time2 = group2.1.first?.timestamp ?? 0
             return time1 > time2
-        })
+        }
     }
     
     private var hasSubscriptions: Bool {
@@ -53,7 +53,7 @@ struct AlertsView: View {
                     .padding()
                 }
                 
-                // ✅ NEW: Catch-up Banner
+                // Catch-up Banner
                 if isCatchingUp {
                     catchUpBanner
                 }
@@ -87,7 +87,7 @@ struct AlertsView: View {
         .id(refreshTrigger)
     }
     
-    // MARK: - ✅ NEW: Catch-up Banner
+    // MARK: - Catch-up Banner
     
     private var catchUpBanner: some View {
         HStack {
@@ -322,8 +322,6 @@ struct AlertsView: View {
     private func handleViewAppear() {
         connectIfNeeded()
         setupNotificationObservers()
-        
-        // Check if any channels are in catch-up mode
         updateCatchUpState()
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
@@ -331,41 +329,46 @@ struct AlertsView: View {
         }
     }
     
-    // ✅ OPTIMIZED: Setup notification observers
+    // ✅ CRITICAL FIX: Proper notification observers with cleanup
     private func setupNotificationObservers() {
+        // Remove any existing observers first
+        removeNotificationObservers()
+        
         // Event received observer
-        NotificationCenter.default.addObserver(
+        let eventObserver = NotificationCenter.default.addObserver(
             forName: .newEventReceived,
             object: nil,
             queue: .main
         ) { [self] notification in
-            // ✅ Throttled refresh - only update if not catching up
             if !isCatchingUp {
                 self.refreshTrigger = UUID()
             }
         }
+        notificationObservers.append(eventObserver)
         
-        // ✅ NEW: Catch-up complete observer
-        NotificationCenter.default.addObserver(
+        // Catch-up complete observer
+        let catchUpObserver = NotificationCenter.default.addObserver(
             forName: .catchUpComplete,
             object: nil,
             queue: .main
         ) { [self] _ in
             print("📱 AlertsView: Catch-up complete!")
             isCatchingUp = false
-            self.refreshTrigger = UUID() // Final refresh
+            self.refreshTrigger = UUID()
         }
+        notificationObservers.append(catchUpObserver)
         
         print("📱 AlertsView: Notification observers setup complete")
     }
     
     private func removeNotificationObservers() {
-        NotificationCenter.default.removeObserver(self, name: .newEventReceived, object: nil)
-        NotificationCenter.default.removeObserver(self, name: .catchUpComplete, object: nil)
+        notificationObservers.forEach { observer in
+            NotificationCenter.default.removeObserver(observer)
+        }
+        notificationObservers.removeAll()
         print("📱 AlertsView: Notification observers removed")
     }
     
-    // ✅ NEW: Update catch-up state
     private func updateCatchUpState() {
         let anyChannelCatchingUp = subscriptionManager.subscribedChannels.contains { channel in
             ChannelSyncState.shared.isInCatchUpMode(channelId: channel.id)
@@ -391,7 +394,7 @@ struct AlertsView: View {
     }
 }
 
-// MARK: - Alert Channel Row (unchanged from original)
+// MARK: - Alert Channel Row
 
 struct AlertChannelRow: View {
     let channel: Channel
@@ -498,148 +501,6 @@ struct AlertChannelRow: View {
         case "off-route": return Color(hex: "FF5722")
         case "tamper": return Color(hex: "F44336")
         default: return Color(hex: "9E9E9E")
-        }
-    }
-}
-
-// MARK: - Other Views (unchanged)
-
-struct ChannelEventsView: View {
-    let channel: Channel
-    let events: [Event]
-    
-    @StateObject private var subscriptionManager = SubscriptionManager.shared
-    @State private var refreshTrigger = UUID()
-    
-    var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 16) {
-                ForEach(events) { event in
-                    EventCardView(event: event)
-                        .padding(.horizontal)
-                }
-            }
-            .padding(.vertical)
-        }
-        .navigationTitle(channel.areaDisplay)
-        .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            subscriptionManager.markAsRead(channelId: channel.id)
-        }
-        .id(refreshTrigger)
-    }
-}
-
-struct EventCardView: View {
-    let event: Event
-    @State private var showFullImage = false
-    
-    private let dateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM dd, yyyy HH:mm"
-        return formatter
-    }()
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(event.title)
-                    .font(.headline)
-                
-                Spacer()
-                
-                Circle()
-                    .fill(priorityColor)
-                    .frame(width: 8, height: 8)
-            }
-            
-            if event.type != "off-route" && event.type != "tamper" && event.type != "overspeed" {
-                Button(action: { showFullImage = true }) {
-                    AsyncImageView(event: event)
-                }
-                .buttonStyle(PlainButtonStyle())
-            } else {
-                HStack {
-                    Image(systemName: "location.fill")
-                        .foregroundColor(.orange)
-                    Text("GPS Event - Tap to view on map")
-                        .font(.subheadline)
-                        .foregroundColor(.orange)
-                }
-                .padding()
-                .frame(maxWidth: .infinity)
-                .background(Color.orange.opacity(0.1))
-                .cornerRadius(8)
-            }
-            
-            VStack(alignment: .leading, spacing: 8) {
-                Text(event.message)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                
-                HStack {
-                    Image(systemName: "location.fill")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(event.location)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                
-                Text(dateFormatter.string(from: event.date))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-        }
-        .padding()
-        .background(Color(.systemGray6))
-        .cornerRadius(12)
-        .sheet(isPresented: $showFullImage) {
-            FullImageView(event: event)
-        }
-    }
-    
-    private var priorityColor: Color {
-        switch event.priority?.lowercased() {
-        case "high":
-            return .red
-        case "medium":
-            return .orange
-        default:
-            return .green
-        }
-    }
-}
-
-struct FullImageView: View {
-    let event: Event
-    @Environment(\.presentationMode) var presentationMode
-    @StateObject private var imageLoader = ImageLoader()
-    
-    var body: some View {
-        NavigationView {
-            ZStack {
-                Color.black.edgesIgnoringSafeArea(.all)
-                
-                if let image = imageLoader.image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                } else if imageLoader.isLoading {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                } else {
-                    Text("Failed to load image")
-                        .foregroundColor(.white)
-                }
-            }
-            .navigationBarTitleDisplayMode(.inline)
-            .navigationBarItems(trailing: Button("Done") {
-                presentationMode.wrappedValue.dismiss()
-            })
-        }
-        .onAppear {
-            imageLoader.loadImage(for: event)
         }
     }
 }
