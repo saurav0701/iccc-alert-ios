@@ -1,5 +1,3 @@
-// MARK: - SubscriptionManager.swift - Complete Fixed Version
-
 import Foundation
 import Combine
 
@@ -170,7 +168,7 @@ class SubscriptionManager: ObservableObject {
         scheduleSubscriptionUpdate()
     }
     
-    // ✅ NEW: Debounced subscription update (matches Android behavior)
+    // ✅ NEW: Debounced subscription update (non-blocking)
     private func scheduleSubscriptionUpdate() {
         // Cancel any pending update
         subscriptionUpdateTimer?.invalidate()
@@ -182,7 +180,10 @@ class SubscriptionManager: ObservableObject {
                 withTimeInterval: self.subscriptionUpdateDelay,
                 repeats: false
             ) { [weak self] _ in
-                self?.performSubscriptionUpdate()
+                // ✅ CRITICAL: Perform update on background queue
+                DispatchQueue.global(qos: .userInitiated).async {
+                    self?.performSubscriptionUpdate()
+                }
             }
         }
     }
@@ -190,9 +191,11 @@ class SubscriptionManager: ObservableObject {
     private func performSubscriptionUpdate() {
         print("📡 Performing debounced subscription update")
         
+        // ✅ Send subscription (already async internally)
+        WebSocketService.shared.sendSubscriptionV2()
+        
+        // Notify on main thread
         DispatchQueue.main.async {
-            // ✅ CRITICAL: Don't call updateSubscriptions() - just send directly
-            WebSocketService.shared.sendSubscriptionV2()
             NotificationCenter.default.post(name: .subscriptionsUpdated, object: nil)
         }
     }

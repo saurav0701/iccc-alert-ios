@@ -597,13 +597,21 @@ class WebSocketService: ObservableObject {
     
     // MARK: - Message Sending
     private func send(message: String, completion: ((Bool) -> Void)? = nil) {
-        let wsMessage = URLSessionWebSocketTask.Message.string(message)
-        webSocketTask?.send(wsMessage) { error in
-            if let error = error {
-                print("❌ Failed to send message: \(error.localizedDescription)")
+        // ✅ CRITICAL: Send on background queue to prevent UI blocking
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else {
                 completion?(false)
-            } else {
-                completion?(true)
+                return
+            }
+            
+            let wsMessage = URLSessionWebSocketTask.Message.string(message)
+            self.webSocketTask?.send(wsMessage) { error in
+                if let error = error {
+                    print("❌ Failed to send message: \(error.localizedDescription)")
+                    completion?(false)
+                } else {
+                    completion?(true)
+                }
             }
         }
     }
