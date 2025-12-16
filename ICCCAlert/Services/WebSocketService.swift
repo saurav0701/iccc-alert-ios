@@ -43,6 +43,9 @@ class WebSocketService: ObservableObject {
     // Catch-up monitoring
     private var catchUpChannels: Set<String> = []
     private var catchUpTimer: Timer?
+    private var catchUpStartTime: [String: TimeInterval] = [:]  // Track when catch-up started per channel
+    private let catchUpTimeout: TimeInterval = 60.0  // 60 second timeout per channel
+    private var lastCatchUpProgressCheck: [String: TimeInterval] = [:]
     
     // Connection state tracking
     private var lastConnectionTime: Date?
@@ -50,6 +53,10 @@ class WebSocketService: ObservableObject {
     
     private var hasSubscribed = false
     private var lastSubscriptionTime: TimeInterval = 0
+    
+    // Event processing state
+    private var lastEventProcessedTime: TimeInterval = 0
+    private let eventProcessingTimeout: TimeInterval = 30.0
     
     // Cancellables
     private var cancellables = Set<AnyCancellable>()
@@ -154,6 +161,21 @@ class WebSocketService: ObservableObject {
                 
             case .failure(let error):
                 self.logger.logError("WS_RECEIVE", "❌ WebSocket error: \(error.localizedDescription)")
+                
+                // ✅ NEW: Graceful recovery during catch-up
+                let isCatchingUp = !self.catchUpChannels.isEmpty
+                if isCatchingUp {
+                    self.logger.logError("WS_RECEIVE", "❌ ERROR DURING CATCH-UP - Forcing completion and reconnect")
+                    
+                    // Force disable catch-up for all channels
+                    for channelId in self.catchUpChannels {
+                        self.logger.log("CATCHUP", "🔄 Force-disabling catch-up for \(channelId) due to connection error")
+                        ChannelSyncState.shared.disableCatchUpMode(channelId: channelId)
+                    }
+                    self.catchUpChannels.removeAll()
+                    self.stopCatchUpMonitoring()
+                }
+                
                 DispatchQueue.main.async {
                     self.isConnected = false
                     self.hasSubscribed = false
@@ -212,6 +234,19 @@ class WebSocketService: ObservableObject {
             return
         }
         
+        // ✅ NEW: Check for catch-up completion signal
+        if text.contains("\"type\":\"sync_complete\"") || text.contains("\"catchUpComplete\":true") {
+            if let data = text.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let channelId = json["channelId"] as? String {
+                logger.log("CATCHUP", "🎉 Server signaled catch-up complete for \(channelId)")
+                ChannelSyncState.shared.disableCatchUpMode(channelId: channelId)
+                catchUpChannels.remove(channelId)
+                catchUpStartTime.removeValue(forKey: channelId)
+                return
+            }
+        }
+        
         // Skip error messages
         if text.contains("\"error\"") {
             DispatchQueue.main.async {
@@ -238,6 +273,9 @@ class WebSocketService: ObservableObject {
         
         let channelId = "\(area)_\(type)"
         logger.log("PROCESS", "Event: id=\(eventId), channel=\(channelId)")
+        
+        // Update last event processed time
+        lastEventProcessedTime = Date().timeIntervalSince1970
         
         let eventData = json["data"] as? [String: Any] ?? [:]
         let requireAck = eventData["_requireAck"] as? Bool ?? true
@@ -499,11 +537,14 @@ private func parseEvent(json: [String: Any]) -> Event? {
             SubscriptionFilter(area: sub.area, eventType: sub.eventType)
         }
         
-        // Enable catch-up mode
+        // Enable catch-up mode and track start time
+        let catchUpStartTime_now = Date().timeIntervalSince1970
         subscriptions.forEach { sub in
             let channelId = "\(sub.area)_\(sub.eventType)"
             ChannelSyncState.shared.enableCatchUpMode(channelId: channelId)
             catchUpChannels.insert(channelId)
+            self.catchUpStartTime[channelId] = catchUpStartTime_now
+            logger.log("SUBSCRIPTION", "🔄 Enabled catch-up for \(channelId)")
         }
         
         var syncState: [String: SyncStateInfo] = [:]
@@ -547,6 +588,7 @@ private func parseEvent(json: [String: Any]) -> Event? {
             if success {
                 self?.hasSubscribed = true
                 self?.lastSubscriptionTime = Date().timeIntervalSince1970
+                self?.lastEventProcessedTime = Date().timeIntervalSince1970
                 self?.logger.log("SUBSCRIPTION", "✅ Subscription sent successfully")
                 self?.startCatchUpMonitoring()
             } else {
@@ -560,7 +602,7 @@ private func parseEvent(json: [String: Any]) -> Event? {
         stopCatchUpMonitoring()
         
         DispatchQueue.main.async { [weak self] in
-            self?.catchUpTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            self?.catchUpTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
                 self?.checkCatchUpProgress()
             }
         }
@@ -569,35 +611,63 @@ private func parseEvent(json: [String: Any]) -> Event? {
     private func stopCatchUpMonitoring() {
         catchUpTimer?.invalidate()
         catchUpTimer = nil
+        catchUpStartTime.removeAll()
+        lastCatchUpProgressCheck.removeAll()
     }
     
     private func checkCatchUpProgress() {
+        let now = Date().timeIntervalSince1970
         var allComplete = true
+        var channelsToCheck = Array(catchUpChannels)
         
-        for channelId in catchUpChannels {
+        for channelId in channelsToCheck {
+            // Check for timeout
+            if let startTime = catchUpStartTime[channelId] {
+                let elapsed = now - startTime
+                
+                if elapsed > catchUpTimeout {
+                    logger.logError("CATCHUP", "❌ TIMEOUT for \(channelId) after \(Int(elapsed))s - Force disabling catch-up")
+                    ChannelSyncState.shared.disableCatchUpMode(channelId: channelId)
+                    catchUpChannels.remove(channelId)
+                    catchUpStartTime.removeValue(forKey: channelId)
+                    continue
+                }
+            }
+            
+            // Check if still in catch-up mode
             if ChannelSyncState.shared.isInCatchUpMode(channelId: channelId) {
                 let progress = ChannelSyncState.shared.getCatchUpProgress(channelId: channelId)
                 
-                if progress > 0 {
-                    bufferLock.lock()
-                    let isQueueEmpty = eventBuffer.isEmpty
-                    bufferLock.unlock()
-                    
-                    if isQueueEmpty {
-                        ChannelSyncState.shared.disableCatchUpMode(channelId: channelId)
-                        catchUpChannels.remove(channelId)
-                        logger.log("CATCHUP", "✅ Complete for \(channelId) (\(progress) events)")
-                    } else {
-                        allComplete = false
-                    }
+                // Log progress at reduced frequency
+                let lastCheck = lastCatchUpProgressCheck[channelId] ?? 0
+                if now - lastCheck > 5.0 {  // Log every 5 seconds
+                    logger.log("CATCHUP", "⏳ \(channelId): \(progress) events tracked")
+                    lastCatchUpProgressCheck[channelId] = now
+                }
+                
+                // ✅ NEW: Check if no events received for a while - indicates catch-up complete
+                let timeSinceLastEvent = now - lastEventProcessedTime
+                if progress > 0 && timeSinceLastEvent > eventProcessingTimeout {
+                    logger.log("CATCHUP", "⏳ \(channelId): No new events for \(Int(timeSinceLastEvent))s, assuming catch-up complete")
+                    ChannelSyncState.shared.disableCatchUpMode(channelId: channelId)
+                    catchUpChannels.remove(channelId)
+                    catchUpStartTime.removeValue(forKey: channelId)
                 } else {
                     allComplete = false
                 }
+            } else {
+                // Not in catch-up mode anymore
+                logger.log("CATCHUP", "✅ \(channelId) exited catch-up mode")
+                catchUpChannels.remove(channelId)
+                catchUpStartTime.removeValue(forKey: channelId)
             }
         }
         
-        if allComplete {
+        if allComplete && !catchUpChannels.isEmpty {
             logger.log("CATCHUP", "🎉 ALL CHANNELS CAUGHT UP")
+            stopCatchUpMonitoring()
+        } else if catchUpChannels.isEmpty {
+            logger.log("CATCHUP", "✅ Catch-up monitoring complete")
             stopCatchUpMonitoring()
         }
     }
