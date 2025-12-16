@@ -33,7 +33,7 @@ class WebSocketService: ObservableObject {
     // ACK batching
     private var pendingAcks: [String] = []
     private let ackLock = NSLock()
-    private let ackBatchSize = 50  // ✅ Increased from 10 to 50
+    private let ackBatchSize = 50
     private var ackTimer: Timer?
     
     // Ping/Pong
@@ -44,13 +44,13 @@ class WebSocketService: ObservableObject {
     private var catchUpChannels: Set<String> = []
     private var catchUpTimer: Timer?
     
-    // ✅ NEW: Connection state tracking
+    // Connection state tracking
     private var lastConnectionTime: Date?
     private var connectionLostTime: Date?
     
-    // ✅ NEW: Subscription tracking
+    // ✅ FIXED: Subscription tracking (matches Android)
     private var hasSubscribed = false
-    private var lastSubscriptionTime: Date?
+    private var lastSubscriptionTime: TimeInterval = 0
     
     // Cancellables
     private var cancellables = Set<AnyCancellable>()
@@ -72,13 +72,12 @@ class WebSocketService: ObservableObject {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 0
-        config.waitsForConnectivity = true  // ✅ Added for better reconnection
+        config.waitsForConnectivity = true
         session = URLSession(configuration: config, delegate: nil, delegateQueue: nil)
     }
     
     // MARK: - Connection Management
     func connect() {
-        // ✅ FIXED: Don't reconnect if already connected
         if isConnected && webSocketTask != nil {
             print("⚠️ Already connected, skipping connect")
             return
@@ -107,8 +106,8 @@ class WebSocketService: ObservableObject {
         startAckFlusher()
         startStatsLogging()
         
-        // ✅ FIXED: Send subscription immediately after connection
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+        // Send subscription after connection
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             self?.sendSubscriptionV2()
         }
         
@@ -119,7 +118,7 @@ class WebSocketService: ObservableObject {
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         webSocketTask = nil
         isConnected = false
-        hasSubscribed = false  // ✅ Reset subscription state
+        hasSubscribed = false
         connectionLostTime = Date()
         connectionStatus = "Disconnected"
         
@@ -186,7 +185,7 @@ class WebSocketService: ObservableObject {
     
     // MARK: - Event Processing
     private func processEvent(_ text: String) {
-        // ✅ FIXED: Better subscription confirmation detection
+        // Check for subscription confirmation
         if text.contains("\"status\":\"subscribed\"") || text.contains("\"status\":\"ok\"") {
             DispatchQueue.main.async { [weak self] in
                 self?.hasSubscribed = true
@@ -281,8 +280,6 @@ class WebSocketService: ObservableObject {
         if added {
             DispatchQueue.main.async {
                 self.processedCount += 1
-                
-                // ✅ FIXED: Send local notification
                 self.sendLocalNotification(for: event, channelId: channelId)
             }
             
@@ -306,7 +303,6 @@ class WebSocketService: ObservableObject {
         }
     }
     
-    // ✅ NEW: Send local notification for event
     private func sendLocalNotification(for event: Event, channelId: String) {
         let content = UNMutableNotificationContent()
         content.title = event.title
@@ -354,7 +350,7 @@ class WebSocketService: ObservableObject {
             return
         }
         
-        let acksToSend = Array(pendingAcks.prefix(100))  // ✅ Increased to 100
+        let acksToSend = Array(pendingAcks.prefix(100))
         pendingAcks.removeFirst(min(100, pendingAcks.count))
         ackLock.unlock()
         
@@ -408,17 +404,18 @@ class WebSocketService: ObservableObject {
     }
     
     // MARK: - Subscription Management
+    
+    // ✅ FIXED: Matches Android behavior exactly
     func sendSubscriptionV2() {
         guard isConnected, webSocketTask != nil else {
             print("⚠️ Cannot subscribe - not connected")
             return
         }
         
-        // ✅ FIXED: Prevent duplicate subscriptions
-        let now = Date()
-        if hasSubscribed, let lastTime = lastSubscriptionTime,
-           now.timeIntervalSince(lastTime) < 5.0 {
-            print("⚠️ Skipping duplicate subscription (sent \(now.timeIntervalSince(lastTime))s ago)")
+        // ✅ FIXED: Prevent duplicate subscriptions (5-second window like Android)
+        let now = Date().timeIntervalSince1970
+        if hasSubscribed && (now - lastSubscriptionTime) < 5.0 {
+            print("⚠️ Skipping duplicate subscription (sent \(String(format: "%.1f", now - lastSubscriptionTime))s ago)")
             return
         }
         
@@ -457,7 +454,6 @@ class WebSocketService: ObservableObject {
         
         let resetConsumers = !hasSyncState
         
-        // ✅ FIXED: Create request matching backend structure
         let request = SubscriptionRequest(
             clientId: clientId,
             filters: filters,
@@ -491,7 +487,7 @@ class WebSocketService: ObservableObject {
         send(message: jsonString) { [weak self] success in
             if success {
                 self?.hasSubscribed = true
-                self?.lastSubscriptionTime = Date()
+                self?.lastSubscriptionTime = Date().timeIntervalSince1970
                 print("✅ Subscription sent (reset=\(resetConsumers))")
                 self?.startCatchUpMonitoring()
             } else {
@@ -500,10 +496,8 @@ class WebSocketService: ObservableObject {
         }
     }
     
-    func updateSubscriptions() {
-        hasSubscribed = false  // ✅ Reset to force re-subscribe
-        sendSubscriptionV2()
-    }
+    // ✅ REMOVED: updateSubscriptions() method - not needed with debouncing
+    // SubscriptionManager now calls sendSubscriptionV2() directly after debouncing
     
     // MARK: - Catch-up Monitoring
     private func startCatchUpMonitoring() {

@@ -22,14 +22,17 @@ class SubscriptionManager: ObservableObject {
     private var saveTimer: Timer?
     private let saveDelay: TimeInterval = 0.5
     
-    // ✅ NEW: App kill detection
+    // ✅ FIXED: Debounced subscription updates (like Android)
+    private var subscriptionUpdateTimer: Timer?
+    private let subscriptionUpdateDelay: TimeInterval = 0.3
+    
+    // App kill detection
     private let lastRuntimeCheckKey = "last_runtime_check"
     private let serviceStartedAtKey = "service_started_at"
     private var runtimeCheckTimer: Timer?
     
     // MARK: - Initialization
     private init() {
-        // ✅ FIXED: Detect app kill before loading
         let wasAppKilled = detectAppKillOrBackgroundClear()
         
         loadSubscriptions()
@@ -50,26 +53,22 @@ class SubscriptionManager: ObservableObject {
             buildRecentEventIds()
         }
         
-        // ✅ Mark that we're now running
         markServiceRunning()
-        
         startRecentEventCleanup()
         startRuntimeChecker()
         
         print("SubscriptionManager initialized (wasKilled=\(wasAppKilled), recentIds=\(recentEventIds.count))")
     }
     
-    // ✅ NEW: Detect app kills and background clears
     private func detectAppKillOrBackgroundClear() -> Bool {
         let lastRuntimeCheck = defaults.double(forKey: lastRuntimeCheckKey)
         let serviceStartedAt = defaults.double(forKey: serviceStartedAtKey)
         let now = Date().timeIntervalSince1970
         
-        // If service was marked as started but it's been >2 minutes since last runtime check
         if serviceStartedAt > 0 && lastRuntimeCheck > 0 {
             let timeSinceLastCheck = now - lastRuntimeCheck
             
-            if timeSinceLastCheck > 2 * 60 {  // 2 minutes
+            if timeSinceLastCheck > 2 * 60 {
                 print("""
                 🔴 DETECTED: App was killed or cleared from background
                 - Service started at: \(serviceStartedAt)
@@ -77,7 +76,6 @@ class SubscriptionManager: ObservableObject {
                 - Gap: \(timeSinceLastCheck)s
                 """)
                 
-                // Clear the service started flag since we're restarting
                 defaults.removeObject(forKey: serviceStartedAtKey)
                 return true
             }
@@ -86,14 +84,12 @@ class SubscriptionManager: ObservableObject {
         return false
     }
     
-    // ✅ NEW: Mark that service is actively running
     private func markServiceRunning() {
         let now = Date().timeIntervalSince1970
         defaults.set(now, forKey: serviceStartedAtKey)
         defaults.set(now, forKey: lastRuntimeCheckKey)
     }
     
-    // ✅ NEW: Periodically update runtime check
     private func startRuntimeChecker() {
         DispatchQueue.main.async { [weak self] in
             self?.runtimeCheckTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
@@ -103,30 +99,32 @@ class SubscriptionManager: ObservableObject {
     }
     
     // MARK: - Channel Subscription
+    
     func subscribe(channel: Channel) {
         lock.lock()
-        defer { lock.unlock() }
         
         var updatedChannel = channel
         updatedChannel.isSubscribed = true
         
-        if !subscribedChannels.contains(where: { $0.id == channel.id }) {
-            subscribedChannels.append(updatedChannel)
-            saveSubscriptions()
-            
-            // Notify WebSocket to update subscriptions
-            DispatchQueue.main.async {
-                WebSocketService.shared.updateSubscriptions()
-                NotificationCenter.default.post(name: .subscriptionsUpdated, object: nil)
-            }
-            
-            print("✅ Subscribed to \(channel.id)")
+        // Check if already subscribed
+        if subscribedChannels.contains(where: { $0.id == channel.id }) {
+            lock.unlock()
+            print("⚠️ Already subscribed to \(channel.id)")
+            return
         }
+        
+        subscribedChannels.append(updatedChannel)
+        saveSubscriptions()
+        lock.unlock()
+        
+        print("✅ Subscribed to \(channel.id)")
+        
+        // ✅ FIXED: Debounce like Android (allows multiple rapid subscribes)
+        scheduleSubscriptionUpdate()
     }
     
     func unsubscribe(channelId: String) {
         lock.lock()
-        defer { lock.unlock() }
         
         subscribedChannels.removeAll { $0.id == channelId }
         
@@ -148,14 +146,39 @@ class SubscriptionManager: ObservableObject {
         
         saveSubscriptions()
         scheduleSave()
-        
-        // Notify WebSocket
-        DispatchQueue.main.async {
-            WebSocketService.shared.updateSubscriptions()
-            NotificationCenter.default.post(name: .subscriptionsUpdated, object: nil)
-        }
+        lock.unlock()
         
         print("✅ Unsubscribed from \(channelId)")
+        
+        // ✅ FIXED: Debounce like Android
+        scheduleSubscriptionUpdate()
+    }
+    
+    // ✅ NEW: Debounced subscription update (matches Android behavior)
+    private func scheduleSubscriptionUpdate() {
+        // Cancel any pending update
+        subscriptionUpdateTimer?.invalidate()
+        
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            
+            self.subscriptionUpdateTimer = Timer.scheduledTimer(
+                withTimeInterval: self.subscriptionUpdateDelay,
+                repeats: false
+            ) { [weak self] _ in
+                self?.performSubscriptionUpdate()
+            }
+        }
+    }
+    
+    private func performSubscriptionUpdate() {
+        print("📡 Performing debounced subscription update")
+        
+        DispatchQueue.main.async {
+            // ✅ CRITICAL: Don't call updateSubscriptions() - just send directly
+            WebSocketService.shared.sendSubscriptionV2()
+            NotificationCenter.default.post(name: .subscriptionsUpdated, object: nil)
+        }
     }
     
     func isSubscribed(channelId: String) -> Bool {
@@ -368,7 +391,7 @@ class SubscriptionManager: ObservableObject {
             defaults.set(data, forKey: unreadKey)
         }
         
-        // ✅ Update runtime check on save
+        // Update runtime check on save
         defaults.set(Date().timeIntervalSince1970, forKey: lastRuntimeCheckKey)
         
         let totalEvents = eventsSnapshot.values.reduce(0) { $0 + $1.count }
