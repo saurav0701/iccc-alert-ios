@@ -158,14 +158,11 @@ struct AlertsView: View {
             forName: .newEventReceived,
             object: nil,
             queue: .main
-        ) { [weak self] notification in
-            print("📱 AlertsView: ⚡️⚡️⚡️ NOTIFICATION RECEIVED IN OBSERVER!")
-            self?.handleNewEvent(notification)
+        ) { notification in
+            handleNewEvent(notification)
         }
         
-        print("📱 AlertsView: ✅ Notification observer setup complete")
-        print("📱 AlertsView: Current subscribed channels: \(subscriptionManager.subscribedChannels.count)")
-        print("📱 AlertsView: Current total events: \(allEvents.count)")
+        print("📱 AlertsView: Notification observer setup complete")
     }
     
     private func removeNotificationObserver() {
