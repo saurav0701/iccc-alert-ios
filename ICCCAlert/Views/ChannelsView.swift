@@ -5,7 +5,7 @@ struct ChannelsView: View {
     @StateObject private var webSocketService = WebSocketService.shared
     @State private var searchText = ""
     @State private var selectedCategory: String? = nil
-    @State private var showingAddChannel = false
+    @State private var refreshTrigger = UUID()
     
     var availableChannels: [Channel] {
         SubscriptionManager.getAllAvailableChannels()
@@ -130,6 +130,7 @@ struct ChannelsView: View {
                             ChannelRowView(channel: channel)
                         }
                     }
+                    .id(refreshTrigger)
                 }
             }
             .navigationTitle("Channels")

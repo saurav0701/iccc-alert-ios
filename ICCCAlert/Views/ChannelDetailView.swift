@@ -10,6 +10,10 @@ struct ChannelDetailView: View {
     @State private var showNewEventsBanner = false
     @State private var selectedEvent: Event? = nil
     @State private var showingImageDetail = false
+    @State private var refreshTrigger = UUID()
+    
+    // ✅ FIX: Proper observer management
+    @State private var eventObserver: NSObjectProtocol?
     
     @Environment(\.presentationMode) var presentationMode
     
@@ -58,14 +62,15 @@ struct ChannelDetailView: View {
                         Image(systemName: "bell.badge.fill")
                         Text("\(pendingEventsCount) new event\(pendingEventsCount == 1 ? "" : "s")")
                             .font(.subheadline)
-                            .font(.system(size: 14, weight: .semibold))
+                            .fontWeight(.semibold)
                         Spacer()
                         Button("View") {
                             showNewEventsBanner = false
                             pendingEventsCount = 0
+                            refreshTrigger = UUID()
                         }
                         .font(.subheadline)
-                        .font(.system(size: 14, weight: .semibold))
+                        .fontWeight(.semibold)
                     }
                     .padding()
                     .background(Color.blue)
@@ -91,11 +96,12 @@ struct ChannelDetailView: View {
         }
         .onAppear {
             markAsRead()
-            subscribeToNotifications()
+            setupNotificationObserver()
         }
         .onDisappear {
-            unsubscribeFromNotifications()
+            removeNotificationObserver()
         }
+        .id(refreshTrigger)
     }
     
     // MARK: - Views
@@ -173,7 +179,7 @@ struct ChannelDetailView: View {
                 Button(action: toggleSubscription) {
                     Text(isSubscribed ? "Unsubscribe" : "Subscribe")
                         .font(.subheadline)
-                        .font(.system(size: 14, weight: .semibold))
+                        .fontWeight(.semibold)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 8)
                         .background(isSubscribed ? Color.red.opacity(0.1) : Color.blue)
@@ -235,7 +241,6 @@ struct ChannelDetailView: View {
             } else {
                 ForEach(events) { event in
                     EventRowView(event: event) {
-                        // ✅ FIX: Open image detail view
                         selectedEvent = event
                         showingImageDetail = true
                     }
@@ -283,6 +288,11 @@ struct ChannelDetailView: View {
             alertMessage = "Subscribed to \(channel.areaDisplay)"
         }
         showingAlert = true
+        
+        // ✅ Force refresh to show updated state
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            refreshTrigger = UUID()
+        }
     }
     
     private func toggleMute() {
@@ -292,6 +302,11 @@ struct ChannelDetailView: View {
         
         alertMessage = isMuted ? "Notifications enabled" : "Notifications muted"
         showingAlert = true
+        
+        // ✅ Force refresh
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            refreshTrigger = UUID()
+        }
     }
     
     private func markAsRead() {
@@ -300,19 +315,25 @@ struct ChannelDetailView: View {
         }
     }
     
-    // MARK: - Event Notifications
+    // MARK: - Event Notifications (FIXED)
     
-    private func subscribeToNotifications() {
-        NotificationCenter.default.addObserver(
+    private func setupNotificationObserver() {
+        // ✅ Remove any existing observer first
+        removeNotificationObserver()
+        
+        // ✅ Setup new observer with proper capture
+        eventObserver = NotificationCenter.default.addObserver(
             forName: .newEventReceived,
             object: nil,
             queue: .main
-        ) { notification in
+        ) { [self] notification in
             if let userInfo = notification.userInfo,
                let channelId = userInfo["channelId"] as? String,
                channelId == channel.id {
+                
                 pendingEventsCount += 1
                 showNewEventsBanner = true
+                refreshTrigger = UUID()
                 
                 // Auto-hide banner after 5 seconds
                 DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
@@ -322,12 +343,16 @@ struct ChannelDetailView: View {
         }
     }
     
-    private func unsubscribeFromNotifications() {
-        NotificationCenter.default.removeObserver(self, name: .newEventReceived, object: nil)
+    private func removeNotificationObserver() {
+        if let observer = eventObserver {
+            NotificationCenter.default.removeObserver(observer)
+            eventObserver = nil
+        }
     }
 }
 
-// ✅ UPDATED: EventRowView with tap action
+// MARK: - EventRowView
+
 struct EventRowView: View {
     let event: Event
     let onTap: () -> Void
@@ -349,7 +374,6 @@ struct EventRowView: View {
                 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(event.typeDisplay ?? event.type ?? "Event")
-                        .font(.subheadline)
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundColor(.primary)
                     
@@ -364,7 +388,7 @@ struct EventRowView: View {
                 
                 Spacer()
                 
-                // ✅ NEW: Indicate tappable
+                // Indicate tappable
                 Image(systemName: "photo")
                     .foregroundColor(.blue)
                     .font(.system(size: 20))
