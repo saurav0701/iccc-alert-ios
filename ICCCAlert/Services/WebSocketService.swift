@@ -24,7 +24,11 @@ class WebSocketService: ObservableObject {
     private let maxReconnectAttempts = Int.max
     private let reconnectDelay: TimeInterval = 5.0
     
-    // ✅ SIMPLIFIED: Single background queue for all processing
+    // ✅ CRITICAL FIX: Use serial queue for WebSocket operations
+    // This prevents race conditions when sending subscriptions
+    private let wsQueue = DispatchQueue(label: "com.iccc.websocket", qos: .userInitiated)
+    
+    // Processing queue for events
     private let processingQueue = DispatchQueue(label: "com.iccc.processing", qos: .userInitiated)
     private let ackQueue = DispatchQueue(label: "com.iccc.acks", qos: .utility)
     
@@ -48,12 +52,11 @@ class WebSocketService: ObservableObject {
         logger.log("INIT", "WebSocketService initializing...")
         setupClientId()
         setupSession()
-        logger.log("INIT", "WebSocketService initialized with clientId: \(clientId)")
     }
     
     private func setupClientId() {
         clientId = KeychainClientID.getOrCreateClientID()
-        logger.log("CLIENT_ID", "Using Keychain client ID: \(clientId)")
+        logger.log("CLIENT_ID", "Using: \(clientId)")
         UserDefaults.standard.set(clientId, forKey: "persistent_client_id")
     }
     
@@ -63,7 +66,6 @@ class WebSocketService: ObservableObject {
         config.timeoutIntervalForResource = 0
         config.waitsForConnectivity = true
         session = URLSession(configuration: config, delegate: nil, delegateQueue: nil)
-        logger.log("SESSION", "URLSession configured")
     }
     
     // MARK: - Connection Management
@@ -71,18 +73,18 @@ class WebSocketService: ObservableObject {
         logger.log("CONNECT", "Connect called - isConnected=\(isConnected)")
         
         if isConnected && webSocketTask != nil {
-            logger.logWebSocket("⚠️ Already connected, skipping connect")
+            logger.logWebSocket("⚠️ Already connected, skipping")
             return
         }
         
         disconnect()
         
         guard let url = URL(string: wsURL) else {
-            logger.logError("CONNECT", "Invalid WebSocket URL: \(wsURL)")
+            logger.logError("CONNECT", "Invalid URL: \(wsURL)")
             return
         }
         
-        logger.logWebSocket("🔌 Connecting to \(wsURL) with client ID: \(clientId)")
+        logger.logWebSocket("🔌 Connecting to \(wsURL)")
         
         DispatchQueue.main.async { [weak self] in
             self?.connectionStatus = "Connecting..."
@@ -98,14 +100,15 @@ class WebSocketService: ObservableObject {
             self?.connectionStatus = "Connected - Monitoring alerts"
         }
         
-        logger.logWebSocket("✅ WebSocket connected, starting receivers...")
+        logger.logWebSocket("✅ Connected, starting receivers...")
         
         startReceiving()
         startPingPong()
         startAckFlusher()
         startStatsLogging()
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+        // ✅ FIX: Send subscription on WebSocket queue
+        wsQueue.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             self?.sendSubscriptionV2()
         }
     }
@@ -124,7 +127,7 @@ class WebSocketService: ObservableObject {
         stopPingPong()
         stopAckFlusher()
         
-        logger.logWebSocket("🔌 WebSocket disconnected")
+        logger.logWebSocket("🔌 Disconnected")
     }
     
     private func startReceiving() {
@@ -142,7 +145,7 @@ class WebSocketService: ObservableObject {
                 self.receiveMessage()
                 
             case .failure(let error):
-                self.logger.logError("WS_RECEIVE", "❌ WebSocket error: \(error.localizedDescription)")
+                self.logger.logError("WS_RECEIVE", "❌ Error: \(error.localizedDescription)")
                 DispatchQueue.main.async {
                     self.isConnected = false
                     self.hasSubscribed = false
@@ -168,24 +171,24 @@ class WebSocketService: ObservableObject {
         
         guard let messageText = text else { return }
         
-        // ✅ CRITICAL: Increment counter on main thread
+        // ✅ Update counter on main thread
         DispatchQueue.main.async { [weak self] in
             self?.receivedCount += 1
         }
         
-        // ✅ CRITICAL: Process on background thread IMMEDIATELY
+        // ✅ Process on background thread
         processingQueue.async { [weak self] in
             self?.processEvent(messageText)
         }
     }
     
-    // ✅ SIMPLIFIED: Direct event processing - no queues, no loops
+    // ✅ OPTIMIZED: Direct event processing
     private func processEvent(_ text: String) {
         // Check subscription confirmation
         if text.contains("\"status\":\"subscribed\"") || text.contains("\"status\":\"ok\"") {
             DispatchQueue.main.async { [weak self] in
                 self?.hasSubscribed = true
-                self?.logger.logWebSocket("✅ Subscription confirmed by server")
+                self?.logger.logWebSocket("✅ Subscription confirmed")
             }
             return
         }
@@ -258,7 +261,7 @@ class WebSocketService: ObservableObject {
             return
         }
         
-        // ✅ CRITICAL: Add event to storage
+        // ✅ Add event to storage
         let added = SubscriptionManager.shared.addEvent(event: event)
         
         if added {
@@ -266,7 +269,7 @@ class WebSocketService: ObservableObject {
                 guard let self = self else { return }
                 self.processedCount += 1
                 
-                // ✅ CRITICAL: Broadcast IMMEDIATELY on main thread
+                // ✅ Broadcast immediately on main thread
                 NotificationCenter.default.post(
                     name: .newEventReceived,
                     object: nil,
@@ -274,7 +277,7 @@ class WebSocketService: ObservableObject {
                 )
             }
             
-            // ✅ Send notification (async, doesn't block)
+            // ✅ Send notification (async)
             DispatchQueue.main.async { [weak self] in
                 self?.sendLocalNotification(for: event)
             }
@@ -311,7 +314,7 @@ class WebSocketService: ObservableObject {
         
         UNUserNotificationCenter.current().add(request) { error in
             if let error = error {
-                self.logger.logError("NOTIFICATION", "❌ Failed to send: \(error.localizedDescription)")
+                self.logger.logError("NOTIFICATION", "Failed: \(error.localizedDescription)")
             }
         }
     }
@@ -395,50 +398,56 @@ class WebSocketService: ObservableObject {
         flushAcks()
     }
     
-    // MARK: - Subscription Management
+    // MARK: - Subscription Management (✅ COMPLETELY REWRITTEN)
+    
+    /// Send subscription to server - MUST be called on background thread
     func sendSubscriptionV2() {
-        logger.log("SUBSCRIPTION", "🔵 sendSubscriptionV2 called")
-        
-        guard isConnected, webSocketTask != nil else {
-            logger.logError("SUBSCRIPTION", "❌ Cannot subscribe - not connected")
-            return
-        }
-        
-        let subscriptions = SubscriptionManager.shared.getSubscriptions()
-        logger.log("SUBSCRIPTION", "🔵 Found \(subscriptions.count) subscriptions")
-        
-        guard !subscriptions.isEmpty else {
-            logger.logError("SUBSCRIPTION", "❌ No subscriptions to send")
-            return
-        }
-        
-        logger.log("SUBSCRIPTION", "✅ Subscribing to \(subscriptions.count) channels")
-        
-        let filters = subscriptions.map { sub in
-            SubscriptionFilter(area: sub.area, eventType: sub.eventType)
-        }
-        
-        // ✅ ALWAYS RESET for live events only
-        let request = SubscriptionRequest(
-            clientId: clientId,
-            filters: filters,
-            syncState: nil,
-            resetConsumers: true
-        )
-        
-        guard let jsonData = try? JSONEncoder().encode(request),
-              let jsonString = String(data: jsonData, encoding: .utf8) else {
-            logger.logError("SUBSCRIPTION", "❌ Failed to encode request")
-            return
-        }
-        
-        send(message: jsonString) { [weak self] success in
+        // ✅ CRITICAL FIX: Execute on WebSocket queue to prevent race conditions
+        wsQueue.async { [weak self] in
             guard let self = self else { return }
-            if success {
-                self.hasSubscribed = true
-                self.logger.log("SUBSCRIPTION", "✅✅✅ Subscription SENT - LIVE MODE ONLY")
-            } else {
-                self.logger.logError("SUBSCRIPTION", "❌❌❌ Failed to SEND subscription")
+            
+            guard self.isConnected, self.webSocketTask != nil else {
+                self.logger.logError("SUBSCRIPTION", "Cannot subscribe - not connected")
+                return
+            }
+            
+            // ✅ Get subscriptions safely
+            let subscriptions = SubscriptionManager.shared.getSubscriptions()
+            
+            guard !subscriptions.isEmpty else {
+                self.logger.logError("SUBSCRIPTION", "No subscriptions to send")
+                return
+            }
+            
+            self.logger.log("SUBSCRIPTION", "✅ Subscribing to \(subscriptions.count) channels")
+            
+            let filters = subscriptions.map { sub in
+                SubscriptionFilter(area: sub.area, eventType: sub.eventType)
+            }
+            
+            // ✅ Always reset for live events only
+            let request = SubscriptionRequest(
+                clientId: self.clientId,
+                filters: filters,
+                syncState: nil,
+                resetConsumers: true
+            )
+            
+            guard let jsonData = try? JSONEncoder().encode(request),
+                  let jsonString = String(data: jsonData, encoding: .utf8) else {
+                self.logger.logError("SUBSCRIPTION", "Failed to encode request")
+                return
+            }
+            
+            // ✅ Send on WebSocket queue (already here)
+            self.send(message: jsonString) { [weak self] success in
+                guard let self = self else { return }
+                if success {
+                    self.hasSubscribed = true
+                    self.logger.log("SUBSCRIPTION", "✅ Subscription SENT successfully")
+                } else {
+                    self.logger.logError("SUBSCRIPTION", "❌ Failed to send subscription")
+                }
             }
         }
     }
@@ -461,7 +470,7 @@ class WebSocketService: ObservableObject {
     private func sendPing() {
         webSocketTask?.sendPing { error in
             if let error = error {
-                self.logger.logError("PING", "❌ Ping failed: \(error.localizedDescription)")
+                self.logger.logError("PING", "Failed: \(error.localizedDescription)")
             }
         }
     }
@@ -483,9 +492,12 @@ class WebSocketService: ObservableObject {
         }
     }
     
-    // MARK: - Message Sending
+    // MARK: - Message Sending (✅ FIXED)
+    
+    /// Send message on WebSocket - thread-safe
     private func send(message: String, completion: ((Bool) -> Void)? = nil) {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        // ✅ Use WebSocket queue for all sends
+        wsQueue.async { [weak self] in
             guard let self = self else {
                 completion?(false)
                 return
@@ -515,8 +527,7 @@ class WebSocketService: ObservableObject {
         
         logger.log("STATS", """
             Received: \(receivedCount), Processed: \(processedCount), 
-            Dropped: \(droppedCount), ACKed: \(ackedCount), 
-            Pending ACKs: \(pendingAcks.count)
+            Dropped: \(droppedCount), ACKed: \(ackedCount)
             """)
         
         DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 10.0) { [weak self] in
