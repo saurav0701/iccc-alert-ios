@@ -175,11 +175,13 @@ class SubscriptionManager: ObservableObject {
     // ✅ NEW: Missing static method that was causing build error
     static func getAllAvailableChannels() -> [Channel] {
         // This returns all possible channels that can be subscribed to
-        // You should define your available channels here
+        // You should define your available channels here based on your backend
         return [
-            Channel(id: "area1_cd", area: "area1", eventType: "cd", areaDisplay: "Area 1", eventTypeDisplay: "Camera Disconnect"),
-            Channel(id: "area1_id", area: "area1", eventType: "id", areaDisplay: "Area 1", eventTypeDisplay: "Intrusion Detection"),
-            // Add all your available channels here
+            Channel(id: "area1_cd", area: "area1", eventType: "cd", areaDisplay: "Area 1", eventTypeDisplay: "Camera Disconnect", description: "Alerts when cameras disconnect", isSubscribed: false, isMuted: false, isPinned: false),
+            Channel(id: "area1_id", area: "area1", eventType: "id", areaDisplay: "Area 1", eventTypeDisplay: "Intrusion Detection", description: "Alerts for intrusion events", isSubscribed: false, isMuted: false, isPinned: false),
+            Channel(id: "area1_ct", area: "area1", eventType: "ct", areaDisplay: "Area 1", eventTypeDisplay: "Camera Tamper", description: "Alerts when cameras are tampered", isSubscribed: false, isMuted: false, isPinned: false),
+            Channel(id: "area1_sh", area: "area1", eventType: "sh", areaDisplay: "Area 1", eventTypeDisplay: "Shock Detection", description: "Alerts for shock events", isSubscribed: false, isMuted: false, isPinned: false),
+            // Add more channels as needed based on your backend configuration
         ]
     }
     
