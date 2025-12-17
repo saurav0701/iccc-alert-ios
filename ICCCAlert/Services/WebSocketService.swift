@@ -49,6 +49,8 @@ class WebSocketService: ObservableObject {
     private let catchUpCheckInterval: TimeInterval = 5.0  // Match Android
     private var consecutiveEmptyChecks: [String: Int] = [:]
     private let stableEmptyThreshold = 3  // Match Android
+    private var catchUpStartTime: [String: Date] = [:]  // ✅ NEW: Track when catch-up started
+    private let maxCatchUpDuration: TimeInterval = 30.0  // ✅ NEW: Force exit after 30s
     
     // Connection state tracking
     private var lastConnectionTime: Date?
@@ -225,7 +227,9 @@ class WebSocketService: ObservableObject {
                 }
                 
                 if let msg = message {
+                    messageQueue.sync { activeProcessors += 1 }  // ✅ Mark as active
                     processEvent(msg)
+                    messageQueue.sync { activeProcessors -= 1 }  // ✅ Mark as idle
                 } else {
                     Thread.sleep(forTimeInterval: 0.005) // 5ms (faster than Android's 10ms)
                 }
@@ -235,11 +239,34 @@ class WebSocketService: ObservableObject {
     
     // ✅ FIX 7: Streamlined processing (like Android)
     private func processEvent(_ text: String) {
-        // Check for subscription confirmation
+        // ✅ CRITICAL: Check for subscription CONFIRMATION with numPending
         if text.contains("\"status\":\"subscribed\"") || text.contains("\"status\":\"ok\"") {
             DispatchQueue.main.async { [weak self] in
                 self?.hasSubscribed = true
                 self?.logger.logWebSocket("✅ Subscription confirmed by server")
+            }
+            
+            // ✅ NEW: Check if backend says we're already caught up
+            if let data = text.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let consumers = json["consumers"] as? [[String: Any]] {
+                
+                for consumer in consumers {
+                    if let numPending = consumer["numPending"] as? Int,
+                       let filterArea = consumer["filterArea"] as? String,
+                       let filterEventType = consumer["filterEventType"] as? String {
+                        
+                        let channelId = "\(filterArea)_\(filterEventType)"
+                        
+                        if numPending == 0 {
+                            // ✅ Backend says no pending messages - disable catch-up immediately
+                            logger.log("CATCHUP", "⚡ \(channelId): numPending=0, disabling catch-up immediately")
+                            ChannelSyncState.shared.disableCatchUpMode(channelId: channelId)
+                            catchUpChannels.remove(channelId)
+                            consecutiveEmptyChecks.removeValue(forKey: channelId)
+                        }
+                    }
+                }
             }
             return
         }
@@ -491,6 +518,7 @@ class WebSocketService: ObservableObject {
             let channelId = "\(sub.area)_\(sub.eventType)"
             ChannelSyncState.shared.enableCatchUpMode(channelId: channelId)
             catchUpChannels.insert(channelId)
+            catchUpStartTime[channelId] = Date()  // ✅ Track start time
         }
         
         var syncState: [String: SyncStateInfo] = [:]
@@ -562,36 +590,63 @@ class WebSocketService: ObservableObject {
     private func checkCatchUpProgress() {
         var allComplete = true
         var activeCatchUps = 0
+        let now = Date()
         
         for channelId in catchUpChannels {
             if ChannelSyncState.shared.isInCatchUpMode(channelId: channelId) {
                 activeCatchUps += 1
                 let progress = ChannelSyncState.shared.getCatchUpProgress(channelId: channelId)
                 
-                // ✅ Check if queue is empty AND no processing happening (like Android)
-                messageQueue.sync {
-                    let queueEmpty = pendingMessages.isEmpty
+                // ✅ NEW: Check if catch-up has been running too long
+                if let startTime = catchUpStartTime[channelId],
+                   now.timeIntervalSince(startTime) > maxCatchUpDuration {
+                    logger.log("CATCHUP", "⚠️ \(channelId): Timeout after 30s, forcing exit (progress=\(progress))")
+                    ChannelSyncState.shared.disableCatchUpMode(channelId: channelId)
+                    catchUpChannels.remove(channelId)
+                    consecutiveEmptyChecks.removeValue(forKey: channelId)
+                    catchUpStartTime.removeValue(forKey: channelId)
                     
-                    if progress > 0 && queueEmpty {
-                        let count = (consecutiveEmptyChecks[channelId] ?? 0) + 1
-                        consecutiveEmptyChecks[channelId] = count
+                    DispatchQueue.main.async {
+                        NotificationCenter.default.post(name: .catchUpComplete, object: nil)
+                    }
+                    continue
+                }
+                
+                // ✅ Check ALL conditions (like Android)
+                var queueEmpty = false
+                var processorsIdle = false
+                
+                messageQueue.sync {
+                    queueEmpty = pendingMessages.isEmpty
+                    processorsIdle = (activeProcessors == 0)
+                }
+                
+                // ✅ CRITICAL: Match Android's exact logic
+                let shouldComplete = (progress > 0 || consecutiveEmptyChecks[channelId] ?? 0 > 0) && queueEmpty && processorsIdle
+                
+                if shouldComplete {
+                    let count = (consecutiveEmptyChecks[channelId] ?? 0) + 1
+                    consecutiveEmptyChecks[channelId] = count
+                    
+                    logger.log("CATCHUP", "📊 \(channelId): progress=\(progress), empty checks=\(count)/\(stableEmptyThreshold)")
+                    
+                    if count >= stableEmptyThreshold {
+                        ChannelSyncState.shared.disableCatchUpMode(channelId: channelId)
+                        catchUpChannels.remove(channelId)
+                        consecutiveEmptyChecks.removeValue(forKey: channelId)
+                        catchUpStartTime.removeValue(forKey: channelId)
+                        logger.log("CATCHUP", "✅ Complete for \(channelId) (\(progress) events)")
                         
-                        if count >= stableEmptyThreshold {
-                            ChannelSyncState.shared.disableCatchUpMode(channelId: channelId)
-                            catchUpChannels.remove(channelId)
-                            consecutiveEmptyChecks.removeValue(forKey: channelId)
-                            logger.log("CATCHUP", "✅ Complete for \(channelId) (\(progress) events)")
-                            
-                            DispatchQueue.main.async {
-                                NotificationCenter.default.post(name: .catchUpComplete, object: nil)
-                            }
-                        } else {
-                            allComplete = false
+                        DispatchQueue.main.async {
+                            NotificationCenter.default.post(name: .catchUpComplete, object: nil)
                         }
                     } else {
-                        consecutiveEmptyChecks[channelId] = 0
                         allComplete = false
                     }
+                } else {
+                    // Reset counter if conditions not met
+                    consecutiveEmptyChecks[channelId] = 0
+                    allComplete = false
                 }
             }
         }
