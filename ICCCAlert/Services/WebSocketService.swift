@@ -227,11 +227,17 @@ class WebSocketService: ObservableObject {
                 }
                 
                 if let msg = message {
-                    messageQueue.sync { activeProcessors += 1 }  // ✅ Mark as active
+                    processorLock.lock()
+                    activeProcessors += 1
+                    processorLock.unlock()
+                    
                     processEvent(msg)
-                    messageQueue.sync { activeProcessors -= 1 }  // ✅ Mark as idle
+                    
+                    processorLock.lock()
+                    activeProcessors -= 1
+                    processorLock.unlock()
                 } else {
-                    Thread.sleep(forTimeInterval: 0.005) // 5ms (faster than Android's 10ms)
+                    Thread.sleep(forTimeInterval: 0.005)
                 }
             }
         }
@@ -618,8 +624,11 @@ class WebSocketService: ObservableObject {
                 
                 messageQueue.sync {
                     queueEmpty = pendingMessages.isEmpty
-                    processorsIdle = (activeProcessors == 0)
                 }
+                
+                processorLock.lock()
+                processorsIdle = (activeProcessors == 0)
+                processorLock.unlock()
                 
                 // ✅ CRITICAL: Match Android's exact logic
                 let shouldComplete = (progress > 0 || consecutiveEmptyChecks[channelId] ?? 0 > 0) && queueEmpty && processorsIdle
