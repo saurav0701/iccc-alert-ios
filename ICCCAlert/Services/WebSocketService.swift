@@ -450,8 +450,7 @@ class WebSocketService: ObservableObject {
             }
         }
     }
-    
-    // MARK: - Ping/Pong
+
     private func startPingPong() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -473,8 +472,7 @@ class WebSocketService: ObservableObject {
             }
         }
     }
-    
-    // MARK: - Reconnection
+
     private func scheduleReconnect() {
         guard reconnectAttempts < maxReconnectAttempts else {
             connectionStatus = "Connection failed - Tap to retry"
@@ -490,10 +488,7 @@ class WebSocketService: ObservableObject {
             self?.connect()
         }
     }
-    
-    // MARK: - Message Sending (✅ FIXED)
-    
-    /// Send message on WebSocket - thread-safe
+
     private func send(message: String, completion: ((Bool) -> Void)? = nil) {
         // ✅ Use WebSocket queue for all sends
         wsQueue.async { [weak self] in

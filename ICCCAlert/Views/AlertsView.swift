@@ -312,8 +312,6 @@ struct AlertsView: View {
         }
     }
     
-    @State private var refreshDebouncer: DispatchWorkItem?
-    
     // ✅ CRITICAL FIX: Aggressive debouncing for high-frequency events
     private func setupNotificationObservers() {
         // Remove any existing observers first
@@ -329,11 +327,10 @@ struct AlertsView: View {
             // This batches rapid-fire events into a single UI update
             self.refreshDebouncer?.cancel()
             
-            let workItem = DispatchWorkItem { [weak self] in
-                guard let self = self else { return }
-                
+            let workItem = DispatchWorkItem {
                 // Update on main thread
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
                     self.cachedChannelGroups = self.channelGroups
                     self.refreshTrigger = UUID()
                     self.isRefreshing = false
