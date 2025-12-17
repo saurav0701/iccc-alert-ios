@@ -13,7 +13,7 @@ class SubscriptionManager: ObservableObject {
     private let eventsKey = "channel_events"
     private let unreadKey = "unread_counts"
     
-    // ✅ SIMPLE: Just use a lock, no complex queues
+    // ✅ SIMPLE: Just use a lock
     private let lock = NSLock()
     
     private var recentEventIds: Set<String> = []
@@ -26,7 +26,7 @@ class SubscriptionManager: ObservableObject {
         buildRecentEventIds()
     }
     
-    // ✅ SIMPLE SUBSCRIBE - NO ASYNC BULLSHIT
+    // ✅ SIMPLE SUBSCRIBE - NO ASYNC
     func subscribe(channel: Channel) {
         lock.lock()
         defer { lock.unlock() }
@@ -158,6 +158,31 @@ class SubscriptionManager: ObservableObject {
         return channelEvents[channelId] ?? []
     }
     
+    // ✅ NEW: Missing method that was causing build error
+    func getLastEvent(channelId: String) -> Event? {
+        lock.lock()
+        defer { lock.unlock() }
+        return channelEvents[channelId]?.first
+    }
+    
+    // ✅ NEW: Missing method that was causing build error
+    func getEventCount(channelId: String) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return channelEvents[channelId]?.count ?? 0
+    }
+    
+    // ✅ NEW: Missing static method that was causing build error
+    static func getAllAvailableChannels() -> [Channel] {
+        // This returns all possible channels that can be subscribed to
+        // You should define your available channels here
+        return [
+            Channel(id: "area1_cd", area: "area1", eventType: "cd", areaDisplay: "Area 1", eventTypeDisplay: "Camera Disconnect"),
+            Channel(id: "area1_id", area: "area1", eventType: "id", areaDisplay: "Area 1", eventTypeDisplay: "Intrusion Detection"),
+            // Add all your available channels here
+        ]
+    }
+    
     func getUnreadCount(channelId: String) -> Int {
         lock.lock()
         defer { lock.unlock() }
@@ -180,6 +205,16 @@ class SubscriptionManager: ObservableObject {
         lock.lock()
         defer { lock.unlock() }
         return channelEvents.values.reduce(0) { $0 + $1.count }
+    }
+    
+    // ✅ NEW: Force save method for ICCCAlertApp
+    func forceSave() {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        saveTimer?.invalidate()
+        saveNow()
+        print("💾 Force saved all data")
     }
     
     private func buildRecentEventIds() {
