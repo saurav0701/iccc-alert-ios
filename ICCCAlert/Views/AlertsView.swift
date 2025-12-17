@@ -13,6 +13,7 @@ struct AlertsView: View {
     // ✅ OPTIMIZATION: Cache channel groups to avoid recomputation
     @State private var cachedChannelGroups: [(channel: Channel, events: [Event])] = []
     @State private var isRefreshing = false
+    @State private var refreshDebouncer: DispatchWorkItem?
     
     // Compute channel groups
     private var channelGroups: [(channel: Channel, events: [Event])] {
@@ -311,7 +312,9 @@ struct AlertsView: View {
         }
     }
     
-    // ✅ CRITICAL FIX: Process notifications on background queue
+    @State private var refreshDebouncer: DispatchWorkItem?
+    
+    // ✅ CRITICAL FIX: Aggressive debouncing for high-frequency events
     private func setupNotificationObservers() {
         // Remove any existing observers first
         removeNotificationObservers()
@@ -322,25 +325,36 @@ struct AlertsView: View {
             object: nil,
             queue: OperationQueue()  // Background queue!
         ) { [self] _ in
-            // ✅ Debounce refresh to avoid excessive updates
-            DispatchQueue.main.async {
-                guard !self.isRefreshing else { return }
+            // ✅ CRITICAL: Cancel pending refresh and schedule new one
+            // This batches rapid-fire events into a single UI update
+            self.refreshDebouncer?.cancel()
+            
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self = self else { return }
                 
-                self.isRefreshing = true
-                
-                // Update after brief delay to batch multiple events
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                // Update on main thread
+                DispatchQueue.main.async {
                     self.cachedChannelGroups = self.channelGroups
                     self.refreshTrigger = UUID()
                     self.isRefreshing = false
                 }
             }
+            
+            self.refreshDebouncer = workItem
+            self.isRefreshing = true
+            
+            // ✅ Wait 300ms before refreshing (batches multiple events)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: workItem)
         }
         
         print("📱 AlertsView: Notification observers setup complete")
     }
     
     private func removeNotificationObservers() {
+        // Cancel any pending refresh
+        refreshDebouncer?.cancel()
+        refreshDebouncer = nil
+        
         if let observer = eventObserver {
             NotificationCenter.default.removeObserver(observer)
             eventObserver = nil
