@@ -315,18 +315,18 @@ struct AlertsView: View {
         }
     }
     
-    // ✅ CRITICAL FIX: Aggressive debouncing for high-frequency events
+   // ✅ FIXED: Removed [weak self] from struct closure
     private func setupNotificationObservers() {
         // Remove any existing observers first
         removeNotificationObservers()
         
-        // ✅ Process on BACKGROUND queue to prevent main thread blocking
+        // Process on BACKGROUND queue to prevent main thread blocking
         eventObserver = NotificationCenter.default.addObserver(
             forName: .newEventReceived,
             object: nil,
             queue: OperationQueue()  // Background queue!
-        ) { [weak self] _ in
-            guard let self = self else { return }
+        ) { _ in
+            // No [weak self] here because AlertsView is a struct
             
             // ✅ CRITICAL: Cancel pending refresh and schedule new one
             // This batches rapid-fire events into a single UI update
@@ -344,8 +344,11 @@ struct AlertsView: View {
                 }
             }
             
-            self.refreshDebouncer = workItem
-            self.isRefreshing = true
+            // Update the state variable on the main thread
+            DispatchQueue.main.async {
+                self.refreshDebouncer = workItem
+                self.isRefreshing = true
+            }
             
             // ✅ Wait 500ms before refreshing (batches multiple events)
             DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.5, execute: workItem)

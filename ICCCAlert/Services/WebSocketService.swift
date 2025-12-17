@@ -410,12 +410,10 @@ class WebSocketService: ObservableObject {
             self?.flushAcksInternal()
         }
     }
-    
-    // MARK: - Subscription Management
-    
+
+
     /// Send subscription to server - MUST be called on background thread
     func sendSubscriptionV2() {
-        // ✅ Execute on background thread
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             
@@ -437,8 +435,7 @@ class WebSocketService: ObservableObject {
             let filters = subscriptions.map { sub in
                 SubscriptionFilter(area: sub.area, eventType: sub.eventType)
             }
-            
-            // Reset for live events
+
             let request = SubscriptionRequest(
                 clientId: self.clientId,
                 filters: filters,
@@ -451,8 +448,7 @@ class WebSocketService: ObservableObject {
                 self.logger.logError("SUBSCRIPTION", "Failed to encode request")
                 return
             }
-            
-            // Send on WebSocket queue
+
             self.wsQueue.async {
                 let message = URLSessionWebSocketTask.Message.string(jsonString)
                 self.webSocketTask?.send(message) { [weak self] error in
@@ -505,8 +501,7 @@ class WebSocketService: ObservableObject {
             self?.connect()
         }
     }
-    
-    // MARK: - Stats Logging
+
     private func startStatsLogging() {
         DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 10.0) { [weak self] in
             self?.logStats()
@@ -527,7 +522,6 @@ class WebSocketService: ObservableObject {
     }
 }
 
-// MARK: - Notification Names
 extension Notification.Name {
     static let newEventReceived = Notification.Name("newEventReceived")
     static let subscriptionsUpdated = Notification.Name("subscriptionsUpdated")
