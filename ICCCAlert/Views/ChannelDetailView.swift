@@ -277,18 +277,25 @@ struct ChannelDetailView: View {
     // MARK: - Actions
     
     private func toggleSubscription() {
-        if isSubscribed {
-            subscriptionManager.unsubscribe(channelId: channel.id)
-            alertMessage = "Unsubscribed from \(channel.areaDisplay)"
-        } else {
-            subscriptionManager.subscribe(channel: channel)
-            alertMessage = "Subscribed to \(channel.areaDisplay)"
-        }
-        showingAlert = true
-        
-        // ✅ Force refresh to show updated state
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            refreshTrigger = UUID()
+        // ✅ CRITICAL FIX: Do subscription work on background thread
+        DispatchQueue.global(qos: .userInitiated).async {
+            if self.isSubscribed {
+                self.subscriptionManager.unsubscribe(channelId: self.channel.id)
+                
+                DispatchQueue.main.async {
+                    self.alertMessage = "Unsubscribed from \(self.channel.areaDisplay)"
+                    self.showingAlert = true
+                    self.refreshTrigger = UUID()
+                }
+            } else {
+                self.subscriptionManager.subscribe(channel: self.channel)
+                
+                DispatchQueue.main.async {
+                    self.alertMessage = "Subscribed to \(self.channel.areaDisplay)"
+                    self.showingAlert = true
+                    self.refreshTrigger = UUID()
+                }
+            }
         }
     }
     

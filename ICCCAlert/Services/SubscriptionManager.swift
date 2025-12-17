@@ -24,13 +24,13 @@ class SubscriptionManager: ObservableObject {
     private var saveTimer: Timer?
     private let saveDelay: TimeInterval = 0.5
     
-    // ✅ REMOVED: Subscription update debouncing - causes sticking
-    // Android doesn't debounce subscriptions, neither should iOS
-    
     // Runtime checker
     private var runtimeCheckTimer: Timer?
     
     private var wasAppKilled = false
+    
+    // ✅ NEW: Background queue for subscription operations
+    private let subscriptionQueue = DispatchQueue(label: "com.iccc.subscriptions", qos: .userInitiated)
     
     // MARK: - Initialization
     private init() {
@@ -99,75 +99,97 @@ class SubscriptionManager: ObservableObject {
         }
     }
     
-    // MARK: - Channel Subscription
+    // MARK: - Channel Subscription (FIXED - Async)
     func subscribe(channel: Channel) {
-        lock.lock()
+        print("✅ Subscribe called for: \(channel.id)")
         
-        var updatedChannel = channel
-        updatedChannel.isSubscribed = true
-        
-        if subscribedChannels.contains(where: { $0.id == channel.id }) {
-            lock.unlock()
-            print("⚠️ Already subscribed to \(channel.id)")
-            return
-        }
-        
-        subscribedChannels.append(updatedChannel)
-        saveSubscriptions()
-        
-        let channelId = channel.id
-        if ChannelSyncState.shared.getSyncInfo(channelId: channelId) == nil {
-            _ = ChannelSyncState.shared.recordEventReceived(
-                channelId: channelId,
-                eventId: "init",
-                timestamp: Int64(Date().timeIntervalSince1970),
-                seq: 0
-            )
-            print("🆕 Initialized sync state for new channel: \(channelId)")
-        }
-        
-        lock.unlock()
-        
-        print("✅ Subscribed to \(channel.id)")
-        
-        // ✅ CRITICAL FIX: Force subscription update immediately
-        DispatchQueue.main.async {
-            WebSocketService.shared.sendSubscriptionV2()
+        // ✅ CRITICAL: Do all work on background thread
+        subscriptionQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            self.lock.lock()
+            
+            var updatedChannel = channel
+            updatedChannel.isSubscribed = true
+            
+            if self.subscribedChannels.contains(where: { $0.id == channel.id }) {
+                self.lock.unlock()
+                print("⚠️ Already subscribed to \(channel.id)")
+                return
+            }
+            
+            self.subscribedChannels.append(updatedChannel)
+            self.saveSubscriptions()
+            
+            let channelId = channel.id
+            if ChannelSyncState.shared.getSyncInfo(channelId: channelId) == nil {
+                _ = ChannelSyncState.shared.recordEventReceived(
+                    channelId: channelId,
+                    eventId: "init",
+                    timestamp: Int64(Date().timeIntervalSince1970),
+                    seq: 0
+                )
+                print("🆕 Initialized sync state for new channel: \(channelId)")
+            }
+            
+            self.lock.unlock()
+            
+            print("✅ Subscribed to \(channel.id)")
+            
+            // ✅ CRITICAL: Send WebSocket update on background thread
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.1) {
+                WebSocketService.shared.sendSubscriptionV2()
+            }
+            
+            // ✅ Update UI on main thread
+            DispatchQueue.main.async {
+                self.objectWillChange.send()
+            }
         }
     }
     
     func unsubscribe(channelId: String) {
-        lock.lock()
+        print("✅ Unsubscribe called for: \(channelId)")
         
-        subscribedChannels.removeAll { $0.id == channelId }
-        
-        if let events = channelEvents[channelId] {
-            events.forEach { event in
-                if let eventId = event.id {
-                    recentEventIds.remove(eventId)
-                    eventTimestamps.removeValue(forKey: eventId)
+        // ✅ CRITICAL: Do all work on background thread
+        subscriptionQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            self.lock.lock()
+            
+            self.subscribedChannels.removeAll { $0.id == channelId }
+            
+            if let events = self.channelEvents[channelId] {
+                events.forEach { event in
+                    if let eventId = event.id {
+                        self.recentEventIds.remove(eventId)
+                        self.eventTimestamps.removeValue(forKey: eventId)
+                    }
                 }
             }
-        }
-        
-        channelEvents.removeValue(forKey: channelId)
-        unreadCounts.removeValue(forKey: channelId)
-        
-        ChannelSyncState.shared.clearChannel(channelId: channelId)
-        
-        saveSubscriptions()
-        scheduleSave()
-        lock.unlock()
-        
-        print("✅ Unsubscribed from \(channelId)")
-        
-        // ✅ CRITICAL FIX: Force subscription update immediately
-        DispatchQueue.main.async {
-            WebSocketService.shared.sendSubscriptionV2()
+            
+            self.channelEvents.removeValue(forKey: channelId)
+            self.unreadCounts.removeValue(forKey: channelId)
+            
+            ChannelSyncState.shared.clearChannel(channelId: channelId)
+            
+            self.saveSubscriptions()
+            self.scheduleSave()
+            self.lock.unlock()
+            
+            print("✅ Unsubscribed from \(channelId)")
+            
+            // ✅ CRITICAL: Send WebSocket update on background thread
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.1) {
+                WebSocketService.shared.sendSubscriptionV2()
+            }
+            
+            // ✅ Update UI on main thread
+            DispatchQueue.main.async {
+                self.objectWillChange.send()
+            }
         }
     }
-    
-    // ✅ REMOVED: performSubscriptionUpdate() - we call sendSubscriptionV2 directly now
     
     func isSubscribed(channelId: String) -> Bool {
         lock.lock()
