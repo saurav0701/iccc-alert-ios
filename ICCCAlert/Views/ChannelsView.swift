@@ -221,8 +221,7 @@ struct ChannelRowView: View {
                     
                     if unreadCount > 0 {
                         Text("\(unreadCount)")
-                            .font(.caption)
-                            .fontWeight(.semibold)
+                            .font(.system(size: 12, weight: .semibold))
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
                             .background(Color.red)
