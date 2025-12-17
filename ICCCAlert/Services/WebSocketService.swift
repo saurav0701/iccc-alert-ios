@@ -77,7 +77,7 @@ class WebSocketService: ObservableObject {
                 let timeSinceLastEvent = Date().timeIntervalSince(self.lastEventTime)
                 
                 if self.isConnected && timeSinceLastEvent > 30 {
-                    self.logger.logWarning("HANG", "No events for \(Int(timeSinceLastEvent))s - connection may be hung")
+                    self.logger.log("HANG", "⚠️ No events for \(Int(timeSinceLastEvent))s - connection may be hung")
                     
                     // Force reconnect if hung for >60s
                     if timeSinceLastEvent > 60 {
@@ -388,7 +388,7 @@ class WebSocketService: ObservableObject {
             
             // ✅ Enable catch-up mode for all channels
             subscriptions.forEach { sub in
-                ChannelSyncState.shared.enableCatchUpMode("\(sub.area)_\(sub.eventType)")
+                ChannelSyncState.shared.enableCatchUpMode(channelId: "\(sub.area)_\(sub.eventType)")
             }
             
             // ✅ Build sync state
