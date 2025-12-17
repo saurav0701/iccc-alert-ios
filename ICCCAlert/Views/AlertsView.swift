@@ -315,7 +315,7 @@ struct AlertsView: View {
         }
     }
     
-   // ✅ FIXED: Removed [weak self] from struct closure
+    // ✅ COMPLETELY FIXED: Proper closure capturing for struct
     private func setupNotificationObservers() {
         // Remove any existing observers first
         removeNotificationObservers()
@@ -326,32 +326,31 @@ struct AlertsView: View {
             object: nil,
             queue: OperationQueue()  // Background queue!
         ) { _ in
-            // No [weak self] here because AlertsView is a struct
-            
-            // ✅ CRITICAL: Cancel pending refresh and schedule new one
+            // ✅ Cancel pending refresh and schedule new one
             // This batches rapid-fire events into a single UI update
-            self.refreshDebouncer?.cancel()
-            
-            let workItem = DispatchWorkItem {
-                // Compute new data on background thread
-                let newGroups = self.computeChannelGroups()
-                
-                // Update on main thread
-                DispatchQueue.main.async {
-                    self.cachedChannelGroups = newGroups
-                    self.refreshTrigger = UUID()
-                    self.isRefreshing = false
-                }
-            }
-            
-            // Update the state variable on the main thread
             DispatchQueue.main.async {
+                self.refreshDebouncer?.cancel()
+                
+                let workItem = DispatchWorkItem {
+                    // Compute new data on background thread
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        let newGroups = self.computeChannelGroups()
+                        
+                        // Update on main thread
+                        DispatchQueue.main.async {
+                            self.cachedChannelGroups = newGroups
+                            self.refreshTrigger = UUID()
+                            self.isRefreshing = false
+                        }
+                    }
+                }
+                
                 self.refreshDebouncer = workItem
                 self.isRefreshing = true
+                
+                // ✅ Wait 500ms before refreshing (batches multiple events)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: workItem)
             }
-            
-            // ✅ Wait 500ms before refreshing (batches multiple events)
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.5, execute: workItem)
         }
         
         print("📱 AlertsView: Notification observers setup complete")

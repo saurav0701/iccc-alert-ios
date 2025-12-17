@@ -15,6 +15,9 @@ struct ChannelDetailView: View {
     // ✅ CRITICAL FIX: Proper observer management
     @State private var eventObserver: NSObjectProtocol?
     
+    // ✅ NEW: Track if subscribe operation is in progress
+    @State private var isSubscribing = false
+    
     @Environment(\.presentationMode) var presentationMode
     
     var isSubscribed: Bool {
@@ -174,18 +177,24 @@ struct ChannelDetailView: View {
                 
                 Spacer()
                 
-                // ✅ CRITICAL FIX: Simple button without complex state
+                // ✅ COMPLETELY FIXED: Simple button with proper state management
                 Button(action: toggleSubscription) {
-                    Text(isSubscribed ? "Unsubscribe" : "Subscribe")
-                        .font(.system(size: 14, weight: .semibold))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(isSubscribed ? Color.red.opacity(0.1) : Color.blue)
-                        .foregroundColor(isSubscribed ? .red : .white)
-                        .cornerRadius(8)
+                    HStack(spacing: 4) {
+                        if isSubscribing {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle())
+                                .scaleEffect(0.8)
+                        }
+                        Text(isSubscribed ? "Unsubscribe" : "Subscribe")
+                            .font(.system(size: 14, weight: .semibold))
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(isSubscribed ? Color.red.opacity(0.1) : Color.blue)
+                    .foregroundColor(isSubscribed ? .red : .white)
+                    .cornerRadius(8)
                 }
-                // ✅ Disable button briefly after click to prevent double-tap
-                .disabled(showingAlert)
+                .disabled(isSubscribing)  // Prevent double-tap
             }
             
             // Mute Toggle (only if subscribed)
@@ -277,40 +286,51 @@ struct ChannelDetailView: View {
         }
     }
     
-    // MARK: - Actions (✅ COMPLETELY REWRITTEN)
+    // MARK: - Actions (✅ COMPLETELY FIXED)
     
-    /// Toggle subscription - non-blocking and thread-safe
+    /// Toggle subscription - properly implemented for SwiftUI struct
     private func toggleSubscription() {
         print("🔘 Toggle subscription button tapped")
         
-        // ✅ FIX 1: Capture current state BEFORE any async work
+        // ✅ Prevent double-tap
+        guard !isSubscribing else {
+            print("⚠️ Already subscribing, ignoring tap")
+            return
+        }
+        
+        // ✅ Capture state before any async work
         let wasSubscribed = isSubscribed
-        let channelToSubscribe = channel
+        let channelToToggle = channel
         
-        // ✅ FIX 2: Show alert immediately to prevent double-tap
-        alertMessage = wasSubscribed ? "Unsubscribing..." : "Subscribing..."
-        showingAlert = true
+        // ✅ Show loading state
+        isSubscribing = true
         
-        // ✅ FIX 3: Do subscription work asynchronously
-        if wasSubscribed {
-            // Unsubscribe
-            subscriptionManager.unsubscribe(channelId: channelToSubscribe.id)
-            
-            // Update UI after short delay
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                alertMessage = "Unsubscribed from \(channelToSubscribe.areaDisplay)"
-                showingAlert = true
-                refreshTrigger = UUID()
-            }
-        } else {
-            // Subscribe
-            subscriptionManager.subscribe(channel: channelToSubscribe)
-            
-            // Update UI after short delay
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                alertMessage = "Subscribed to \(channelToSubscribe.areaDisplay)"
-                showingAlert = true
-                refreshTrigger = UUID()
+        // ✅ Perform operation on background thread
+        DispatchQueue.global(qos: .userInitiated).async {
+            if wasSubscribed {
+                // Unsubscribe
+                SubscriptionManager.shared.unsubscribe(channelId: channelToToggle.id)
+                print("✅ Unsubscribed from \(channelToToggle.id)")
+                
+                // Update UI
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    self.isSubscribing = false
+                    self.alertMessage = "Unsubscribed from \(channelToToggle.areaDisplay)"
+                    self.showingAlert = true
+                    self.refreshTrigger = UUID()
+                }
+            } else {
+                // Subscribe
+                SubscriptionManager.shared.subscribe(channel: channelToToggle)
+                print("✅ Subscribed to \(channelToToggle.id)")
+                
+                // Update UI
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    self.isSubscribing = false
+                    self.alertMessage = "Subscribed to \(channelToToggle.areaDisplay)"
+                    self.showingAlert = true
+                    self.refreshTrigger = UUID()
+                }
             }
         }
     }
@@ -334,17 +354,17 @@ struct ChannelDetailView: View {
         }
     }
     
-    // MARK: - Event Notifications (✅ COMPLETELY REWRITTEN FOR PERFORMANCE)
+    // MARK: - Event Notifications (✅ FIXED)
     
-    /// Setup notification observer - optimized for high-frequency events
+    /// Setup notification observer
     private func setupNotificationObserver() {
         // ✅ Remove any existing observer first
         removeNotificationObserver()
         
-        // ✅ Capture channel ID as a local constant
+        // ✅ Capture channel ID
         let channelId = channel.id
         
-        // ✅ CRITICAL FIX: Process notifications on BACKGROUND queue to prevent main thread blocking
+        // ✅ Process notifications on BACKGROUND queue
         eventObserver = NotificationCenter.default.addObserver(
             forName: .newEventReceived,
             object: nil,
@@ -356,7 +376,7 @@ struct ChannelDetailView: View {
                 return
             }
             
-            // ✅ Update UI on main thread (but in a non-blocking way)
+            // ✅ Update UI on main thread (async)
             DispatchQueue.main.async {
                 self.pendingEventsCount += 1
                 self.showNewEventsBanner = true
