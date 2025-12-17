@@ -319,11 +319,11 @@ struct AlertsView: View {
             forName: .newEventReceived,
             object: nil,
             queue: .main
-        ) { _ in
+        ) { [self] _ in
             // ✅ CRITICAL FIX: Debounce UI updates
-            self.updateTimer?.invalidate()
-            self.updateTimer = Timer.scheduledTimer(withTimeInterval: self.updateDebounceInterval, repeats: false) { [weak self] _ in
-                self?.refreshTrigger = UUID()
+            updateTimer?.invalidate()
+            updateTimer = Timer.scheduledTimer(withTimeInterval: updateDebounceInterval, repeats: false) { _ in
+                refreshTrigger = UUID()
             }
         }
         
