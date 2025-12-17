@@ -334,25 +334,29 @@ struct ChannelDetailView: View {
         }
     }
     
-    // MARK: - Event Notifications (✅ FIXED)
+    // MARK: - Event Notifications (✅ FIXED - Simple approach)
     
-    /// Setup notification observer with proper memory management
+    /// Setup notification observer - Views are value types, no need for weak self
     private func setupNotificationObserver() {
         // ✅ Remove any existing observer first
         removeNotificationObserver()
         
-        // ✅ CRITICAL FIX: Use [weak self] to prevent retain cycles
+        // ✅ FIX: Capture channel ID as a local constant
+        let channelId = channel.id
+        
         eventObserver = NotificationCenter.default.addObserver(
             forName: .newEventReceived,
             object: nil,
             queue: .main
-        ) { [weak self] notification in
-            guard let self = self else { return }
+        ) { notification in
+            // ✅ No [weak self] needed - SwiftUI views are value types
+            // The notification handler captures the view's state bindings
             
             if let userInfo = notification.userInfo,
-               let channelId = userInfo["channelId"] as? String,
-               channelId == self.channel.id {
+               let eventChannelId = userInfo["channelId"] as? String,
+               eventChannelId == channelId {
                 
+                // These will update the view's state
                 self.pendingEventsCount += 1
                 self.showNewEventsBanner = true
                 self.refreshTrigger = UUID()
