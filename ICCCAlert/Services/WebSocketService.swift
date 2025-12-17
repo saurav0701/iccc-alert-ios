@@ -482,30 +482,36 @@ class WebSocketService: ObservableObject {
     
     // MARK: - Subscription Management
     func sendSubscriptionV2() {
-        logger.log("SUBSCRIPTION", "sendSubscriptionV2 called")
+        logger.log("SUBSCRIPTION", "🔵 sendSubscriptionV2 called")
+        logger.log("SUBSCRIPTION", "🔵 isConnected=\(isConnected), hasTask=\(webSocketTask != nil)")
         
         guard isConnected, webSocketTask != nil else {
-            logger.logError("SUBSCRIPTION", "Cannot subscribe - not connected")
+            logger.logError("SUBSCRIPTION", "❌ Cannot subscribe - not connected")
             return
         }
         
         let subscriptions = SubscriptionManager.shared.getSubscriptions()
+        logger.log("SUBSCRIPTION", "🔵 Found \(subscriptions.count) subscriptions")
+        
         guard !subscriptions.isEmpty else {
-            logger.logError("SUBSCRIPTION", "No subscriptions to send")
+            logger.logError("SUBSCRIPTION", "❌ No subscriptions to send")
             return
         }
         
-        logger.log("SUBSCRIPTION", "Subscribing to \(subscriptions.count) channels")
+        logger.log("SUBSCRIPTION", "✅ Subscribing to \(subscriptions.count) channels")
         
         let filters = subscriptions.map { sub in
             SubscriptionFilter(area: sub.area, eventType: sub.eventType)
         }
+        
+        logger.log("SUBSCRIPTION", "🔵 Created \(filters.count) filters")
         
         subscriptions.forEach { sub in
             let channelId = "\(sub.area)_\(sub.eventType)"
             ChannelSyncState.shared.enableCatchUpMode(channelId: channelId)
             catchUpChannels.insert(channelId)
             catchUpStartTime[channelId] = Date()
+            logger.log("SUBSCRIPTION", "🔵 Enabled catch-up for \(channelId)")
         }
         
         var syncState: [String: SyncStateInfo] = [:]
@@ -539,20 +545,22 @@ class WebSocketService: ObservableObject {
         
         guard let jsonData = try? JSONEncoder().encode(request),
               let jsonString = String(data: jsonData, encoding: .utf8) else {
-            logger.logError("SUBSCRIPTION", "Failed to encode request")
+            logger.logError("SUBSCRIPTION", "❌ Failed to encode request")
             return
         }
         
-        logger.log("SUBSCRIPTION", "Sending: \(jsonString)")
+        logger.log("SUBSCRIPTION", "🔵 JSON created, length=\(jsonString.count)")
+        logger.log("SUBSCRIPTION", "🔵 Sending: \(jsonString)")
         
         send(message: jsonString) { [weak self] success in
+            guard let self = self else { return }
             if success {
-                self?.hasSubscribed = true
-                self?.lastSubscriptionTime = Date().timeIntervalSince1970
-                self?.logger.log("SUBSCRIPTION", "✅ Subscription sent successfully")
-                self?.startCatchUpMonitoring()
+                self.hasSubscribed = true
+                self.lastSubscriptionTime = Date().timeIntervalSince1970
+                self.logger.log("SUBSCRIPTION", "✅✅✅ Subscription SENT SUCCESSFULLY")
+                self.startCatchUpMonitoring()
             } else {
-                self?.logger.logError("SUBSCRIPTION", "Failed to send")
+                self.logger.logError("SUBSCRIPTION", "❌❌❌ Failed to SEND subscription")
             }
         }
     }

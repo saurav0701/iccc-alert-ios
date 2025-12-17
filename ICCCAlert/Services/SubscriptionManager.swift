@@ -130,8 +130,10 @@ class SubscriptionManager: ObservableObject {
         
         print("✅ Subscribed to \(channel.id)")
         
-        // ✅ FIX: Send subscription immediately (like Android)
-        performSubscriptionUpdate()
+        // ✅ CRITICAL FIX: Force subscription update immediately
+        DispatchQueue.main.async {
+            WebSocketService.shared.sendSubscriptionV2()
+        }
     }
     
     func unsubscribe(channelId: String) {
@@ -159,22 +161,13 @@ class SubscriptionManager: ObservableObject {
         
         print("✅ Unsubscribed from \(channelId)")
         
-        // ✅ FIX: Send subscription immediately (like Android)
-        performSubscriptionUpdate()
-    }
-    
-    // ✅ FIX: Removed debouncing - update immediately (like Android)
-    private func performSubscriptionUpdate() {
-        print("📡 Performing subscription update")
-        
-        // Send to WebSocket immediately
-        WebSocketService.shared.sendSubscriptionV2()
-        
-        // Broadcast change
+        // ✅ CRITICAL FIX: Force subscription update immediately
         DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .subscriptionsUpdated, object: nil)
+            WebSocketService.shared.sendSubscriptionV2()
         }
     }
+    
+    // ✅ REMOVED: performSubscriptionUpdate() - we call sendSubscriptionV2 directly now
     
     func isSubscribed(channelId: String) -> Bool {
         lock.lock()
