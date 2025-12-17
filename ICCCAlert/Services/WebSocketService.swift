@@ -352,14 +352,12 @@ class WebSocketService: ObservableObject {
             return
         }
         
-        let added = SubscriptionManager.shared.addEvent(event: event)
+       let added = SubscriptionManager.shared.addEvent(event: event)
         
         if added {
             DispatchQueue.main.async { [weak self] in
                 self?.processedCount += 1
             }
-            
-            let inCatchUpMode = ChannelSyncState.shared.isInCatchUpMode(channelId: channelId)
             
             // ✅ CRITICAL FIX: Always broadcast and send notifications (no catch-up mode)
             DispatchQueue.main.async { [weak self] in
