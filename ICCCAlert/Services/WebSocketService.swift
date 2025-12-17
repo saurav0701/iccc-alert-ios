@@ -24,15 +24,17 @@ class WebSocketService: ObservableObject {
     private let maxReconnectAttempts = Int.max
     private let reconnectDelay: TimeInterval = 5.0
     
-    // ✅ FIX 1: Separate queues for different priorities (like Android)
+    // ✅ Separate queues for different priorities
     private let eventQueue = DispatchQueue(label: "com.iccc.eventProcessing", qos: .userInitiated, attributes: .concurrent)
     private let ackQueue = DispatchQueue(label: "com.iccc.ackProcessing", qos: .utility)
     
-    // ✅ FIX 2: Concurrent processing (like Android's 4 processors)
+    // ✅ Concurrent processing
     private let processorCount = 4
     private var processingJobs: [DispatchWorkItem] = []
     private let messageQueue = DispatchQueue(label: "com.iccc.messages")
     private var pendingMessages: [String] = []
+    private let processorLock = NSLock()
+    private var activeProcessors = 0
     
     // ACK batching
     private var pendingAcks: [String] = []
@@ -43,14 +45,14 @@ class WebSocketService: ObservableObject {
     private var pingTimer: Timer?
     private let pingInterval: TimeInterval = 30.0
     
-    // ✅ FIX 3: Proper catch-up monitoring (like Android)
+    // ✅ Catch-up monitoring
     private var catchUpChannels: Set<String> = []
     private var catchUpTimer: Timer?
-    private let catchUpCheckInterval: TimeInterval = 5.0  // Match Android
+    private let catchUpCheckInterval: TimeInterval = 5.0
     private var consecutiveEmptyChecks: [String: Int] = [:]
-    private let stableEmptyThreshold = 3  // Match Android
-    private var catchUpStartTime: [String: Date] = [:]  // ✅ NEW: Track when catch-up started
-    private let maxCatchUpDuration: TimeInterval = 30.0  // ✅ NEW: Force exit after 30s
+    private let stableEmptyThreshold = 3
+    private var catchUpStartTime: [String: Date] = [:]
+    private let maxCatchUpDuration: TimeInterval = 30.0
     
     // Connection state tracking
     private var lastConnectionTime: Date?
@@ -121,10 +123,9 @@ class WebSocketService: ObservableObject {
         startReceiving()
         startPingPong()
         startAckFlusher()
-        startEventProcessors()  // ✅ Start concurrent processors
+        startEventProcessors()
         startStatsLogging()
         
-        // ✅ FIX 4: Send subscription immediately (like Android)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             self?.sendSubscriptionV2()
         }
@@ -137,7 +138,6 @@ class WebSocketService: ObservableObject {
         isConnected = false
         hasSubscribed = false
         
-        // Stop processors
         processingJobs.forEach { $0.cancel() }
         processingJobs.removeAll()
         
@@ -164,7 +164,7 @@ class WebSocketService: ObservableObject {
             switch result {
             case .success(let message):
                 self.handleMessage(message)
-                self.receiveMessage() // Continue receiving
+                self.receiveMessage()
                 
             case .failure(let error):
                 self.logger.logError("WS_RECEIVE", "❌ WebSocket error: \(error.localizedDescription)")
@@ -197,13 +197,12 @@ class WebSocketService: ObservableObject {
             self?.receivedCount += 1
         }
         
-        // ✅ FIX 5: Queue message for concurrent processing (like Android)
         messageQueue.async { [weak self] in
             self?.pendingMessages.append(messageText)
         }
     }
     
-    // ✅ FIX 6: Concurrent event processors (like Android's 4 processors)
+    // ✅ Start concurrent processors
     private func startEventProcessors() {
         for i in 0..<processorCount {
             let workItem = DispatchWorkItem { [weak self] in
@@ -243,16 +242,16 @@ class WebSocketService: ObservableObject {
         }
     }
     
-    // ✅ FIX 7: Streamlined processing (like Android)
+    // ✅ Streamlined processing
     private func processEvent(_ text: String) {
-        // ✅ CRITICAL: Check for subscription CONFIRMATION with numPending
+        // ✅ Check for subscription confirmation with numPending
         if text.contains("\"status\":\"subscribed\"") || text.contains("\"status\":\"ok\"") {
             DispatchQueue.main.async { [weak self] in
                 self?.hasSubscribed = true
                 self?.logger.logWebSocket("✅ Subscription confirmed by server")
             }
             
-            // ✅ NEW: Check if backend says we're already caught up
+            // ✅ Check if backend says we're already caught up
             if let data = text.data(using: .utf8),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let consumers = json["consumers"] as? [[String: Any]] {
@@ -265,7 +264,6 @@ class WebSocketService: ObservableObject {
                         let channelId = "\(filterArea)_\(filterEventType)"
                         
                         if numPending == 0 {
-                            // ✅ Backend says no pending messages - disable catch-up immediately
                             logger.log("CATCHUP", "⚡ \(channelId): numPending=0, disabling catch-up immediately")
                             ChannelSyncState.shared.disableCatchUpMode(channelId: channelId)
                             catchUpChannels.remove(channelId)
@@ -277,7 +275,6 @@ class WebSocketService: ObservableObject {
             return
         }
         
-        // Skip error messages
         if text.contains("\"error\"") {
             DispatchQueue.main.async { [weak self] in
                 self?.errorCount += 1
@@ -306,7 +303,6 @@ class WebSocketService: ObservableObject {
         let eventData = json["data"] as? [String: Any] ?? [:]
         let requireAck = eventData["_requireAck"] as? Bool ?? true
         
-        // Check if subscribed
         guard SubscriptionManager.shared.isSubscribed(channelId: channelId) else {
             DispatchQueue.main.async { [weak self] in
                 self?.droppedCount += 1
@@ -315,7 +311,6 @@ class WebSocketService: ObservableObject {
             return
         }
         
-        // Get sequence number
         let sequence: Int64 = {
             guard let seqValue = eventData["_seq"] else { return 0 }
             if let seqNum = seqValue as? Int64 { return seqNum }
@@ -326,7 +321,6 @@ class WebSocketService: ObservableObject {
         
         let timestamp = json["timestamp"] as? Int64 ?? 0
         
-        // ✅ CRITICAL: Record event (like Android)
         let isNew = ChannelSyncState.shared.recordEventReceived(
             channelId: channelId,
             eventId: eventId,
@@ -342,7 +336,6 @@ class WebSocketService: ObservableObject {
             return
         }
         
-        // Parse event
         guard let event = parseEvent(json: json) else {
             DispatchQueue.main.async { [weak self] in
                 self?.droppedCount += 1
@@ -350,7 +343,6 @@ class WebSocketService: ObservableObject {
             return
         }
         
-        // ✅ CRITICAL: Add to storage FIRST (like Android)
         let added = SubscriptionManager.shared.addEvent(event: event)
         
         if added {
@@ -358,18 +350,14 @@ class WebSocketService: ObservableObject {
                 self?.processedCount += 1
             }
             
-            // ✅ Check if in catch-up mode
             let inCatchUpMode = ChannelSyncState.shared.isInCatchUpMode(channelId: channelId)
             
-            // ✅ Send notification based on mode (like Android)
             if !inCatchUpMode {
-                // LIVE mode - send notification immediately
                 DispatchQueue.main.async { [weak self] in
                     self?.broadcastEvent(event, channelId: channelId)
                     self?.sendLocalNotification(for: event, channelId: channelId)
                 }
             } else {
-                // CATCH-UP mode - only broadcast (no notifications during bulk sync)
                 DispatchQueue.main.async { [weak self] in
                     self?.broadcastEvent(event, channelId: channelId)
                 }
@@ -380,7 +368,6 @@ class WebSocketService: ObservableObject {
             }
         }
         
-        // ✅ Always ACK after storage (like Android)
         if requireAck {
             sendAck(eventId: eventId)
         }
@@ -502,11 +489,6 @@ class WebSocketService: ObservableObject {
             return
         }
         
-        let now = Date().timeIntervalSince1970
-        
-        // ✅ FIX 8: Removed debouncing - subscribe immediately (like Android)
-        // Android doesn't debounce subscriptions
-        
         let subscriptions = SubscriptionManager.shared.getSubscriptions()
         guard !subscriptions.isEmpty else {
             logger.logError("SUBSCRIPTION", "No subscriptions to send")
@@ -519,12 +501,11 @@ class WebSocketService: ObservableObject {
             SubscriptionFilter(area: sub.area, eventType: sub.eventType)
         }
         
-        // ✅ Enable catch-up mode for ALL channels
         subscriptions.forEach { sub in
             let channelId = "\(sub.area)_\(sub.eventType)"
             ChannelSyncState.shared.enableCatchUpMode(channelId: channelId)
             catchUpChannels.insert(channelId)
-            catchUpStartTime[channelId] = Date()  // ✅ Track start time
+            catchUpStartTime[channelId] = Date()
         }
         
         var syncState: [String: SyncStateInfo] = [:]
@@ -576,7 +557,7 @@ class WebSocketService: ObservableObject {
         }
     }
     
-    // MARK: - Catch-up Monitoring (FIXED - Match Android)
+    // MARK: - Catch-up Monitoring
     private func startCatchUpMonitoring() {
         stopCatchUpMonitoring()
         
@@ -592,7 +573,6 @@ class WebSocketService: ObservableObject {
         catchUpTimer = nil
     }
     
-    // ✅ FIX 9: Match Android's catch-up detection logic EXACTLY
     private func checkCatchUpProgress() {
         var allComplete = true
         var activeCatchUps = 0
@@ -603,7 +583,6 @@ class WebSocketService: ObservableObject {
                 activeCatchUps += 1
                 let progress = ChannelSyncState.shared.getCatchUpProgress(channelId: channelId)
                 
-                // ✅ NEW: Check if catch-up has been running too long
                 if let startTime = catchUpStartTime[channelId],
                    now.timeIntervalSince(startTime) > maxCatchUpDuration {
                     logger.log("CATCHUP", "⚠️ \(channelId): Timeout after 30s, forcing exit (progress=\(progress))")
@@ -618,7 +597,6 @@ class WebSocketService: ObservableObject {
                     continue
                 }
                 
-                // ✅ Check ALL conditions (like Android)
                 var queueEmpty = false
                 var processorsIdle = false
                 
@@ -630,7 +608,6 @@ class WebSocketService: ObservableObject {
                 processorsIdle = (activeProcessors == 0)
                 processorLock.unlock()
                 
-                // ✅ CRITICAL: Match Android's exact logic
                 let shouldComplete = (progress > 0 || consecutiveEmptyChecks[channelId] ?? 0 > 0) && queueEmpty && processorsIdle
                 
                 if shouldComplete {
@@ -653,7 +630,6 @@ class WebSocketService: ObservableObject {
                         allComplete = false
                     }
                 } else {
-                    // Reset counter if conditions not met
                     consecutiveEmptyChecks[channelId] = 0
                     allComplete = false
                 }
