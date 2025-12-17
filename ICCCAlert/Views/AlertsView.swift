@@ -321,7 +321,10 @@ struct AlertsView: View {
             queue: .main
         ) { _ in
             // ✅ CRITICAL FIX: Debounce UI updates
-            self.scheduleRefresh()
+            self.updateTimer?.invalidate()
+            self.updateTimer = Timer.scheduledTimer(withTimeInterval: self.updateDebounceInterval, repeats: false) { [weak self] _ in
+                self?.refreshTrigger = UUID()
+            }
         }
         
         print("📱 AlertsView: Notification observers setup complete")
