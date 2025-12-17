@@ -327,10 +327,9 @@ struct AlertsView: View {
             // This batches rapid-fire events into a single UI update
             self.refreshDebouncer?.cancel()
             
-            let workItem = DispatchWorkItem {
+            let workItem = DispatchWorkItem { [self] in
                 // Update on main thread
-                DispatchQueue.main.async { [weak self] in
-                    guard let self = self else { return }
+                DispatchQueue.main.async {
                     self.cachedChannelGroups = self.channelGroups
                     self.refreshTrigger = UUID()
                     self.isRefreshing = false
