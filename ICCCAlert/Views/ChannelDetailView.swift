@@ -376,6 +376,3 @@ struct EventRowView: View {
         .buttonStyle(PlainButtonStyle())
     }
 }
-
-// ✅ Make Event identifiable for fullScreenCover
-extension Event: Identifiable {}
