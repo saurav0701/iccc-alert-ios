@@ -12,6 +12,10 @@ struct AlertsView: View {
     @State private var eventObserver: NSObjectProtocol?
     @State private var catchUpObserver: NSObjectProtocol?
     
+    // ✅ NEW: Debounce UI updates to prevent hang
+    @State private var updateTimer: Timer?
+    private let updateDebounceInterval: TimeInterval = 0.3
+    
     // Group events by channel
     private var channelGroups: [(channel: Channel, events: [Event])] {
         var groups: [(Channel, [Event])] = []
@@ -84,6 +88,8 @@ struct AlertsView: View {
         .onDisappear {
             print("📱 AlertsView: Disappeared")
             removeNotificationObservers()
+            updateTimer?.invalidate()
+            updateTimer = nil
         }
         .id(refreshTrigger)
     }
@@ -330,19 +336,28 @@ struct AlertsView: View {
         }
     }
     
+    // ✅ FIX: Debounced UI updates
+    private func scheduleRefresh() {
+        updateTimer?.invalidate()
+        updateTimer = Timer.scheduledTimer(withTimeInterval: updateDebounceInterval, repeats: false) { [weak self] _ in
+            self?.refreshTrigger = UUID()
+        }
+    }
+    
     // ✅ FIX: Properly store and remove observers
     private func setupNotificationObservers() {
         // Remove any existing observers first
         removeNotificationObservers()
         
-        // Event received observer
+        // Event received observer - DEBOUNCED
         eventObserver = NotificationCenter.default.addObserver(
             forName: .newEventReceived,
             object: nil,
             queue: .main
         ) { [self] notification in
             if !isCatchingUp {
-                self.refreshTrigger = UUID()
+                // ✅ CRITICAL FIX: Debounce UI updates
+                scheduleRefresh()
             }
         }
         
