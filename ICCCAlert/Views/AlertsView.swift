@@ -339,8 +339,10 @@ struct AlertsView: View {
     // ✅ FIX: Debounced UI updates
     private func scheduleRefresh() {
         updateTimer?.invalidate()
-        updateTimer = Timer.scheduledTimer(withTimeInterval: updateDebounceInterval, repeats: false) { [weak self] _ in
-            self?.refreshTrigger = UUID()
+        updateTimer = Timer.scheduledTimer(withTimeInterval: updateDebounceInterval, repeats: false) { _ in
+            DispatchQueue.main.async {
+                self.refreshTrigger = UUID()
+            }
         }
     }
     
@@ -354,10 +356,10 @@ struct AlertsView: View {
             forName: .newEventReceived,
             object: nil,
             queue: .main
-        ) { [self] notification in
-            if !isCatchingUp {
+        ) { _ in
+            if !self.isCatchingUp {
                 // ✅ CRITICAL FIX: Debounce UI updates
-                scheduleRefresh()
+                self.scheduleRefresh()
             }
         }
         
@@ -366,9 +368,9 @@ struct AlertsView: View {
             forName: .catchUpComplete,
             object: nil,
             queue: .main
-        ) { [self] _ in
+        ) { _ in
             print("📱 AlertsView: Catch-up complete!")
-            isCatchingUp = false
+            self.isCatchingUp = false
             self.refreshTrigger = UUID()
         }
         

@@ -8,6 +8,8 @@ struct ChannelDetailView: View {
     @State private var alertMessage = ""
     @State private var pendingEventsCount = 0
     @State private var showNewEventsBanner = false
+    @State private var selectedEvent: Event? = nil
+    @State private var showingImageDetail = false
     
     @Environment(\.presentationMode) var presentationMode
     
@@ -83,6 +85,9 @@ struct ChannelDetailView: View {
                 message: Text(alertMessage),
                 dismissButton: .default(Text("OK"))
             )
+        }
+        .fullScreenCover(item: $selectedEvent) { event in
+            ImageDetailView(event: event)
         }
         .onAppear {
             markAsRead()
@@ -229,8 +234,12 @@ struct ChannelDetailView: View {
                 .padding(.vertical, 40)
             } else {
                 ForEach(events) { event in
-                    EventRowView(event: event)
-                        .padding(.vertical, 8)
+                    EventRowView(event: event) {
+                        // ✅ FIX: Open image detail view
+                        selectedEvent = event
+                        showingImageDetail = true
+                    }
+                    .padding(.vertical, 8)
                 }
             }
         }
@@ -318,8 +327,10 @@ struct ChannelDetailView: View {
     }
 }
 
+// ✅ UPDATED: EventRowView with tap action
 struct EventRowView: View {
     let event: Event
+    let onTap: () -> Void
     
     private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -328,31 +339,43 @@ struct EventRowView: View {
     }()
     
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            // Event indicator
-            Circle()
-                .fill(Color.blue)
-                .frame(width: 10, height: 10)
-                .padding(.top, 4)
-            
-            VStack(alignment: .leading, spacing: 4) {
-                Text(event.typeDisplay ?? event.type ?? "Event")
-                    .font(.subheadline)
-                    .font(.system(size: 15, weight: .semibold))
+        Button(action: onTap) {
+            HStack(alignment: .top, spacing: 12) {
+                // Event indicator
+                Circle()
+                    .fill(Color.blue)
+                    .frame(width: 10, height: 10)
+                    .padding(.top, 4)
                 
-                Text(event.location)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(event.typeDisplay ?? event.type ?? "Event")
+                        .font(.subheadline)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.primary)
+                    
+                    Text(event.location)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    Text(dateFormatter.string(from: event.date))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
                 
-                Text(dateFormatter.string(from: event.date))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                Spacer()
+                
+                // ✅ NEW: Indicate tappable
+                Image(systemName: "photo")
+                    .foregroundColor(.blue)
+                    .font(.system(size: 20))
             }
-            
-            Spacer()
+            .padding()
+            .background(Color(.systemGray6))
+            .cornerRadius(8)
         }
-        .padding()
-        .background(Color(.systemGray6))
-        .cornerRadius(8)
+        .buttonStyle(PlainButtonStyle())
     }
 }
+
+// ✅ Make Event identifiable for fullScreenCover
+extension Event: Identifiable {}
