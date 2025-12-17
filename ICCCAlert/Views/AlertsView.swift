@@ -6,11 +6,9 @@ struct AlertsView: View {
     @State private var selectedFilter: AlertFilter = .all
     @State private var refreshTrigger = UUID()
     @State private var isInitialLoad = true
-    @State private var isCatchingUp = false
     
     // ✅ FIX: Proper cleanup tracking
     @State private var eventObserver: NSObjectProtocol?
-    @State private var catchUpObserver: NSObjectProtocol?
     
     // ✅ NEW: Debounce UI updates to prevent hang
     @State private var updateTimer: Timer?
@@ -58,11 +56,6 @@ struct AlertsView: View {
                     .padding()
                 }
                 
-                // Catch-up Banner
-                if isCatchingUp {
-                    catchUpBanner
-                }
-                
                 // Connection Status
                 connectionStatusBanner
                 
@@ -92,25 +85,6 @@ struct AlertsView: View {
             updateTimer = nil
         }
         .id(refreshTrigger)
-    }
-    
-    // MARK: - Catch-up Banner
-    
-    private var catchUpBanner: some View {
-        HStack {
-            ProgressView()
-                .scaleEffect(0.8)
-            Text("Syncing events...")
-                .font(.caption)
-                .foregroundColor(.secondary)
-            Spacer()
-            Text("\(totalEventCount) received")
-                .font(.caption)
-                .foregroundColor(.secondary)
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .background(Color.blue.opacity(0.1))
     }
     
     // MARK: - Content View
@@ -329,20 +303,9 @@ struct AlertsView: View {
     private func handleViewAppear() {
         connectIfNeeded()
         setupNotificationObservers()
-        updateCatchUpState()
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             isInitialLoad = false
-        }
-    }
-    
-    // ✅ FIX: Debounced UI updates
-    private func scheduleRefresh() {
-        updateTimer?.invalidate()
-        updateTimer = Timer.scheduledTimer(withTimeInterval: updateDebounceInterval, repeats: false) { _ in
-            DispatchQueue.main.async {
-                self.refreshTrigger = UUID()
-            }
         }
     }
     
@@ -357,21 +320,8 @@ struct AlertsView: View {
             object: nil,
             queue: .main
         ) { _ in
-            if !self.isCatchingUp {
-                // ✅ CRITICAL FIX: Debounce UI updates
-                self.scheduleRefresh()
-            }
-        }
-        
-        // Catch-up complete observer
-        catchUpObserver = NotificationCenter.default.addObserver(
-            forName: .catchUpComplete,
-            object: nil,
-            queue: .main
-        ) { _ in
-            print("📱 AlertsView: Catch-up complete!")
-            self.isCatchingUp = false
-            self.refreshTrigger = UUID()
+            // ✅ CRITICAL FIX: Debounce UI updates
+            self.scheduleRefresh()
         }
         
         print("📱 AlertsView: Notification observers setup complete")
@@ -383,19 +333,7 @@ struct AlertsView: View {
             eventObserver = nil
         }
         
-        if let observer = catchUpObserver {
-            NotificationCenter.default.removeObserver(observer)
-            catchUpObserver = nil
-        }
-        
         print("📱 AlertsView: Notification observers removed")
-    }
-    
-    private func updateCatchUpState() {
-        let anyChannelCatchingUp = subscriptionManager.subscribedChannels.contains { channel in
-            ChannelSyncState.shared.isInCatchUpMode(channelId: channel.id)
-        }
-        isCatchingUp = anyChannelCatchingUp
     }
     
     private func connectIfNeeded() {
