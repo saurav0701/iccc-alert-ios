@@ -176,9 +176,10 @@ class WebSocketService: ObservableObject {
             self?.receivedCount += 1
         }
         
-        // ✅ CRITICAL FIX: Process on background CONCURRENT queue
-        // This allows multiple events to process in parallel WITHOUT blocking
-        processingQueue.async { [weak self] in
+        // ✅ CRITICAL FIX: Process on serial queue to avoid lock contention
+        // Multiple concurrent events fighting for locks causes freezing
+        // We use a serial queue so events are processed sequentially (one at a time)
+        wsQueue.async { [weak self] in
             self?.processEvent(messageText)
         }
     }
