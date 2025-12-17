@@ -10,17 +10,15 @@ struct AlertsView: View {
     // ✅ FIX: Proper cleanup tracking
     @State private var eventObserver: NSObjectProtocol?
     
-    // ✅ OPTIMIZATION: Cache channel groups to avoid recomputation
-    @State private var cachedChannelGroups: [(channel: Channel, events: [Event])] = []
-    @State private var isRefreshing = false
+    // ✅ CRITICAL FIX: Debouncing to prevent rapid UI updates
     @State private var refreshDebouncer: DispatchWorkItem?
+    @State private var isRefreshing = false
     
-    // Compute channel groups
-    private var channelGroups: [(channel: Channel, events: [Event])] {
-        if isRefreshing {
-            return cachedChannelGroups
-        }
-        
+    // ✅ NEW: Pre-compute on background thread
+    @State private var cachedChannelGroups: [(channel: Channel, events: [Event])] = []
+    
+    // Compute channel groups (called only when needed)
+    private func computeChannelGroups() -> [(channel: Channel, events: [Event])] {
         var groups: [(Channel, [Event])] = []
         
         for channel in subscriptionManager.subscribedChannels {
@@ -37,6 +35,11 @@ struct AlertsView: View {
             let time2 = group2.1.first?.timestamp ?? 0
             return time1 > time2
         }
+    }
+    
+    private var channelGroups: [(channel: Channel, events: [Event])] {
+        // Use cached version during refresh
+        return isRefreshing ? cachedChannelGroups : computeChannelGroups()
     }
     
     private var hasSubscriptions: Bool {
@@ -322,15 +325,20 @@ struct AlertsView: View {
             forName: .newEventReceived,
             object: nil,
             queue: OperationQueue()  // Background queue!
-        ) { [self] _ in
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            
             // ✅ CRITICAL: Cancel pending refresh and schedule new one
             // This batches rapid-fire events into a single UI update
             self.refreshDebouncer?.cancel()
             
-            let workItem = DispatchWorkItem { [self] in
+            let workItem = DispatchWorkItem {
+                // Compute new data on background thread
+                let newGroups = self.computeChannelGroups()
+                
                 // Update on main thread
                 DispatchQueue.main.async {
-                    self.cachedChannelGroups = self.channelGroups
+                    self.cachedChannelGroups = newGroups
                     self.refreshTrigger = UUID()
                     self.isRefreshing = false
                 }
@@ -339,8 +347,8 @@ struct AlertsView: View {
             self.refreshDebouncer = workItem
             self.isRefreshing = true
             
-            // ✅ Wait 300ms before refreshing (batches multiple events)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: workItem)
+            // ✅ Wait 500ms before refreshing (batches multiple events)
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.5, execute: workItem)
         }
         
         print("📱 AlertsView: Notification observers setup complete")

@@ -17,9 +17,8 @@ class SubscriptionManager: ObservableObject {
     private let lastRuntimeCheckKey = "last_runtime_check"
     private let serviceStartedAtKey = "service_started_at"
     
-    // ✅ CRITICAL FIX: Use NSRecursiveLock instead of NSLock
-    // This prevents deadlocks when same thread tries to lock twice
-    private let lock = NSRecursiveLock()
+    // ✅ CRITICAL FIX: Use DispatchQueue instead of NSLock to prevent deadlocks
+    private let syncQueue = DispatchQueue(label: "com.iccc.subscription.sync", qos: .userInitiated)
     
     private var recentEventIds: Set<String> = []
     private var eventTimestamps: [String: TimeInterval] = [:]
@@ -28,10 +27,6 @@ class SubscriptionManager: ObservableObject {
     private let saveDelay: TimeInterval = 0.5
     
     private var runtimeCheckTimer: Timer?
-    private var wasAppKilled = false
-    
-    // ✅ REMOVED: subscriptionQueue - causes deadlocks
-    // All operations will use the recursive lock instead
     
     // MARK: - Initialization
     private init() {
@@ -94,46 +89,44 @@ class SubscriptionManager: ObservableObject {
     func subscribe(channel: Channel) {
         print("📝 Subscribe called for: \(channel.id)")
         
-        // ✅ FIX 1: Use recursive lock (no deadlocks)
-        lock.lock()
-        
-        var updatedChannel = channel
-        updatedChannel.isSubscribed = true
-        
-        // Check if already subscribed
-        if subscribedChannels.contains(where: { $0.id == channel.id }) {
-            lock.unlock()
-            print("⚠️ Already subscribed to \(channel.id)")
-            return
+        // ✅ Use async dispatch to prevent blocking
+        syncQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            var updatedChannel = channel
+            updatedChannel.isSubscribed = true
+            
+            // Check if already subscribed
+            if self.subscribedChannels.contains(where: { $0.id == channel.id }) {
+                print("⚠️ Already subscribed to \(channel.id)")
+                return
+            }
+            
+            // Add to subscriptions
+            self.subscribedChannels.append(updatedChannel)
+            self.saveSubscriptions()
+            
+            // Initialize sync state if needed
+            let channelId = channel.id
+            if ChannelSyncState.shared.getSyncInfo(channelId: channelId) == nil {
+                _ = ChannelSyncState.shared.recordEventReceived(
+                    channelId: channelId,
+                    eventId: "init",
+                    timestamp: Int64(Date().timeIntervalSince1970),
+                    seq: 0
+                )
+                print("🆕 Initialized sync state for: \(channelId)")
+            }
+            
+            print("✅ Subscribed to \(channel.id)")
+            
+            // ✅ Update UI on main thread
+            DispatchQueue.main.async {
+                self.objectWillChange.send()
+            }
         }
         
-        // Add to subscriptions
-        subscribedChannels.append(updatedChannel)
-        saveSubscriptions()
-        
-        // Initialize sync state if needed
-        let channelId = channel.id
-        if ChannelSyncState.shared.getSyncInfo(channelId: channelId) == nil {
-            _ = ChannelSyncState.shared.recordEventReceived(
-                channelId: channelId,
-                eventId: "init",
-                timestamp: Int64(Date().timeIntervalSince1970),
-                seq: 0
-            )
-            print("🆕 Initialized sync state for: \(channelId)")
-        }
-        
-        lock.unlock()
-        
-        print("✅ Subscribed to \(channel.id)")
-        
-        // ✅ FIX 2: Update UI immediately on main thread
-        DispatchQueue.main.async { [weak self] in
-            self?.objectWillChange.send()
-        }
-        
-        // ✅ FIX 3: Send WebSocket update on background thread WITHOUT delay
-        // This prevents blocking the subscribe button
+        // ✅ Send WebSocket update on background thread WITHOUT blocking
         DispatchQueue.global(qos: .userInitiated).async {
             WebSocketService.shared.sendSubscriptionV2()
         }
@@ -143,35 +136,35 @@ class SubscriptionManager: ObservableObject {
     func unsubscribe(channelId: String) {
         print("📝 Unsubscribe called for: \(channelId)")
         
-        lock.lock()
-        
-        subscribedChannels.removeAll { $0.id == channelId }
-        
-        // Clean up events
-        if let events = channelEvents[channelId] {
-            events.forEach { event in
-                if let eventId = event.id {
-                    recentEventIds.remove(eventId)
-                    eventTimestamps.removeValue(forKey: eventId)
+        syncQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            self.subscribedChannels.removeAll { $0.id == channelId }
+            
+            // Clean up events
+            if let events = self.channelEvents[channelId] {
+                events.forEach { event in
+                    if let eventId = event.id {
+                        self.recentEventIds.remove(eventId)
+                        self.eventTimestamps.removeValue(forKey: eventId)
+                    }
                 }
             }
-        }
-        
-        channelEvents.removeValue(forKey: channelId)
-        unreadCounts.removeValue(forKey: channelId)
-        
-        ChannelSyncState.shared.clearChannel(channelId: channelId)
-        
-        saveSubscriptions()
-        scheduleSave()
-        
-        lock.unlock()
-        
-        print("✅ Unsubscribed from \(channelId)")
-        
-        // ✅ Update UI on main thread
-        DispatchQueue.main.async { [weak self] in
-            self?.objectWillChange.send()
+            
+            self.channelEvents.removeValue(forKey: channelId)
+            self.unreadCounts.removeValue(forKey: channelId)
+            
+            ChannelSyncState.shared.clearChannel(channelId: channelId)
+            
+            self.saveSubscriptions()
+            self.scheduleSave()
+            
+            print("✅ Unsubscribed from \(channelId)")
+            
+            // ✅ Update UI on main thread
+            DispatchQueue.main.async {
+                self.objectWillChange.send()
+            }
         }
         
         // ✅ Send WebSocket update on background thread
@@ -180,35 +173,37 @@ class SubscriptionManager: ObservableObject {
         }
     }
     
-    // ✅ CRITICAL FIX: Make getSubscriptions() lock-safe
+    // ✅ CRITICAL FIX: Make getSubscriptions() thread-safe
     func getSubscriptions() -> [Channel] {
-        lock.lock()
-        defer { lock.unlock() }
-        return subscribedChannels
+        return syncQueue.sync {
+            return subscribedChannels
+        }
     }
     
     func isSubscribed(channelId: String) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return subscribedChannels.contains { $0.id == channelId }
+        return syncQueue.sync {
+            return subscribedChannels.contains { $0.id == channelId }
+        }
     }
     
     func updateChannel(_ channel: Channel) {
-        lock.lock()
-        defer { lock.unlock() }
-        
-        if let index = subscribedChannels.firstIndex(where: { $0.id == channel.id }) {
-            subscribedChannels[index] = channel
-            saveSubscriptions()
+        syncQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            if let index = self.subscribedChannels.firstIndex(where: { $0.id == channel.id }) {
+                self.subscribedChannels[index] = channel
+                self.saveSubscriptions()
+            }
         }
     }
     
     func isChannelMuted(channelId: String) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return subscribedChannels.first(where: { $0.id == channelId })?.isMuted ?? false
+        return syncQueue.sync {
+            return subscribedChannels.first(where: { $0.id == channelId })?.isMuted ?? false
+        }
     }
 
+    // ✅ CRITICAL FIX: Optimized addEvent - non-blocking
     func addEvent(event: Event) -> Bool {
         guard let eventId = event.id else { return false }
         
@@ -216,91 +211,102 @@ class SubscriptionManager: ObservableObject {
         let timestamp = TimeInterval(event.timestamp)
         let now = Date().timeIntervalSince1970
         
-        lock.lock()
-        defer { lock.unlock() }
-
-        if let events = channelEvents[channelId],
-           events.contains(where: { $0.id == eventId }) {
-            return false
-        }
-        
+        // ✅ Quick duplicate check (no locks needed)
         if let lastSeenTime = eventTimestamps[eventId],
            (now - lastSeenTime) < 5 * 60 {
             return false
         }
-     
-        if channelEvents[channelId] == nil {
-            channelEvents[channelId] = []
-        }
-        channelEvents[channelId]?.insert(event, at: 0)
-      
-        recentEventIds.insert(eventId)
-        eventTimestamps[eventId] = timestamp
-      
-        unreadCounts[channelId] = (unreadCounts[channelId] ?? 0) + 1
         
-        scheduleSave()
+        // ✅ Use async dispatch to prevent blocking
+        syncQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            // Check if event already exists
+            if let events = self.channelEvents[channelId],
+               events.contains(where: { $0.id == eventId }) {
+                return
+            }
+            
+            // Add event
+            if self.channelEvents[channelId] == nil {
+                self.channelEvents[channelId] = []
+            }
+            self.channelEvents[channelId]?.insert(event, at: 0)
+            
+            self.recentEventIds.insert(eventId)
+            self.eventTimestamps[eventId] = timestamp
+            
+            self.unreadCounts[channelId] = (self.unreadCounts[channelId] ?? 0) + 1
+            
+            self.scheduleSave()
+            
+            // ✅ Update UI on main thread
+            DispatchQueue.main.async {
+                self.objectWillChange.send()
+            }
+        }
         
         return true
     }
     
     func getEvents(channelId: String) -> [Event] {
-        lock.lock()
-        defer { lock.unlock() }
-        return channelEvents[channelId] ?? []
+        return syncQueue.sync {
+            return channelEvents[channelId] ?? []
+        }
     }
     
     func getLastEvent(channelId: String) -> Event? {
-        lock.lock()
-        defer { lock.unlock() }
-        return channelEvents[channelId]?.first
+        return syncQueue.sync {
+            return channelEvents[channelId]?.first
+        }
     }
     
     func getUnreadCount(channelId: String) -> Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return unreadCounts[channelId] ?? 0
+        return syncQueue.sync {
+            return unreadCounts[channelId] ?? 0
+        }
     }
     
     func markAsRead(channelId: String) {
-        lock.lock()
-        unreadCounts[channelId] = 0
-        lock.unlock()
-        
-        scheduleSave()
-        
-        DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .subscriptionsUpdated, object: nil)
+        syncQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.unreadCounts[channelId] = 0
+            self.scheduleSave()
+            
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .subscriptionsUpdated, object: nil)
+            }
         }
     }
     
     func getTotalEventCount() -> Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return channelEvents.values.reduce(0) { $0 + $1.count }
+        return syncQueue.sync {
+            return channelEvents.values.reduce(0) { $0 + $1.count }
+        }
     }
     
     func getEventCount(channelId: String) -> Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return channelEvents[channelId]?.count ?? 0
+        return syncQueue.sync {
+            return channelEvents[channelId]?.count ?? 0
+        }
     }
  
     private func buildRecentEventIds() {
-        lock.lock()
-        defer { lock.unlock() }
-        
-        recentEventIds.removeAll()
-        eventTimestamps.removeAll()
-        
-        let fiveMinutesAgo = Date().timeIntervalSince1970 - (5 * 60)
-        
-        for (_, events) in channelEvents {
-            for event in events {
-                let eventTime = TimeInterval(event.timestamp)
-                if eventTime > fiveMinutesAgo, let eventId = event.id {
-                    recentEventIds.insert(eventId)
-                    eventTimestamps[eventId] = eventTime
+        syncQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            self.recentEventIds.removeAll()
+            self.eventTimestamps.removeAll()
+            
+            let fiveMinutesAgo = Date().timeIntervalSince1970 - (5 * 60)
+            
+            for (_, events) in self.channelEvents {
+                for event in events {
+                    let eventTime = TimeInterval(event.timestamp)
+                    if eventTime > fiveMinutesAgo, let eventId = event.id {
+                        self.recentEventIds.insert(eventId)
+                        self.eventTimestamps[eventId] = eventTime
+                    }
                 }
             }
         }
@@ -313,16 +319,18 @@ class SubscriptionManager: ObservableObject {
     }
     
     private func cleanupRecentEvents() {
-        lock.lock()
-        let fiveMinutesAgo = Date().timeIntervalSince1970 - (5 * 60)
-        
-        for (eventId, timestamp) in eventTimestamps {
-            if timestamp < fiveMinutesAgo {
-                recentEventIds.remove(eventId)
-                eventTimestamps.removeValue(forKey: eventId)
+        syncQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            let fiveMinutesAgo = Date().timeIntervalSince1970 - (5 * 60)
+            
+            for (eventId, timestamp) in self.eventTimestamps {
+                if timestamp < fiveMinutesAgo {
+                    self.recentEventIds.remove(eventId)
+                    self.eventTimestamps.removeValue(forKey: eventId)
+                }
             }
         }
-        lock.unlock()
         
         DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 60.0) { [weak self] in
             self?.cleanupRecentEvents()
@@ -343,9 +351,9 @@ class SubscriptionManager: ObservableObject {
     }
     
     private func scheduleSave() {
-        saveTimer?.invalidate()
-        
+        // Must be called from syncQueue
         DispatchQueue.main.async { [weak self] in
+            self?.saveTimer?.invalidate()
             self?.saveTimer = Timer.scheduledTimer(withTimeInterval: self?.saveDelay ?? 0.5, repeats: false) { [weak self] _ in
                 self?.saveNow()
             }
@@ -353,20 +361,19 @@ class SubscriptionManager: ObservableObject {
     }
     
     private func saveNow() {
-        lock.lock()
-        let eventsSnapshot = channelEvents
-        let unreadSnapshot = unreadCounts
-        lock.unlock()
-        
-        if let data = try? JSONEncoder().encode(eventsSnapshot) {
-            defaults.set(data, forKey: eventsKey)
+        syncQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            if let data = try? JSONEncoder().encode(self.channelEvents) {
+                self.defaults.set(data, forKey: self.eventsKey)
+            }
+            
+            if let data = try? JSONEncoder().encode(self.unreadCounts) {
+                self.defaults.set(data, forKey: self.unreadKey)
+            }
+            
+            self.defaults.set(Date().timeIntervalSince1970, forKey: self.lastRuntimeCheckKey)
         }
-        
-        if let data = try? JSONEncoder().encode(unreadSnapshot) {
-            defaults.set(data, forKey: unreadKey)
-        }
-        
-        defaults.set(Date().timeIntervalSince1970, forKey: lastRuntimeCheckKey)
     }
     
     private func loadEvents() {
