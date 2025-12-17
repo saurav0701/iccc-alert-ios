@@ -334,29 +334,30 @@ struct ChannelDetailView: View {
         }
     }
     
-    // MARK: - Event Notifications (✅ FIXED - Simple approach)
+    // MARK: - Event Notifications (✅ COMPLETELY REWRITTEN FOR PERFORMANCE)
     
-    /// Setup notification observer - Views are value types, no need for weak self
+    /// Setup notification observer - optimized for high-frequency events
     private func setupNotificationObserver() {
         // ✅ Remove any existing observer first
         removeNotificationObserver()
         
-        // ✅ FIX: Capture channel ID as a local constant
+        // ✅ Capture channel ID as a local constant
         let channelId = channel.id
         
+        // ✅ CRITICAL FIX: Process notifications on BACKGROUND queue to prevent main thread blocking
         eventObserver = NotificationCenter.default.addObserver(
             forName: .newEventReceived,
             object: nil,
-            queue: .main
+            queue: OperationQueue()  // Background queue!
         ) { notification in
-            // ✅ No [weak self] needed - SwiftUI views are value types
-            // The notification handler captures the view's state bindings
+            guard let userInfo = notification.userInfo,
+                  let eventChannelId = userInfo["channelId"] as? String,
+                  eventChannelId == channelId else {
+                return
+            }
             
-            if let userInfo = notification.userInfo,
-               let eventChannelId = userInfo["channelId"] as? String,
-               eventChannelId == channelId {
-                
-                // These will update the view's state
+            // ✅ Update UI on main thread (but in a non-blocking way)
+            DispatchQueue.main.async {
                 self.pendingEventsCount += 1
                 self.showNewEventsBanner = true
                 self.refreshTrigger = UUID()

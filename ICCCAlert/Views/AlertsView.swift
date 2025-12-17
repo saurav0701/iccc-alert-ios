@@ -10,8 +10,16 @@ struct AlertsView: View {
     // ✅ FIX: Proper cleanup tracking
     @State private var eventObserver: NSObjectProtocol?
     
-    // Group events by channel
+    // ✅ OPTIMIZATION: Cache channel groups to avoid recomputation
+    @State private var cachedChannelGroups: [(channel: Channel, events: [Event])] = []
+    @State private var isRefreshing = false
+    
+    // Compute channel groups
     private var channelGroups: [(channel: Channel, events: [Event])] {
+        if isRefreshing {
+            return cachedChannelGroups
+        }
+        
         var groups: [(Channel, [Event])] = []
         
         for channel in subscriptionManager.subscribedChannels {
@@ -303,20 +311,30 @@ struct AlertsView: View {
         }
     }
     
-    // ✅ FIX: Properly store and remove observers with immediate refresh
+    // ✅ CRITICAL FIX: Process notifications on background queue
     private func setupNotificationObservers() {
         // Remove any existing observers first
         removeNotificationObservers()
         
-        // Event received observer - IMMEDIATE refresh (no debounce - let SwiftUI handle it)
+        // ✅ Process on BACKGROUND queue to prevent main thread blocking
         eventObserver = NotificationCenter.default.addObserver(
             forName: .newEventReceived,
             object: nil,
-            queue: .main
+            queue: OperationQueue()  // Background queue!
         ) { [self] _ in
-            // ✅ CRITICAL FIX: Force immediate refresh on main thread
-            // SwiftUI is smart enough to batch updates automatically
-            self.refreshTrigger = UUID()
+            // ✅ Debounce refresh to avoid excessive updates
+            DispatchQueue.main.async {
+                guard !self.isRefreshing else { return }
+                
+                self.isRefreshing = true
+                
+                // Update after brief delay to batch multiple events
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    self.cachedChannelGroups = self.channelGroups
+                    self.refreshTrigger = UUID()
+                    self.isRefreshing = false
+                }
+            }
         }
         
         print("📱 AlertsView: Notification observers setup complete")

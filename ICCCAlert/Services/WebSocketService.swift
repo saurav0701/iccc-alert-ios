@@ -261,26 +261,25 @@ class WebSocketService: ObservableObject {
             return
         }
         
-        // ✅ Add event to storage
+        // ✅ CRITICAL FIX: Add event to storage (already on background thread)
         let added = SubscriptionManager.shared.addEvent(event: event)
         
         if added {
+            // ✅ FIX 1: Update counter on main thread (non-blocking)
             DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                self.processedCount += 1
-                
-                // ✅ Broadcast immediately on main thread
-                NotificationCenter.default.post(
-                    name: .newEventReceived,
-                    object: nil,
-                    userInfo: ["event": event, "channelId": channelId]
-                )
+                self?.processedCount += 1
             }
             
-            // ✅ Send notification (async)
-            DispatchQueue.main.async { [weak self] in
-                self?.sendLocalNotification(for: event)
-            }
+            // ✅ FIX 2: Post notification on BACKGROUND thread to avoid main thread blocking
+            // SwiftUI will handle the actual UI update on main thread
+            NotificationCenter.default.post(
+                name: .newEventReceived,
+                object: nil,
+                userInfo: ["event": event, "channelId": channelId]
+            )
+            
+            // ✅ FIX 3: Send local notification asynchronously
+            sendLocalNotification(for: event)
         } else {
             DispatchQueue.main.async { [weak self] in
                 self?.droppedCount += 1
