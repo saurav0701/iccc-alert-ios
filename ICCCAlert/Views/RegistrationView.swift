@@ -140,10 +140,14 @@ struct RegistrationView: View {
             
             // Name Field
             VStack(alignment: .leading, spacing: 8) {
-                Label("Full Name", systemImage: "person.fill")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundColor(.secondary)
+                HStack(spacing: 6) {
+                    Image(systemName: "person.fill")
+                        .font(.caption)
+                    Text("Full Name")
+                        .font(.subheadline)
+                        .bold()
+                }
+                .foregroundColor(.secondary)
                 
                 TextField("Enter your full name", text: $name)
                     .textContentType(.name)
@@ -160,10 +164,14 @@ struct RegistrationView: View {
             
             // Phone Field
             VStack(alignment: .leading, spacing: 8) {
-                Label("Phone Number", systemImage: "phone.fill")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundColor(.secondary)
+                HStack(spacing: 6) {
+                    Image(systemName: "phone.fill")
+                        .font(.caption)
+                    Text("Phone Number")
+                        .font(.subheadline)
+                        .bold()
+                }
+                .foregroundColor(.secondary)
                 
                 HStack(spacing: 12) {
                     Text("+91")
@@ -203,10 +211,14 @@ struct RegistrationView: View {
             
             // Area Field
             VStack(alignment: .leading, spacing: 8) {
-                Label("Area", systemImage: "location.fill")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundColor(.secondary)
+                HStack(spacing: 6) {
+                    Image(systemName: "location.fill")
+                        .font(.caption)
+                    Text("Area")
+                        .font(.subheadline)
+                        .bold()
+                }
+                .foregroundColor(.secondary)
                 
                 TextField("Work area/location", text: $area)
                     .padding()
@@ -222,10 +234,14 @@ struct RegistrationView: View {
             
             // Designation Field
             VStack(alignment: .leading, spacing: 8) {
-                Label("Designation", systemImage: "briefcase.fill")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundColor(.secondary)
+                HStack(spacing: 6) {
+                    Image(systemName: "briefcase.fill")
+                        .font(.caption)
+                    Text("Designation")
+                        .font(.subheadline)
+                        .bold()
+                }
+                .foregroundColor(.secondary)
                 
                 TextField("Your job title", text: $designation)
                     .padding()
@@ -241,10 +257,14 @@ struct RegistrationView: View {
             
             // Organisation Picker
             VStack(alignment: .leading, spacing: 8) {
-                Label("Organisation", systemImage: "building.2.fill")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundColor(.secondary)
+                HStack(spacing: 6) {
+                    Image(systemName: "building.2.fill")
+                        .font(.caption)
+                    Text("Organisation")
+                        .font(.subheadline)
+                        .bold()
+                }
+                .foregroundColor(.secondary)
                 
                 Picker("Organisation", selection: $organisation) {
                     ForEach(organisations, id: \.self) { org in
@@ -314,10 +334,14 @@ struct RegistrationView: View {
             
             // OTP Input
             VStack(alignment: .leading, spacing: 8) {
-                Label("One-Time Password", systemImage: "lock.shield.fill")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundColor(.secondary)
+                HStack(spacing: 6) {
+                    Image(systemName: "lock.shield.fill")
+                        .font(.caption)
+                    Text("One-Time Password")
+                        .font(.subheadline)
+                        .bold()
+                }
+                .foregroundColor(.secondary)
                 
                 TextField("Enter 6-digit OTP", text: $otp)
                     .keyboardType(.numberPad)
