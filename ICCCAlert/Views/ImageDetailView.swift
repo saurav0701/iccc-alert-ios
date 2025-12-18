@@ -4,218 +4,156 @@ struct ImageDetailView: View {
     let event: Event
     @Environment(\.presentationMode) var presentationMode
     @StateObject private var imageLoader = ImageLoader()
+    
     @State private var scale: CGFloat = 1.0
     @State private var lastScale: CGFloat = 1.0
     @State private var offset: CGSize = .zero
     @State private var lastOffset: CGSize = .zero
     
+    private let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM dd, yyyy HH:mm:ss"
+        return formatter
+    }()
+    
     var body: some View {
         ZStack {
-            // Background
-            Color.black.edgesIgnoringSafeArea(.all)
+            Color.black.ignoresSafeArea()
             
-            // Content
-            if let image = imageLoader.image {
-                GeometryReader { geometry in
-                    Image(uiImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .scaleEffect(scale)
-                        .offset(offset)
-                        .gesture(
-                            MagnificationGesture()
-                                .onChanged { value in
-                                    let delta = value / lastScale
-                                    lastScale = value
-                                    scale = min(max(scale * delta, 1), 4)
-                                }
-                                .onEnded { _ in
-                                    lastScale = 1.0
-                                    if scale < 1 {
-                                        withAnimation {
-                                            scale = 1
-                                            offset = .zero
-                                        }
-                                    }
-                                }
-                        )
-                        .gesture(
-                            DragGesture()
-                                .onChanged { value in
-                                    offset = CGSize(
-                                        width: lastOffset.width + value.translation.width,
-                                        height: lastOffset.height + value.translation.height
-                                    )
-                                }
-                                .onEnded { _ in
-                                    lastOffset = offset
-                                }
-                        )
-                }
-                .edgesIgnoringSafeArea(.all)
-            } else if imageLoader.isLoading {
-                VStack(spacing: 16) {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        .scaleEffect(1.5)
-                    Text("Loading image...")
-                        .font(.subheadline)
-                        .foregroundColor(.white)
-                }
-            } else if imageLoader.error != nil {
-                VStack(spacing: 16) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 50))
-                        .foregroundColor(.white)
-                    Text("Failed to load image")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                    Button("Retry") {
-                        imageLoader.loadImage(for: event)
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(8)
-                }
-            }
-            
-            // Top bar with info
-            VStack {
+            VStack(spacing: 0) {
+                // Header
                 HStack {
                     Button(action: {
                         presentationMode.wrappedValue.dismiss()
                     }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 30))
+                        Image(systemName: "xmark")
+                            .font(.title2)
                             .foregroundColor(.white)
-                            .shadow(radius: 3)
+                            .padding()
                     }
                     
                     Spacer()
                     
-                    VStack(alignment: .trailing, spacing: 4) {
-                        Text(event.title)
-                            .font(.headline)
-                            .foregroundColor(.white)
-                            .shadow(radius: 3)
+                    Menu {
+                        Button(action: saveImage) {
+                            Label("Save to Photos", systemImage: "square.and.arrow.down")
+                        }
                         
-                        Text(event.location)
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.9))
-                            .shadow(radius: 3)
+                        Button(action: shareImage) {
+                            Label("Share", systemImage: "square.and.arrow.up")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.title2)
+                            .foregroundColor(.white)
+                            .padding()
                     }
-                    
-                    Spacer()
-                    
-                    if imageLoader.image != nil {
-                        Menu {
-                            Button(action: {
-                                shareImage()
-                            }) {
-                                Label("Share", systemImage: "square.and.arrow.up")
+                }
+                .background(Color.black.opacity(0.7))
+                
+                // Image
+                ZStack {
+                    if let image = imageLoader.image {
+                        Image(uiImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .scaleEffect(scale)
+                            .offset(offset)
+                            .gesture(
+                                MagnificationGesture()
+                                    .onChanged { value in
+                                        scale = lastScale * value
+                                    }
+                                    .onEnded { _ in
+                                        lastScale = scale
+                                        
+                                        // Limit scale
+                                        if scale < 1.0 {
+                                            withAnimation {
+                                                scale = 1.0
+                                                lastScale = 1.0
+                                            }
+                                        } else if scale > 5.0 {
+                                            withAnimation {
+                                                scale = 5.0
+                                                lastScale = 5.0
+                                            }
+                                        }
+                                    }
+                            )
+                            .gesture(
+                                DragGesture()
+                                    .onChanged { value in
+                                        if scale > 1.0 {
+                                            offset = CGSize(
+                                                width: lastOffset.width + value.translation.width,
+                                                height: lastOffset.height + value.translation.height
+                                            )
+                                        }
+                                    }
+                                    .onEnded { _ in
+                                        lastOffset = offset
+                                    }
+                            )
+                            .onTapGesture(count: 2) {
+                                withAnimation {
+                                    if scale > 1.0 {
+                                        scale = 1.0
+                                        lastScale = 1.0
+                                        offset = .zero
+                                        lastOffset = .zero
+                                    } else {
+                                        scale = 2.0
+                                        lastScale = 2.0
+                                    }
+                                }
                             }
-                            
-                            Button(action: {
-                                saveImage()
-                            }) {
-                                Label("Save to Photos", systemImage: "square.and.arrow.down")
-                            }
-                        } label: {
-                            Image(systemName: "ellipsis.circle.fill")
-                                .font(.system(size: 30))
+                    } else if imageLoader.isLoading {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(1.5)
+                    } else if imageLoader.error != nil {
+                        VStack(spacing: 16) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .font(.system(size: 50))
                                 .foregroundColor(.white)
-                                .shadow(radius: 3)
-                        }
-                    }
-                }
-                .padding()
-                
-                Spacer()
-                
-                // Bottom info bar
-                if imageLoader.image != nil {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(formatDate(event.date))
-                                .font(.caption)
-                                .foregroundColor(.white.opacity(0.9))
-                            
-                            if let areaDisplay = event.areaDisplay {
-                                Text(areaDisplay)
-                                    .font(.caption)
-                                    .foregroundColor(.white.opacity(0.9))
+                            Text("Failed to load image")
+                                .foregroundColor(.white)
+                            Button("Retry") {
+                                imageLoader.loadImage(for: event)
                             }
-                        }
-                        
-                        Spacer()
-                        
-                        if scale > 1 {
-                            Text(String(format: "%.1fx", scale))
-                                .font(.caption)
-                                .foregroundColor(.white.opacity(0.9))
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(Color.black.opacity(0.5))
-                                .cornerRadius(20)
+                            .padding()
+                            .background(Color.white.opacity(0.2))
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
                         }
                     }
-                    .padding()
-                    .background(
-                        LinearGradient(
-                            gradient: Gradient(colors: [Color.black.opacity(0.7), Color.clear]),
-                            startPoint: .bottom,
-                            endPoint: .top
-                        )
-                    )
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                
+                // Footer
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(event.typeDisplay ?? event.type ?? "Event")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    
+                    Text(event.location)
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.8))
+                    
+                    Text(dateFormatter.string(from: event.date))
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.6))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+                .background(Color.black.opacity(0.7))
             }
         }
-        .navigationBarHidden(true)
-        .statusBar(hidden: true)
         .onAppear {
             imageLoader.loadImage(for: event)
         }
-        .onDisappear {
-            imageLoader.cancel()
-        }
-    }
-    
-    private func formatDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM dd, yyyy 'at' HH:mm"
-        return formatter.string(from: date)
-    }
-    
-    private func shareImage() {
-        guard let image = imageLoader.image else { return }
-        
-        let activityVC = UIActivityViewController(
-            activityItems: [image, event.title],
-            applicationActivities: nil
-        )
-        
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let window = windowScene.windows.first,
-           let rootVC = window.rootViewController {
-            
-            // Find the top-most view controller
-            var topVC = rootVC
-            while let presented = topVC.presentedViewController {
-                topVC = presented
-            }
-            
-            // For iPad
-            if let popover = activityVC.popoverPresentationController {
-                popover.sourceView = window
-                popover.sourceRect = CGRect(x: window.bounds.midX, y: window.bounds.midY, width: 0, height: 0)
-                popover.permittedArrowDirections = []
-            }
-            
-            topVC.present(activityVC, animated: true)
-        }
+        .statusBar(hidden: true)
     }
     
     private func saveImage() {
@@ -223,27 +161,22 @@ struct ImageDetailView: View {
         
         UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
         
-        // Show feedback (you might want to add a toast notification here)
+        // Show success feedback
         let generator = UINotificationFeedbackGenerator()
         generator.notificationOccurred(.success)
     }
-}
-
-struct ImageDetailView_Previews: PreviewProvider {
-    static var previews: some View {
-        ImageDetailView(event: Event(
-            id: "test",
-            timestamp: Int64(Date().timeIntervalSince1970),
-            source: "camera1",
-            area: "barkasayal",
-            areaDisplay: "Barka Sayal",
-            type: "cd",
-            typeDisplay: "Crowd Detection",
-            groupId: nil,
-            vehicleNumber: nil,
-            vehicleTransporter: nil,
-            data: ["location": AnyCodable("Main Gate")],
-            isRead: false
-        ))
+    
+    private func shareImage() {
+        guard let image = imageLoader.image else { return }
+        
+        let activityVC = UIActivityViewController(
+            activityItems: [image],
+            applicationActivities: nil
+        )
+        
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootVC = windowScene.windows.first?.rootViewController {
+            rootVC.present(activityVC, animated: true)
+        }
     }
 }

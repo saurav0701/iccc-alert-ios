@@ -1,35 +1,10 @@
 import Foundation
 
-struct ChannelSyncInfo: Codable {
-    let channelId: String
-    var lastEventId: String?
-    var lastEventTimestamp: Int64
-    var lastEventSeq: Int64
-    var highestSeq: Int64
-    var totalReceived: Int64
-    var lastSyncTime: TimeInterval
-    
-    init(channelId: String) {
-        self.channelId = channelId
-        self.lastEventId = nil
-        self.lastEventTimestamp = 0
-        self.lastEventSeq = 0
-        self.highestSeq = 0
-        self.totalReceived = 0
-        self.lastSyncTime = Date().timeIntervalSince1970
-    }
-}
-
 class ChannelSyncState {
     static let shared = ChannelSyncState()
     
-    // MARK: - Properties
-    private let defaults = UserDefaults.standard
+    private let userDefaults = UserDefaults.standard
     private let syncStateKey = "channel_sync_states"
-    
-    // ✅ CRITICAL FIX: Use NSRecursiveLock instead of serial queue
-    // NSLock is non-blocking and won't cause deadlocks like serialQueue.sync
-    private let lock = NSRecursiveLock()
     
     private var syncStates: [String: ChannelSyncInfo] = [:]
     
@@ -37,53 +12,118 @@ class ChannelSyncState {
     private var catchUpMode: [String: Bool] = [:]
     private var receivedSequences: [String: Set<Int64>] = [:]
     
-    private var saveTimer: Timer?
-    private let saveDelay: TimeInterval = 0.5
+    struct ChannelSyncInfo: Codable {
+        let channelId: String
+        var lastEventId: String?
+        var lastEventTimestamp: Int64
+        var lastEventSeq: Int64
+        var highestSeq: Int64
+        var totalReceived: Int64
+        var lastSyncTime: Int64
+        
+        init(channelId: String) {
+            self.channelId = channelId
+            self.lastEventId = nil
+            self.lastEventTimestamp = 0
+            self.lastEventSeq = 0
+            self.highestSeq = 0
+            self.totalReceived = 0
+            self.lastSyncTime = Int64(Date().timeIntervalSince1970)
+        }
+    }
     
-    // MARK: - Initialization
     private init() {
         loadStates()
     }
     
+    // MARK: - Data Persistence
+    
+    private func loadStates() {
+        if let data = userDefaults.data(forKey: syncStateKey),
+           let states = try? JSONDecoder().decode([String: ChannelSyncInfo].self, from: data) {
+            syncStates = states
+            print("📊 Loaded sync states for \(states.count) channels")
+            
+            for (channelId, state) in states {
+                print("   \(channelId): lastSeq=\(state.lastEventSeq), highestSeq=\(state.highestSeq)")
+            }
+        }
+    }
+    
+    func forceSave() {
+        if let data = try? JSONEncoder().encode(syncStates) {
+            userDefaults.set(data, forKey: syncStateKey)
+            print("✅ Force saved sync states for \(syncStates.count) channels")
+        }
+    }
+    
+    private func saveStates() {
+        DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 0.5) {
+            if let data = try? JSONEncoder().encode(self.syncStates) {
+                self.userDefaults.set(data, forKey: self.syncStateKey)
+            }
+        }
+    }
+    
+    // MARK: - Catch-up Mode Management
+    
+    func enableCatchUpMode(channelId: String) {
+        catchUpMode[channelId] = true
+        receivedSequences[channelId] = Set<Int64>()
+        print("🔄 Enabled catch-up mode for \(channelId)")
+    }
+    
+    func disableCatchUpMode(channelId: String) {
+        catchUpMode[channelId] = false
+        receivedSequences[channelId] = nil
+        print("✅ Disabled catch-up mode for \(channelId) (switched to live mode)")
+    }
+    
+    func isInCatchUpMode(channelId: String) -> Bool {
+        return catchUpMode[channelId] ?? false
+    }
+    
+    func getCatchUpProgress(channelId: String) -> Int {
+        return receivedSequences[channelId]?.count ?? 0
+    }
+    
     // MARK: - Event Recording
+    
     func recordEventReceived(channelId: String, eventId: String, timestamp: Int64, seq: Int64 = 0) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
+        if syncStates[channelId] == nil {
+            syncStates[channelId] = ChannelSyncInfo(channelId: channelId)
+        }
         
-        var state = syncStates[channelId] ?? ChannelSyncInfo(channelId: channelId)
-        let inCatchUpMode = catchUpMode[channelId] == true
-        var result = true
+        guard var state = syncStates[channelId] else { return false }
         
-        // Sequence-based duplicate detection
+        let inCatchUpMode = isInCatchUpMode(channelId: channelId)
+        
         if seq > 0 {
             if inCatchUpMode {
-                // CATCH-UP MODE: Use Set for out-of-order handling
-                var seqSet = receivedSequences[channelId] ?? Set<Int64>()
-                
-                if !seqSet.insert(seq).inserted {
+                // ✅ CATCH-UP MODE: Use Set for out-of-order handling
+                if receivedSequences[channelId]?.contains(seq) == true {
                     print("⏭️ Duplicate seq \(seq) for \(channelId) (catch-up mode)")
-                    result = false
-                    return result
+                    return false
                 }
                 
-                receivedSequences[channelId] = seqSet
-                print("✅ Recorded \(channelId): seq=\(seq) (CATCH-UP, total=\(seqSet.count))")
+                receivedSequences[channelId]?.insert(seq)
+                let setSize = receivedSequences[channelId]?.count ?? 0
+                print("✅ Recorded \(channelId): seq=\(seq) (CATCH-UP, total=\(setSize))")
                 
             } else {
-                // LIVE MODE: Simple comparison
+                // ✅ LIVE MODE: Simple comparison (efficient)
                 if seq <= state.highestSeq {
                     print("⏭️ Duplicate seq \(seq) for \(channelId) (live mode, highest=\(state.highestSeq))")
-                    result = false
-                    return result
+                    return false
                 }
                 
                 print("✅ Recorded \(channelId): seq=\(seq) (LIVE)")
             }
         }
         
-        // Update state
+        // Update state with highest sequence
         state.totalReceived += 1
-        state.lastSyncTime = Date().timeIntervalSince1970
+        state.lastSyncTime = Int64(Date().timeIntervalSince1970)
         
         if seq > 0 && seq > state.highestSeq {
             state.highestSeq = seq
@@ -91,170 +131,76 @@ class ChannelSyncState {
             state.lastEventTimestamp = timestamp
             state.lastEventSeq = seq
         } else if seq == 0 && timestamp > state.lastEventTimestamp {
+            // No sequence, use timestamp
             state.lastEventTimestamp = timestamp
             state.lastEventId = eventId
         }
         
         syncStates[channelId] = state
-        scheduleSave()
+        saveStates()
         
-        return result
+        return true
     }
     
-    // MARK: - Catch-up Mode Management
-    func enableCatchUpMode(channelId: String) {
-        lock.lock()
-        defer { lock.unlock() }
-        catchUpMode[channelId] = true
-        receivedSequences[channelId] = Set<Int64>()
-        print("🔄 Enabled catch-up mode for \(channelId)")
-    }
+    // MARK: - Query Methods
     
-    func disableCatchUpMode(channelId: String) {
-        lock.lock()
-        defer { lock.unlock() }
-        catchUpMode[channelId] = false
-        receivedSequences[channelId]?.removeAll()
-        print("✅ Disabled catch-up mode for \(channelId) (switched to live mode)")
-    }
-    
-    func isInCatchUpMode(channelId: String) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return catchUpMode[channelId] == true
-    }
-    
-    func getCatchUpProgress(channelId: String) -> Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return receivedSequences[channelId]?.count ?? 0
-    }
-    
-    // MARK: - State Access
     func getSyncInfo(channelId: String) -> ChannelSyncInfo? {
-        lock.lock()
-        defer { lock.unlock() }
         return syncStates[channelId]
     }
     
-    func getAllSyncStates() -> [String: ChannelSyncInfo] {
-        lock.lock()
-        defer { lock.unlock() }
-        return syncStates
-    }
-    
     func getLastEventId(channelId: String) -> String? {
-        lock.lock()
-        defer { lock.unlock() }
         return syncStates[channelId]?.lastEventId
     }
     
     func getLastSequence(channelId: String) -> Int64 {
-        lock.lock()
-        defer { lock.unlock() }
         return syncStates[channelId]?.lastEventSeq ?? 0
     }
     
     func getHighestSequence(channelId: String) -> Int64 {
-        lock.lock()
-        defer { lock.unlock() }
         return syncStates[channelId]?.highestSeq ?? 0
     }
     
     func getTotalEventsReceived() -> Int64 {
-        lock.lock()
-        defer { lock.unlock() }
         return syncStates.values.reduce(0) { $0 + $1.totalReceived }
     }
     
     // MARK: - Channel Management
+    
     func clearChannel(channelId: String) {
-        lock.lock()
-        defer { lock.unlock() }
         syncStates.removeValue(forKey: channelId)
         receivedSequences.removeValue(forKey: channelId)
         catchUpMode.removeValue(forKey: channelId)
-        
-        scheduleSave()
+        saveStates()
         print("🗑️ Cleared sync state for \(channelId)")
     }
     
     func clearAll() {
-        lock.lock()
-        defer { lock.unlock() }
         syncStates.removeAll()
         receivedSequences.removeAll()
         catchUpMode.removeAll()
-        
-        defaults.removeObject(forKey: syncStateKey)
-        print("🗑️ Cleared all sync state")
+        userDefaults.removeObject(forKey: syncStateKey)
+        print("✅ Cleared all sync state")
     }
     
     // MARK: - Statistics
+    
     func getStats() -> [String: Any] {
-        lock.lock()
-        defer { lock.unlock() }
-        
-        let channelStats = syncStates.map { (channelId, state) in
+        let channelStats = syncStates.map { (channelId, state) -> [String: Any] in
             return [
                 "channel": channelId,
-                "lastEventId": state.lastEventId as Any,
+                "lastEventId": state.lastEventId ?? "",
                 "lastSeq": state.lastEventSeq,
                 "highestSeq": state.highestSeq,
                 "totalReceived": state.totalReceived,
-                "catchUpMode": catchUpMode[channelId] == true,
+                "catchUpMode": catchUpMode[channelId] ?? false,
                 "trackedSequences": receivedSequences[channelId]?.count ?? 0
-            ] as [String: Any]
+            ]
         }
         
         return [
             "channelCount": syncStates.count,
-            "totalEvents": syncStates.values.reduce(0) { $0 + $1.totalReceived },
+            "totalEvents": getTotalEventsReceived(),
             "channels": channelStats
         ]
-    }
-    
-    // MARK: - Persistence
-    private func scheduleSave() {
-        // Must be called while holding lock
-        saveTimer?.invalidate()
-        
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.saveTimer = Timer.scheduledTimer(withTimeInterval: self.saveDelay, repeats: false) { [weak self] _ in
-                self?.saveNow()
-            }
-        }
-    }
-    
-    private func saveNow() {
-        lock.lock()
-        let snapshot = syncStates
-        lock.unlock()
-        
-        if let data = try? JSONEncoder().encode(snapshot) {
-            defaults.set(data, forKey: syncStateKey)
-            print("💾 Saved \(snapshot.count) channel states")
-        }
-    }
-    
-    private func loadStates() {
-        if let data = defaults.data(forKey: syncStateKey),
-           let states = try? JSONDecoder().decode([String: ChannelSyncInfo].self, from: data) {
-            lock.lock()
-            syncStates = states
-            lock.unlock()
-            
-            print("📊 Loaded \(states.count) channel sync states")
-            for (channelId, state) in states {
-                print("  - \(channelId): lastSeq=\(state.lastEventSeq), highestSeq=\(state.highestSeq)")
-            }
-        }
-    }
-    
-    func forceSave() {
-        saveTimer?.invalidate()
-        saveNow()
-        print("💾 Force saved all channel states")
     }
 }
