@@ -19,13 +19,15 @@ struct SettingsView: View {
                 appInfoSection
             }
             .navigationTitle("Settings")
-            .alert("Logout", isPresented: $showingLogout) {
-                Button("Cancel", role: .cancel) { }
-                Button("Logout", role: .destructive) {
-                    logout()
-                }
-            } message: {
-                Text("Are you sure you want to logout?")
+            .alert(isPresented: $showingLogout) {
+                Alert(
+                    title: Text("Logout"),
+                    message: Text("Are you sure you want to logout?"),
+                    primaryButton: .cancel(),
+                    secondaryButton: .destructive(Text("Logout")) {
+                        logout()
+                    }
+                )
             }
             .onAppear {
                 loadSyncStats()
@@ -139,7 +141,7 @@ struct SettingsView: View {
     private var channelStatsView: some View {
         Group {
             if let channels = syncStats["channels"] as? [[String: Any]] {
-                ForEach(channels.prefix(5), id: \.self as NSDictionary) { channel in
+                ForEach(Array(channels.prefix(5).enumerated()), id: \.offset) { index, channel in
                     channelStatRow(channel: channel)
                 }
             }
