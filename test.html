@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>iOS WebSocket Debugger</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        h2 {
+            margin-top: 0;
+            color: #333;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        .connected {
+            background: #d4edda;
+            color: #155724;
+        }
+        .disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .log {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 10px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+        .log-entry {
+            padding: 5px;
+            border-bottom: 1px solid #e9ecef;
+            margin: 2px 0;
+        }
+        .log-entry.info {
+            color: #0c5460;
+        }
+        .log-entry.success {
+            color: #155724;
+            background: #d4edda;
+        }
+        .log-entry.error {
+            color: #721c24;
+            background: #f8d7da;
+        }
+        .log-entry.event {
+            color: #004085;
+            background: #cce5ff;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin: 10px 0;
+        }
+        .stat-box {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #007bff;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #6c757d;
+            margin-top: 5px;
+        }
+        input {
+            padding: 8px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            width: 300px;
+            margin: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>🔌 WebSocket Connection Test</h2>
+        <div>
+            <label>WebSocket URL:</label><br>
+            <input type="text" id="wsUrl" value="ws://192.168.29.70:19999/ws">
+        </div>
+        <div>
+            <label>Client ID:</label><br>
+            <input type="text" id="clientId" value="test-client-001">
+        </div>
+        <div id="status" class="status disconnected">Disconnected</div>
+        <button id="connectBtn" onclick="connect()">Connect</button>
+        <button id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
+        <button onclick="clearLogs()">Clear Logs</button>
+    </div>
+
+    <div class="container">
+        <h2>📊 Statistics</h2>
+        <div class="stats">
+            <div class="stat-box">
+                <div class="stat-value" id="receivedCount">0</div>
+                <div class="stat-label">Messages Received</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value" id="eventsCount">0</div>
+                <div class="stat-label">Events Decoded</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value" id="errorsCount">0</div>
+                <div class="stat-label">Errors</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>📋 Subscription</h2>
+        <div>
+            <label>Area:</label>
+            <input type="text" id="subArea" value="piparwar" placeholder="e.g., piparwar">
+            <label>Event Type:</label>
+            <input type="text" id="subType" value="id" placeholder="e.g., id">
+            <button onclick="sendSubscription()" id="subBtn" disabled>Subscribe</button>
+            <button onclick="subscribeToAll()" id="subAllBtn" disabled style="background: #28a745;">Subscribe to All Areas (ID)</button>
+        </div>
+        <div id="subscriptions" style="margin-top: 10px; font-size: 14px;"></div>
+    </div>
+
+    <div class="container">
+        <h2>📝 Message Log</h2>
+        <div id="log" class="log"></div>
+    </div>
+
+    <div class="container">
+        <h2>🎯 Latest Event</h2>
+        <pre id="latestEvent" style="background: #f8f9fa; padding: 10px; border-radius: 4px; overflow: auto; max-height: 300px;">No events yet</pre>
+    </div>
+
+    <script>
+        let ws = null;
+        let receivedCount = 0;
+        let eventsCount = 0;
+        let errorsCount = 0;
+        let subscriptions = [];
+
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            const timestamp = new Date().toLocaleTimeString();
+            entry.textContent = `[${timestamp}] ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function updateStats() {
+            document.getElementById('receivedCount').textContent = receivedCount;
+            document.getElementById('eventsCount').textContent = eventsCount;
+            document.getElementById('errorsCount').textContent = errorsCount;
+        }
+
+        function updateStatus(connected) {
+            const statusDiv = document.getElementById('status');
+            const connectBtn = document.getElementById('connectBtn');
+            const disconnectBtn = document.getElementById('disconnectBtn');
+            const subBtn = document.getElementById('subBtn');
+
+            if (connected) {
+                statusDiv.textContent = 'Connected ✅';
+                statusDiv.className = 'status connected';
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+                subBtn.disabled = false;
+            } else {
+                statusDiv.textContent = 'Disconnected ❌';
+                statusDiv.className = 'status disconnected';
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+                subBtn.disabled = true;
+            }
+        }
+
+        function connect() {
+            const url = document.getElementById('wsUrl').value;
+            log(`Connecting to ${url}...`, 'info');
+
+            try {
+                ws = new WebSocket(url);
+
+                ws.onopen = () => {
+                    log('✅ Connected successfully!', 'success');
+                    updateStatus(true);
+                };
+
+                ws.onmessage = (event) => {
+                    receivedCount++;
+                    updateStats();
+
+                    try {
+                        const data = JSON.parse(event.data);
+                        
+                        // Check if it's a subscription confirmation
+                        if (data.status === 'subscribed') {
+                            log('✅ Subscription confirmed', 'success');
+                            return;
+                        }
+
+                        // Check if it's an event
+                        if (data.id && data.area && data.type) {
+                            eventsCount++;
+                            updateStats();
+                            
+                            const channelId = `${data.area}_${data.type}`;
+                            log(`📨 EVENT: ${channelId} - ${data.id}`, 'event');
+                            
+                            // Display the full event
+                            document.getElementById('latestEvent').textContent = JSON.stringify(data, null, 2);
+                            
+                            // Check if we're subscribed to this channel
+                            const isSubscribed = subscriptions.some(s => 
+                                s.area === data.area && s.eventType === data.type
+                            );
+                            
+                            if (isSubscribed) {
+                                log(`✅ This event matches our subscription!`, 'success');
+                            } else {
+                                log(`⚠️ Received event but NOT subscribed to ${channelId}`, 'error');
+                            }
+                        } else {
+                            log(`📥 Message: ${JSON.stringify(data).substring(0, 100)}...`, 'info');
+                        }
+                    } catch (e) {
+                        errorsCount++;
+                        updateStats();
+                        log(`❌ Failed to parse message: ${e.message}`, 'error');
+                        log(`Raw: ${event.data.substring(0, 200)}`, 'error');
+                    }
+                };
+
+                ws.onerror = (error) => {
+                    errorsCount++;
+                    updateStats();
+                    log(`❌ WebSocket error: ${error}`, 'error');
+                };
+
+                ws.onclose = () => {
+                    log('❌ Connection closed', 'error');
+                    updateStatus(false);
+                };
+
+            } catch (e) {
+                errorsCount++;
+                updateStats();
+                log(`❌ Failed to connect: ${e.message}`, 'error');
+            }
+        }
+
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+                log('Disconnected by user', 'info');
+            }
+        }
+
+        function sendSubscription() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('❌ Not connected!', 'error');
+                return;
+            }
+
+            const area = document.getElementById('subArea').value.trim();
+            const eventType = document.getElementById('subType').value.trim();
+            const clientId = document.getElementById('clientId').value.trim();
+
+            if (!area || !eventType) {
+                log('❌ Please enter both area and event type', 'error');
+                return;
+            }
+
+            const subscription = {
+                clientId: clientId,
+                filters: [
+                    {
+                        area: area,
+                        eventType: eventType
+                    }
+                ],
+                resetConsumers: true
+            };
+
+            // Store subscription
+            subscriptions.push({ area, eventType });
+            updateSubscriptionDisplay();
+
+            const message = JSON.stringify(subscription);
+            log(`📤 Sending subscription: ${message}`, 'info');
+            
+            ws.send(message);
+        }
+
+        function subscribeToAll() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('❌ Not connected!', 'error');
+                return;
+            }
+
+            const clientId = document.getElementById('clientId').value.trim();
+            const areas = [
+                "barkasayal", "argada", "northkaranpura", "bokarokargali", 
+                "kathara", "giridih", "amrapali", "magadh", "rajhara", 
+                "kuju", "hazaribagh", "rajrappa", "dhori", "piparwar"
+            ];
+
+            const filters = areas.map(area => ({
+                area: area,
+                eventType: "id"
+            }));
+
+            const subscription = {
+                clientId: clientId,
+                filters: filters,
+                resetConsumers: true
+            };
+
+            // Store subscriptions
+            subscriptions = areas.map(area => ({ area, eventType: "id" }));
+            updateSubscriptionDisplay();
+
+            const message = JSON.stringify(subscription);
+            log(`📤 Subscribing to ALL areas (ID events): ${areas.length} channels`, 'success');
+            
+            ws.send(message);
+        }
+
+        function updateSubscriptionDisplay() {
+            const div = document.getElementById('subscriptions');
+            if (subscriptions.length === 0) {
+                div.innerHTML = '<em style="color: #6c757d;">No active subscriptions</em>';
+            } else {
+                div.innerHTML = '<strong>Active:</strong> ' + subscriptions.map(s => 
+                    `<span style="background: #e7f3ff; padding: 4px 8px; border-radius: 4px; margin: 2px; display: inline-block;">${s.area}_${s.eventType}</span>`
+                ).join(' ');
+            }
+        }
+
+        function clearLogs() {
+            document.getElementById('log').innerHTML = '';
+            receivedCount = 0;
+            eventsCount = 0;
+            errorsCount = 0;
+            updateStats();
+        }
+
+        // Initialize
+        updateStatus(false);
+        updateSubscriptionDisplay();
+    </script>
+</body>
+</html>

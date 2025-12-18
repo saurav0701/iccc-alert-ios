@@ -15,39 +15,32 @@ class WebSocketService: ObservableObject {
     private var reconnectAttempts = 0
     private let maxReconnectAttempts = Int.max
     
-    // ✅ CRITICAL FIX: Use port 19999 for WebSocket (not 19998)
-    private let baseURL = "ws://192.168.29.70:19999" // CCL WebSocket port
-    // private let baseURL = "ws://192.168.29.70:2222" // BCCL WebSocket port
+    private let baseURL = "ws://192.168.29.70:19999"
     
     private var wsURL: String {
         return "\(baseURL)/ws"
     }
     
-    // Event processing
     private let eventQueue = DispatchQueue(label: "com.iccc.eventQueue", attributes: .concurrent)
     private let ackQueue = DispatchQueue(label: "com.iccc.ackQueue")
     private var pendingAcks: [String] = []
     private let ackBatchSize = 50
     private var ackTimer: Timer?
     
-    // Statistics
     private var receivedCount = 0
     private var processedCount = 0
     private var droppedCount = 0
     private var ackedCount = 0
     private var errorCount = 0
     
-    // Catch-up monitoring
     private var catchUpTimer: Timer?
     private var consecutiveEmptyChecks: [String: Int] = [:]
     private let stableEmptyThreshold = 3
     
-    // Client ID
     private var clientId: String {
         return getDeviceId()
     }
     
-    // Subscription state
     private var hasSubscribed = false
     private var lastSubscriptionTime: TimeInterval = 0
     
@@ -123,7 +116,6 @@ class WebSocketService: ObservableObject {
         
         startPingTimer()
         
-        // Send subscription after connection
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             self.sendSubscriptionV2()
         }
@@ -189,7 +181,6 @@ class WebSocketService: ObservableObject {
                     break
                 }
                 
-                // Continue receiving
                 self.receiveMessage()
                 
             case .failure(let error):
@@ -201,8 +192,6 @@ class WebSocketService: ObservableObject {
     
     private func handleMessage(_ text: String) {
         receivedCount += 1
-        
-        // Process on background queue
         eventQueue.async {
             self.processMessage(text)
         }
@@ -222,44 +211,42 @@ class WebSocketService: ObservableObject {
             return
         }
         
-        // ✅ DEBUG: Log raw message
-        print("📥 RAW MESSAGE: \(text.prefix(200))...")
+        print("📥 RAW: \(text.prefix(300))...")
         
         // Parse event
         guard let data = text.data(using: .utf8),
               let event = try? JSONDecoder().decode(Event.self, from: data) else {
             errorCount += 1
-            print("❌ Failed to decode event")
+            print("❌ Failed to decode")
             return
         }
         
-        print("✅ Decoded event: id=\(event.id ?? "nil"), area=\(event.area ?? "nil"), type=\(event.type ?? "nil")")
+        print("✅ Decoded: id=\(event.id ?? "nil"), area=\(event.area ?? "nil"), type=\(event.type ?? "nil"), location=\(event.location)")
         
         guard let eventId = event.id,
               let area = event.area,
               let type = event.type else {
             droppedCount += 1
-            print("❌ Event missing required fields: id=\(event.id ?? "nil"), area=\(event.area ?? "nil"), type=\(event.type ?? "nil")")
+            print("❌ Missing fields")
             return
         }
         
         let channelId = "\(area)_\(type)"
-        print("📍 Channel ID: \(channelId)")
+        print("📍 Channel: \(channelId)")
         
         // Check subscription
-        guard SubscriptionManager.shared.isSubscribed(channelId: channelId) else {
+        let isSubscribed = SubscriptionManager.shared.isSubscribed(channelId: channelId)
+        print("🔔 Subscribed: \(isSubscribed)")
+        
+        if !isSubscribed {
             droppedCount += 1
-            print("⏭️ Not subscribed to \(channelId), dropping event")
+            print("⏭️ Not subscribed, dropping")
             sendAck(eventId: eventId)
             return
         }
         
-        print("✅ Subscribed to \(channelId), processing event")
-        
-        // Get sequence number
         let seq = event.data?["_seq"]?.int64Value ?? 0
         
-        // Record in sync state
         let isNew = ChannelSyncState.shared.recordEventReceived(
             channelId: channelId,
             eventId: eventId,
@@ -273,14 +260,17 @@ class WebSocketService: ObservableObject {
             return
         }
         
-        // Add event to storage
+        // Add event
+        print("💾 Adding event...")
         let added = SubscriptionManager.shared.addEvent(event)
+        
+        print("📊 Added: \(added)")
         
         if added {
             processedCount += 1
             
-            // Notify UI
             DispatchQueue.main.async {
+                print("📢 Posting notification")
                 NotificationCenter.default.post(
                     name: .newEventReceived,
                     object: nil,
@@ -291,7 +281,6 @@ class WebSocketService: ObservableObject {
             droppedCount += 1
         }
         
-        // Always ACK
         sendAck(eventId: eventId)
     }
     
@@ -332,7 +321,6 @@ class WebSocketService: ObservableObject {
         guard let jsonData = try? JSONSerialization.data(withJSONObject: ackMessage),
               let jsonString = String(data: jsonData, encoding: .utf8) else {
             print("❌ Failed to serialize ACK")
-            // Re-queue ACKs
             ackQueue.async {
                 self.pendingAcks.insert(contentsOf: acksToSend, at: 0)
             }
@@ -344,16 +332,11 @@ class WebSocketService: ObservableObject {
         webSocketTask?.send(message) { [weak self] error in
             if let error = error {
                 print("❌ Failed to send ACK: \(error.localizedDescription)")
-                // Re-queue ACKs
                 self?.ackQueue.async {
                     self?.pendingAcks.insert(contentsOf: acksToSend, at: 0)
                 }
             } else {
                 self?.ackedCount += acksToSend.count
-                
-                if acksToSend.count > 50 {
-                    print("✅ Sent BULK ACK for \(acksToSend.count) events")
-                }
             }
         }
     }
@@ -379,12 +362,12 @@ class WebSocketService: ObservableObject {
             return
         }
         
-        // Enable catch-up mode for all channels
+        print("📋 Subscribed channels: \(subscriptions.map { $0.id })")
+        
         for channel in subscriptions {
             ChannelSyncState.shared.enableCatchUpMode(channelId: channel.id)
         }
         
-        // Build filters
         let filters = subscriptions.map { channel -> [String: String] in
             return [
                 "area": channel.area,
@@ -392,7 +375,6 @@ class WebSocketService: ObservableObject {
             ]
         }
         
-        // Build sync state
         var syncState: [String: [String: Any]] = [:]
         var hasSyncState = false
         
@@ -427,12 +409,6 @@ class WebSocketService: ObservableObject {
         
         print("📤 Subscription: \(jsonString)")
         
-        if resetConsumers {
-            print("⚠️ RESET MODE: Will delete old consumers and start fresh")
-        } else {
-            print("✅ RESUME MODE: Will resume from last known sequences")
-        }
-        
         let message = URLSessionWebSocketTask.Message.string(jsonString)
         
         webSocketTask?.send(message) { [weak self] error in
@@ -441,7 +417,7 @@ class WebSocketService: ObservableObject {
             } else {
                 self?.hasSubscribed = true
                 self?.lastSubscriptionTime = now
-                print("✅ Subscription sent successfully")
+                print("✅ Subscription sent")
                 self?.startCatchUpMonitoring()
             }
         }
@@ -519,7 +495,7 @@ class WebSocketService: ObservableObject {
         Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
             guard let self = self, self.isConnected else { return }
             
-            print("📊 STATS: received=\(self.receivedCount), processed=\(self.processedCount), acked=\(self.ackedCount), dropped=\(self.droppedCount), errors=\(self.errorCount), pendingAcks=\(self.pendingAcks.count)")
+            print("📊 received=\(self.receivedCount), processed=\(self.processedCount), acked=\(self.ackedCount), dropped=\(self.droppedCount)")
         }
     }
     
