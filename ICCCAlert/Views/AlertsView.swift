@@ -350,7 +350,7 @@ struct AlertsView: View {
     }
 }
 
-// MARK: - Alert Channel Row (✅ UPDATED: Shows area name prominently)
+// MARK: - Alert Channel Row (✅ FIXED: Shows both Event Type AND Area Name)
 
 struct AlertChannelRow: View {
     let channel: Channel
@@ -377,10 +377,9 @@ struct AlertChannelRow: View {
             }
             
             VStack(alignment: .leading, spacing: 6) {
-                // ✅ FIX: Show Area Name and Time in first row
+                // ✅ FIX 1: Show Event Type as main title
                 HStack {
-                    // Area Name (Prominent)
-                    Text(channel.areaDisplay)
+                    Text(channel.eventTypeDisplay)
                         .font(.system(size: 17, weight: unreadCount > 0 ? .bold : .semibold))
                         .foregroundColor(.primary)
                     
@@ -394,6 +393,11 @@ struct AlertChannelRow: View {
                     }
                 }
                 
+                // ✅ FIX 2: Show Area Name as subtitle
+                Text(channel.areaDisplay)
+                    .font(.system(size: 14))
+                    .foregroundColor(.secondary)
+                
                 // Last Event Message
                 if let event = lastEvent {
                     Text(event.message)
@@ -403,23 +407,8 @@ struct AlertChannelRow: View {
                         .padding(.top, 2)
                 }
                 
-                // Bottom Row: Event Type Badge + Unread Count
+                // Bottom Row: Unread Count Badge Only
                 HStack {
-                    // Event Type Badge
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(iconColor)
-                            .frame(width: 6, height: 6)
-                        
-                        Text(channel.eventTypeDisplay)
-                            .font(.caption)
-                            .foregroundColor(iconColor)
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(iconColor.opacity(0.1))
-                    .cornerRadius(4)
-                    
                     Spacer()
                     
                     // Unread Count Badge
