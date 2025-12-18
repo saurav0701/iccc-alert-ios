@@ -18,7 +18,8 @@ struct ICCCAlertApp: App {
             object: nil,
             queue: .main
         ) { _ in
-            self.handleAppTermination()
+            // ✅ Call static method instead of instance method
+            ICCCAlertApp.handleAppTermination()
         }
     }
     
@@ -90,16 +91,16 @@ struct ICCCAlertApp: App {
         }
     }
     
-    // ✅ NEW: Handle app termination (iOS 13+)
-    private func handleAppTermination() {
+    // ✅ NEW: Handle app termination (static method to avoid capture issues)
+    private static func handleAppTermination() {
         print("🛑 App will terminate - saving state")
         
         // ✅ CRITICAL: Save everything synchronously
-        subscriptionManager.forceSave()
+        SubscriptionManager.shared.forceSave()
         ChannelSyncState.shared.forceSave()
         
         // ✅ Disconnect cleanly (flushes ACKs)
-        webSocketService.disconnect()
+        WebSocketService.shared.disconnect()
         
         print("✅ App state saved on termination")
     }
