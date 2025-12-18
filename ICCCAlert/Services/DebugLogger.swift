@@ -3,23 +3,24 @@ import Foundation
 class DebugLogger {
     static let shared = DebugLogger()
     
-    private var logs: [String] = []
-    private let maxLogs = 500
-    private let lock = NSLock()
+    private let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+        return formatter
+    }()
     
-    private init() {
-        log("INIT", "DebugLogger initialized")
-    }
+    private var logs: [String] = []
+    private let maxLogs = 1000
+    
+    private init() {}
     
     func log(_ category: String, _ message: String) {
-        lock.lock()
-        defer { lock.unlock() }
-        
-        let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        let timestamp = dateFormatter.string(from: Date())
         let logMessage = "[\(timestamp)] [\(category)] \(message)"
         
         logs.append(logMessage)
         
+        // Keep only recent logs
         if logs.count > maxLogs {
             logs.removeFirst(logs.count - maxLogs)
         }
@@ -27,47 +28,48 @@ class DebugLogger {
         print(logMessage)
     }
     
-    func logError(_ category: String, _ message: String) {
-        log(category, "❌ \(message)")
+    func logConnection(_ status: String, _ details: String = "") {
+        log("CONNECTION", "\(status) \(details)")
     }
     
-    func logWebSocket(_ message: String) {
-        log("WS", message)
+    func logEvent(_ action: String, _ event: Event) {
+        // ✅ FIXED: Use typeDisplay instead of title
+        log("EVENT", "\(action): \(event.id ?? "unknown") - \(event.typeDisplay ?? event.type ?? "unknown")")
     }
     
-    func logEvent(_ event: Event, action: String) {
-        log("EVENT", "\(action): \(event.id ?? "unknown") - \(event.title)")
+    // ✅ FIXED: Removed direct access to private properties
+    func logWebSocketStats() {
+        // Stats are now logged directly in WebSocketService
+        log("STATS", "Check WebSocketService console output")
     }
     
-    func logWebSocketStatus() {
-        let ws = WebSocketService.shared
-        log("STATUS", """
-            Connected: \(ws.isConnected)
-            Received: \(ws.receivedCount)
-            Processed: \(ws.processedCount)
-            Dropped: \(ws.droppedCount)
-            """)
+    func logSubscription(_ channel: String, _ action: String) {
+        log("SUBSCRIPTION", "\(action): \(channel)")
     }
     
-    func logChannelEvents() {
+    // ✅ FIXED: Use proper method name
+    func logStorage() {
         let sm = SubscriptionManager.shared
-        log("CHANNELS", "Total events stored: \(sm.getTotalEventCount())")
+        log("STORAGE", "Total events: \(sm.getTotalEventCount())")
         
         for channel in sm.subscribedChannels {
-            let count = sm.getEventCount(channelId: channel.id)
-            log("CHANNEL", "\(channel.id): \(count) events")
+            // ✅ FIXED: Get events and count them
+            let events = sm.getEvents(channelId: channel.id)
+            let count = events.count
+            let unread = sm.getUnreadCount(channelId: channel.id)
+            log("STORAGE", "  \(channel.id): \(count) events, \(unread) unread")
         }
     }
     
-    func getAllLogs() -> [String] {
-        lock.lock()
-        defer { lock.unlock() }
+    func getLogs() -> [String] {
         return logs
     }
     
     func clearLogs() {
-        lock.lock()
-        defer { lock.unlock() }
         logs.removeAll()
+    }
+    
+    func exportLogs() -> String {
+        return logs.joined(separator: "\n")
     }
 }

@@ -3,50 +3,94 @@ import Combine
 
 class ChannelsViewModel: ObservableObject {
     @Published var channels: [Channel] = []
+    @Published var filteredChannels: [Channel] = []
     @Published var categories: [String] = []
-    @Published var isLoading = false
-    @Published var error: String?
+    @Published var selectedCategory: String?
+    @Published var searchText = ""
     
-    let authManager: AuthManager
     private var cancellables = Set<AnyCancellable>()
-    private let baseURL = "https://iccc-backend.onrender.com"
+    private let subscriptionManager = SubscriptionManager.shared
     
-    init(authManager: AuthManager) {
-        self.authManager = authManager
+    init() {
+        loadChannels()
+        setupObservers()
     }
     
-    func fetchChannels() {
-        guard let token = authManager.token else {
-            error = "Not authenticated"
-            return
+    private func loadChannels() {
+        // Get all available channels
+        var allChannels = SubscriptionManager.getAllAvailableChannels()
+        
+        // Mark which ones are subscribed
+        let subscribedIds = Set(subscriptionManager.subscribedChannels.map { $0.id })
+        
+        allChannels = allChannels.map { channel in
+            var updated = channel
+            updated.isSubscribed = subscribedIds.contains(channel.id)
+            return updated
         }
         
-        isLoading = true
-        error = nil
+        self.channels = allChannels
         
-        guard let url = URL(string: "\(baseURL)/api/channels") else {
-            error = "Invalid URL"
-            isLoading = false
-            return
-        }
+        // ✅ FIXED: Extract categories from eventTypeDisplay instead of category
+        self.categories = Array(Set(allChannels.map { $0.eventTypeDisplay })).sorted()
         
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        
-        URLSession.shared.dataTaskPublisher(for: request)
-            .map(\.data)
-            .decode(type: [Channel].self, decoder: JSONDecoder())
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] completion in
-                self?.isLoading = false
-                if case .failure(let error) = completion {
-                    self?.error = error.localizedDescription
-                }
-            } receiveValue: { [weak self] channels in
-                self?.channels = channels
-                self?.categories = Array(Set(channels.map { $0.category })).sorted()
+        applyFilters()
+    }
+    
+    private func setupObservers() {
+        // Observe search text changes
+        $searchText
+            .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.applyFilters()
             }
             .store(in: &cancellables)
+        
+        // Observe category changes
+        $selectedCategory
+            .sink { [weak self] _ in
+                self?.applyFilters()
+            }
+            .store(in: &cancellables)
+        
+        // Observe subscription changes
+        NotificationCenter.default.publisher(for: NSNotification.Name("SubscriptionChanged"))
+            .sink { [weak self] _ in
+                self?.loadChannels()
+            }
+            .store(in: &cancellables)
+    }
+    
+    private func applyFilters() {
+        var result = channels
+        
+        // Apply category filter
+        if let category = selectedCategory {
+            result = result.filter { $0.eventTypeDisplay == category }
+        }
+        
+        // Apply search filter
+        if !searchText.isEmpty {
+            result = result.filter {
+                $0.areaDisplay.localizedCaseInsensitiveContains(searchText) ||
+                $0.eventTypeDisplay.localizedCaseInsensitiveContains(searchText)
+            }
+        }
+        
+        filteredChannels = result
+    }
+    
+    func subscribe(to channel: Channel) {
+        subscriptionManager.subscribe(channel: channel)
+        loadChannels()
+    }
+    
+    func unsubscribe(from channelId: String) {
+        subscriptionManager.unsubscribe(channelId: channelId)
+        loadChannels()
+    }
+    
+    func refresh() {
+        loadChannels()
     }
 }

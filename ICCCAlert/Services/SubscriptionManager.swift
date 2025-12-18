@@ -254,7 +254,7 @@ class SubscriptionManager: ObservableObject {
         let now = Int64(Date().timeIntervalSince1970)
         
         // Check if event already exists in cache
-        if var channelEvents = eventsCache[channelId] {
+        if let channelEvents = eventsCache[channelId] {
             if channelEvents.contains(where: { $0.id == eventId }) {
                 print("⏭️ Event \(eventId) already in cache")
                 return false

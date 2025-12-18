@@ -383,15 +383,15 @@ class WebSocketService: ObservableObject {
         var hasSyncState = false
         
         for channel in subscriptions {
-            if let info = ChannelSyncState.shared.getSyncInfo(channelId: channel.id) {
-                hasSyncState = true
-                syncState[channel.id] = [
-                    "lastEventId": info.lastEventId ?? "",
-                    "lastTimestamp": info.lastTimestamp,
-                    "lastSeq": info.highestSeq
-                ]
-            }
-        }
+    if let info = ChannelSyncState.shared.getSyncInfo(channelId: channel.id) {
+        hasSyncState = true
+        syncState[channel.id] = [
+            "lastEventId": info.lastEventId ?? "",
+            "lastTimestamp": info.lastEventTimestamp,  // ✅ FIXED: Changed from lastTimestamp
+            "lastSeq": info.highestSeq
+        ]
+    }
+}
         
         let resetConsumers = !hasSyncState
         
