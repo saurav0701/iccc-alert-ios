@@ -33,7 +33,8 @@ struct SettingsView: View {
                     HStack {
                         Text("Organization")
                         Spacer()
-                        Text(authManager.currentUser?.workingFor ?? "Unknown")
+                        // ✅ FIXED: Changed from workingFor to organisation
+                        Text(authManager.currentUser?.organisation ?? "Unknown")
                             .foregroundColor(.secondary)
                     }
                     
