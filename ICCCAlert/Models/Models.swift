@@ -18,22 +18,27 @@ struct Event: Codable, Identifiable {
     var isRead: Bool = false
     var priority: String?
     
+    // Ignore extra fields from backend
+    private enum CodingKeys: String, CodingKey {
+        case id, timestamp, source, area, areaDisplay, type, typeDisplay
+        case groupId, vehicleNumber, vehicleTransporter, data
+        // Don't include isRead, priority, or any backend fields we don't care about
+    }
+    
     var date: Date {
         return Date(timeIntervalSince1970: TimeInterval(timestamp))
     }
     
     var message: String {
-        // ✅ Handle both GPS and camera event formats
-        
-        // For GPS events: check geofence name first
-        if let geofence = data?["geofence"]?.dictionaryValue,
-           let name = geofence["name"]?.stringValue {
-            return name
-        }
-        
         // For camera events: use location field
         if let location = data?["location"]?.stringValue {
             return location
+        }
+        
+        // For GPS events: check geofence name
+        if let geofence = data?["geofence"]?.dictionaryValue,
+           let name = geofence["name"]?.stringValue {
+            return name
         }
         
         // For GPS events: try alertLocation
@@ -47,27 +52,7 @@ struct Event: Codable, Identifiable {
     }
     
     var location: String {
-        // ✅ Handle both GPS and camera event formats
-        
-        // For GPS events: check geofence name first
-        if let geofence = data?["geofence"]?.dictionaryValue,
-           let name = geofence["name"]?.stringValue {
-            return name
-        }
-        
-        // For camera events: use location field
-        if let location = data?["location"]?.stringValue {
-            return location
-        }
-        
-        // For GPS events: try alertLocation
-        if let alertLoc = data?["alertLocation"]?.dictionaryValue,
-           let lat = alertLoc["lat"]?.doubleValue,
-           let lng = alertLoc["lng"]?.doubleValue {
-            return String(format: "%.4f, %.4f", lat, lng)
-        }
-        
-        return "Unknown location"
+        return message
     }
 }
 
@@ -88,17 +73,16 @@ struct Channel: Codable, Identifiable {
 // MARK: - User
 
 struct User: Codable {
-    let id: Int  // ✅ Changed from String to Int
+    let id: Int
     let name: String
     let phone: String
     let area: String
     let designation: String
-    let organisation: String  // ✅ Changed from workingFor to organisation
+    let organisation: String
     let isActive: Bool
     let createdAt: String
     let updatedAt: String
     
-    // Custom CodingKeys if backend uses different naming
     enum CodingKeys: String, CodingKey {
         case id, name, phone, area, designation, organisation, isActive, createdAt, updatedAt
     }
