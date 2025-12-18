@@ -20,11 +20,22 @@ struct ICCCAlertApp: App {
                     .environmentObject(webSocketService)
                     .environmentObject(subscriptionManager)
                     .onAppear {
+                        print("🚀 ContentView appeared, starting WebSocket")
                         connectWebSocket()
                     }
             } else {
                 LoginView()
                     .environmentObject(authManager)
+                    // ✅ FIXED: Listen for authentication changes
+                    .onChange(of: authManager.isAuthenticated) { isAuth in
+                        if isAuth {
+                            print("✅ User authenticated, connecting WebSocket")
+                            // Small delay to ensure UI is ready
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                connectWebSocket()
+                            }
+                        }
+                    }
             }
         }
         .onChange(of: scenePhase) { newPhase in
@@ -35,9 +46,16 @@ struct ICCCAlertApp: App {
     // MARK: - WebSocket Lifecycle
     
     private func connectWebSocket() {
-        if authManager.isAuthenticated && !webSocketService.isConnected {
-            print("🚀 Starting WebSocket connection...")
+        guard authManager.isAuthenticated else {
+            print("⚠️ Not authenticated, skipping WebSocket connection")
+            return
+        }
+        
+        if !webSocketService.isConnected {
+            print("🔌 Starting WebSocket connection...")
             webSocketService.connect()
+        } else {
+            print("ℹ️ WebSocket already connected")
         }
     }
     
@@ -46,6 +64,7 @@ struct ICCCAlertApp: App {
         case .active:
             print("📱 App became active")
             if authManager.isAuthenticated && !webSocketService.isConnected {
+                print("🔄 Reconnecting WebSocket...")
                 webSocketService.connect()
             }
             
@@ -65,6 +84,7 @@ struct ICCCAlertApp: App {
     // MARK: - Appearance Setup
     
     private func setupAppearance() {
+        // Navigation Bar Appearance
         let navBarAppearance = UINavigationBarAppearance()
         navBarAppearance.configureWithOpaqueBackground()
         navBarAppearance.backgroundColor = .systemBackground
@@ -75,6 +95,7 @@ struct ICCCAlertApp: App {
         UINavigationBar.appearance().scrollEdgeAppearance = navBarAppearance
         UINavigationBar.appearance().compactAppearance = navBarAppearance
         
+        // Tab Bar Appearance
         let tabBarAppearance = UITabBarAppearance()
         tabBarAppearance.configureWithOpaqueBackground()
         tabBarAppearance.backgroundColor = .systemBackground
