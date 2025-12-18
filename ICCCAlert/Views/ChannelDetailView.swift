@@ -34,7 +34,7 @@ struct ChannelDetailView: View {
     
     var body: some View {
         ZStack(alignment: .top) {
-            // ✅ FIXED: Show events list immediately if subscribed
+            // Main Content
             if isSubscribed {
                 eventsListView
             } else {
@@ -47,8 +47,17 @@ struct ChannelDetailView: View {
             }
         }
         .navigationBarTitleDisplayMode(.inline)
-        .navigationTitle(channel.areaDisplay)
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                VStack(spacing: 2) {
+                    Text(channel.areaDisplay)
+                        .font(.headline)
+                    Text(channel.eventTypeDisplay)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 16) {
                     // Mute/Unmute button
@@ -88,12 +97,12 @@ struct ChannelDetailView: View {
         .id(refreshTrigger)
     }
     
-    // MARK: - Events List View (Telegram Style)
+    // MARK: - Events List View (✅ MODERNIZED)
     
     private var eventsListView: some View {
         VStack(spacing: 0) {
-            // Channel Info Header
-            channelInfoHeader
+            // ✅ Modern Channel Header Card
+            channelHeaderCard
             
             Divider()
             
@@ -102,172 +111,290 @@ struct ChannelDetailView: View {
                 emptyEventsView
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    LazyVStack(spacing: 12) {
                         ForEach(events) { event in
-                            EventMessageRow(event: event, channel: channel) {
+                            ModernEventCard(event: event, channel: channel) {
                                 selectedEvent = event
                                 showingImageDetail = true
                             }
-                            
-                            Divider()
-                                .padding(.leading, 80)
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.top, 12)
+                }
+            }
+        }
+        .background(Color(.systemGroupedBackground))
+    }
+    
+    // MARK: - ✅ Modern Channel Header Card
+    
+    private var channelHeaderCard: some View {
+        VStack(spacing: 0) {
+            // Top Section with Icon and Info
+            HStack(spacing: 16) {
+                // Modern Icon with Gradient
+                ZStack {
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                gradient: Gradient(colors: [iconColor, iconColor.opacity(0.7)]),
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 60, height: 60)
+                        .shadow(color: iconColor.opacity(0.3), radius: 8, x: 0, y: 4)
+                    
+                    Text(iconText)
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundColor(.white)
+                }
+                
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(channel.areaDisplay)
+                        .font(.title3)
+                        .fontWeight(.bold)
+                    
+                    Text(channel.eventTypeDisplay)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    
+                    HStack(spacing: 12) {
+                        // Status Badge
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(isSubscribed ? Color.green : Color.gray)
+                                .frame(width: 8, height: 8)
+                            Text(isSubscribed ? "Active" : "Inactive")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(isSubscribed ? Color.green.opacity(0.15) : Color.gray.opacity(0.15))
+                        .cornerRadius(6)
+                        
+                        // Mute Status
+                        if isSubscribed && isMuted {
+                            HStack(spacing: 4) {
+                                Image(systemName: "bell.slash.fill")
+                                    .font(.system(size: 10))
+                                Text("Muted")
+                                    .font(.caption)
+                                    .fontWeight(.medium)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.orange.opacity(0.15))
+                            .foregroundColor(.orange)
+                            .cornerRadius(6)
                         }
                     }
                 }
+                
+                Spacer()
+            }
+            .padding()
+            
+            // Stats Bar
+            if events.count > 0 {
+                Divider()
+                
+                HStack(spacing: 0) {
+                    // Total Events
+                    StatItem(
+                        icon: "list.bullet",
+                        value: "\(events.count)",
+                        label: "Events",
+                        color: .blue
+                    )
+                    
+                    Divider()
+                        .frame(height: 40)
+                    
+                    // Unread Count
+                    StatItem(
+                        icon: "envelope.badge",
+                        value: "\(unreadCount)",
+                        label: "Unread",
+                        color: unreadCount > 0 ? .orange : .green
+                    )
+                    
+                    Divider()
+                        .frame(height: 40)
+                    
+                    // Last Event Time
+                    StatItem(
+                        icon: "clock",
+                        value: lastEventTime,
+                        label: "Last",
+                        color: .purple
+                    )
+                }
+                .padding(.vertical, 12)
             }
         }
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
+        .padding()
     }
     
-    // MARK: - Channel Info Header
-    
-    private var channelInfoHeader: some View {
-        HStack(spacing: 12) {
-            // Channel Icon
-            ZStack {
-                Circle()
-                    .fill(iconColor.opacity(0.2))
-                    .frame(width: 50, height: 50)
-                
-                Text(iconText)
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundColor(iconColor)
-            }
-            
-            VStack(alignment: .leading, spacing: 4) {
-                Text(channel.areaDisplay)
-                    .font(.headline)
-                
-                Text(channel.eventTypeDisplay)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                
-                HStack(spacing: 8) {
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(isSubscribed ? Color.green : Color.gray)
-                            .frame(width: 8, height: 8)
-                        Text(isSubscribed ? "Subscribed" : "Not subscribed")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    if events.count > 0 {
-                        Text("•")
-                            .foregroundColor(.secondary)
-                        Text("\(events.count) events")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-            }
-            
-            Spacer()
-        }
-        .padding()
-        .background(Color(.systemBackground))
+    private var lastEventTime: String {
+        guard let lastEvent = events.first else { return "N/A" }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: lastEvent.date)
     }
     
     // MARK: - Empty Events View
     
     private var emptyEventsView: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 20) {
             Spacer()
             
-            Image(systemName: "tray")
-                .font(.system(size: 50))
-                .foregroundColor(.gray)
+            // Modern Empty State
+            ZStack {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            gradient: Gradient(colors: [Color.blue.opacity(0.1), Color.purple.opacity(0.1)]),
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 100, height: 100)
+                
+                Image(systemName: "tray")
+                    .font(.system(size: 40))
+                    .foregroundColor(.blue)
+            }
             
-            Text("No events yet")
-                .font(.headline)
-                .foregroundColor(.primary)
+            Text("No Events Yet")
+                .font(.title2)
+                .fontWeight(.bold)
             
-            Text("New events will appear here automatically")
+            Text("New events will appear here automatically when they occur")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal)
+                .padding(.horizontal, 40)
             
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemGroupedBackground))
     }
     
-    // MARK: - Subscription Prompt View
+    // MARK: - Subscription Prompt View (✅ MODERNIZED)
     
     private var subscriptionPromptView: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 24) {
             Spacer()
             
+            // Modern Icon with Gradient
             ZStack {
                 Circle()
-                    .fill(iconColor.opacity(0.2))
-                    .frame(width: 100, height: 100)
+                    .fill(
+                        LinearGradient(
+                            gradient: Gradient(colors: [iconColor.opacity(0.2), iconColor.opacity(0.1)]),
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 120, height: 120)
+                    .shadow(color: iconColor.opacity(0.2), radius: 20, x: 0, y: 10)
                 
                 Text(iconText)
-                    .font(.system(size: 40, weight: .semibold))
+                    .font(.system(size: 48, weight: .bold))
                     .foregroundColor(iconColor)
             }
             
             VStack(spacing: 8) {
                 Text(channel.areaDisplay)
-                    .font(.title2)
+                    .font(.title)
                     .fontWeight(.bold)
                 
                 Text(channel.eventTypeDisplay)
-                    .font(.headline)
+                    .font(.title3)
                     .foregroundColor(.secondary)
             }
             
-            Text("Subscribe to receive alerts for this channel")
+            Text("Get real-time alerts for this channel")
                 .font(.body)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
             
+            // Modern Subscribe Button
             Button(action: toggleSubscription) {
-                HStack {
+                HStack(spacing: 12) {
                     Image(systemName: "bell.badge.fill")
+                        .font(.system(size: 18))
                     Text("Subscribe to Channel")
+                        .font(.headline)
                 }
-                .font(.headline)
                 .foregroundColor(.white)
-                .padding(.horizontal, 30)
-                .padding(.vertical, 15)
-                .background(Color.blue)
-                .cornerRadius(12)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .background(
+                    LinearGradient(
+                        gradient: Gradient(colors: [iconColor, iconColor.opacity(0.8)]),
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .cornerRadius(14)
+                .shadow(color: iconColor.opacity(0.3), radius: 10, x: 0, y: 5)
             }
-            .padding(.top, 20)
+            .padding(.horizontal, 40)
+            .padding(.top, 8)
             
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemGroupedBackground))
     }
     
-    // MARK: - New Events Banner
+    // MARK: - New Events Banner (✅ MODERNIZED)
     
     private var newEventsBanner: some View {
         VStack {
-            HStack {
+            HStack(spacing: 12) {
                 Image(systemName: "bell.badge.fill")
+                    .font(.system(size: 16))
+                
                 Text("\(pendingEventsCount) new event\(pendingEventsCount == 1 ? "" : "s")")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
+                
                 Spacer()
+                
                 Button("View") {
-                    showNewEventsBanner = false
-                    pendingEventsCount = 0
-                    refreshTrigger = UUID()
+                    withAnimation(.spring()) {
+                        showNewEventsBanner = false
+                        pendingEventsCount = 0
+                        refreshTrigger = UUID()
+                    }
                 }
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold))
             }
             .padding()
-            .background(Color.blue)
+            .background(
+                LinearGradient(
+                    gradient: Gradient(colors: [Color.blue, Color.blue.opacity(0.9)]),
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
             .foregroundColor(.white)
-            .cornerRadius(12)
+            .cornerRadius(14)
+            .shadow(color: Color.blue.opacity(0.3), radius: 10, x: 0, y: 5)
             .padding()
-            .shadow(radius: 5)
             
             Spacer()
         }
+        .transition(.move(edge: .top).combined(with: .opacity))
     }
     
     // MARK: - Computed Properties
@@ -303,8 +430,10 @@ struct ChannelDetailView: View {
         let wasSubscribed = isSubscribed
         let channelToSubscribe = channel
         
-        alertMessage = wasSubscribed ? "Unsubscribing..." : "Subscribing..."
-        showingAlert = true
+        withAnimation(.spring()) {
+            alertMessage = wasSubscribed ? "Unsubscribing..." : "Subscribing..."
+            showingAlert = true
+        }
         
         if wasSubscribed {
             subscriptionManager.unsubscribe(channelId: channelToSubscribe.id)
@@ -330,8 +459,10 @@ struct ChannelDetailView: View {
         updatedChannel.isMuted = !isMuted
         subscriptionManager.updateChannel(updatedChannel)
         
-        alertMessage = isMuted ? "Notifications enabled" : "Notifications muted"
-        showingAlert = true
+        withAnimation(.spring()) {
+            alertMessage = isMuted ? "Notifications enabled" : "Notifications muted"
+            showingAlert = true
+        }
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             refreshTrigger = UUID()
@@ -363,12 +494,16 @@ struct ChannelDetailView: View {
             }
             
             DispatchQueue.main.async {
-                self.pendingEventsCount += 1
-                self.showNewEventsBanner = true
-                self.refreshTrigger = UUID()
+                withAnimation(.spring()) {
+                    self.pendingEventsCount += 1
+                    self.showNewEventsBanner = true
+                    self.refreshTrigger = UUID()
+                }
                 
                 DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-                    self.showNewEventsBanner = false
+                    withAnimation(.spring()) {
+                        self.showNewEventsBanner = false
+                    }
                 }
             }
         }
@@ -382,9 +517,9 @@ struct ChannelDetailView: View {
     }
 }
 
-// MARK: - Event Message Row (Telegram Style)
+// MARK: - ✅ Modern Event Card
 
-struct EventMessageRow: View {
+struct ModernEventCard: View {
     let event: Event
     let channel: Channel
     let onTap: () -> Void
@@ -403,65 +538,57 @@ struct EventMessageRow: View {
     
     var body: some View {
         Button(action: onTap) {
-            HStack(alignment: .top, spacing: 12) {
-                // Event Type Icon
-                ZStack {
-                    Circle()
-                        .fill(eventColor.opacity(0.2))
-                        .frame(width: 40, height: 40)
-                    
-                    Text(eventIconText)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(eventColor)
-                }
-                .padding(.top, 4)
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    // Event Header
-                    HStack {
+            VStack(alignment: .leading, spacing: 12) {
+                // Header with Icon and Time
+                HStack {
+                    // Event Type Badge
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(eventColor)
+                            .frame(width: 8, height: 8)
+                        
                         Text(event.typeDisplay ?? event.type ?? "Event")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(.primary)
-                        
-                        Spacer()
-                        
-                        Text(dateFormatter.string(from: event.date))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(eventColor)
                     }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(eventColor.opacity(0.15))
+                    .cornerRadius(8)
                     
-                    // Event Location
-                    Text(event.location)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .lineLimit(2)
+                    Spacer()
                     
-                    // Event Image (using CachedEventImage helper)
-                    CachedEventImage(event: event)
-                        .frame(height: 200)
-                        .clipped()
-                        .cornerRadius(12)
-                    
-                    // Event Date
-                    Text(fullDateFormatter.string(from: event.date))
+                    Text(dateFormatter.string(from: event.date))
                         .font(.caption)
+                        .fontWeight(.medium)
                         .foregroundColor(.secondary)
                 }
                 
-                Spacer(minLength: 0)
+                // Location
+                Text(event.location)
+                    .font(.body)
+                    .fontWeight(.medium)
+                    .foregroundColor(.primary)
+                    .lineLimit(2)
+                
+                // Event Image
+                CachedEventImage(event: event)
+                    .frame(height: 200)
+                    .clipped()
+                    .cornerRadius(12)
+                    .shadow(color: Color.black.opacity(0.1), radius: 5, x: 0, y: 2)
+                
+                // Full Date
+                Text(fullDateFormatter.string(from: event.date))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
-            .padding(.horizontal)
-            .padding(.vertical, 12)
+            .padding()
+            .background(Color(.systemBackground))
+            .cornerRadius(16)
+            .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
         }
         .buttonStyle(PlainButtonStyle())
-    }
-    
-    private var eventIconText: String {
-        let type = (event.type ?? "").uppercased()
-        if type.count <= 2 {
-            return type
-        }
-        return String(type.prefix(2))
     }
     
     private var eventColor: Color {
@@ -479,5 +606,33 @@ struct EventMessageRow: View {
         case "tamper": return Color(hex: "F44336")
         default: return Color(hex: "9E9E9E")
         }
+    }
+}
+
+// MARK: - ✅ Stat Item Component
+
+struct StatItem: View {
+    let icon: String
+    let value: String
+    let label: String
+    let color: Color
+    
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 14))
+                    .foregroundColor(color)
+                
+                Text(value)
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.primary)
+            }
+            
+            Text(label)
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity)
     }
 }

@@ -6,7 +6,6 @@ struct SettingsView: View {
     @StateObject private var webSocketService = WebSocketService.shared
     @State private var showingLogout = false
     @State private var syncStats: [String: Any] = [:]
-    @State private var refreshTrigger = UUID()
     
     var body: some View {
         NavigationView {
@@ -32,7 +31,6 @@ struct SettingsView: View {
             .onAppear {
                 loadSyncStats()
             }
-            .id(refreshTrigger)
         }
     }
     
@@ -240,8 +238,14 @@ struct SettingsView: View {
     // MARK: - Actions
     
     private func loadSyncStats() {
-        syncStats = ChannelSyncState.shared.getStats()
-        refreshTrigger = UUID()
+        // ✅ FIX 2: Use background queue to avoid blocking UI
+        DispatchQueue.global(qos: .userInitiated).async {
+            let stats = ChannelSyncState.shared.getStats()
+            
+            DispatchQueue.main.async {
+                self.syncStats = stats
+            }
+        }
     }
     
     private func clearAllData() {
@@ -256,7 +260,8 @@ struct SettingsView: View {
         // Force save
         subscriptionManager.forceSave()
         
-        refreshTrigger = UUID()
+        // Reload stats
+        loadSyncStats()
     }
     
     private func logout() {

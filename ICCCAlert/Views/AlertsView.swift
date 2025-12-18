@@ -252,6 +252,7 @@ struct AlertsView: View {
                 }
             }
         }
+        .listStyle(PlainListStyle())
     }
     
     // MARK: - Filter Logic
@@ -316,7 +317,6 @@ struct AlertsView: View {
             object: nil,
             queue: OperationQueue.main
         ) { [self] _ in
-            // ✅ Only update the data, not the entire view
             self.updateChannelGroups()
         }
         
@@ -350,7 +350,7 @@ struct AlertsView: View {
     }
 }
 
-// MARK: - Alert Channel Row
+// MARK: - Alert Channel Row (✅ UPDATED: Shows area name prominently)
 
 struct AlertChannelRow: View {
     let channel: Channel
@@ -365,6 +365,7 @@ struct AlertChannelRow: View {
     
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
+            // Channel Icon
             ZStack {
                 Circle()
                     .fill(iconColor.opacity(0.2))
@@ -375,18 +376,24 @@ struct AlertChannelRow: View {
                     .foregroundColor(iconColor)
             }
             
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
+                // ✅ FIX 1: Show area name prominently
                 HStack {
-                    if unreadCount > 0 {
-                        Text("\(channel.areaDisplay)")
-                            .font(.system(size: 17, weight: .bold))
-                    } else {
-                        Text("\(channel.areaDisplay)")
-                            .font(.headline)
+                    VStack(alignment: .leading, spacing: 2) {
+                        // Area Name (Prominent)
+                        Text(channel.areaDisplay)
+                            .font(.system(size: 17, weight: unreadCount > 0 ? .bold : .semibold))
+                            .foregroundColor(.primary)
+                        
+                        // Event Type (Secondary)
+                        Text(channel.eventTypeDisplay)
+                            .font(.system(size: 14))
+                            .foregroundColor(.secondary)
                     }
                     
                     Spacer()
                     
+                    // Timestamp
                     if let event = lastEvent {
                         Text(dateFormatter.string(from: event.date))
                             .font(.caption)
@@ -394,31 +401,35 @@ struct AlertChannelRow: View {
                     }
                 }
                 
+                // Last Event Message
                 if let event = lastEvent {
-                    if unreadCount > 0 {
-                        Text(event.message)
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(.secondary)
-                            .lineLimit(2)
-                    } else {
-                        Text(event.message)
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                            .lineLimit(2)
-                    }
+                    Text(event.message)
+                        .font(.system(size: 15, weight: unreadCount > 0 ? .medium : .regular))
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                        .padding(.top, 2)
                 }
                 
+                // Bottom Row: Event Type Badge + Unread Count
                 HStack {
-                    Text(channel.eventTypeDisplay)
-                        .font(.caption)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(iconColor.opacity(0.1))
-                        .foregroundColor(iconColor)
-                        .cornerRadius(4)
+                    // Event Type Badge
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(iconColor)
+                            .frame(width: 6, height: 6)
+                        
+                        Text(channel.eventTypeDisplay)
+                            .font(.caption)
+                            .foregroundColor(iconColor)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(iconColor.opacity(0.1))
+                    .cornerRadius(4)
                     
                     Spacer()
                     
+                    // Unread Count Badge
                     if unreadCount > 0 {
                         Text("\(unreadCount)")
                             .font(.caption)
@@ -430,6 +441,7 @@ struct AlertChannelRow: View {
                             .clipShape(Capsule())
                     }
                 }
+                .padding(.top, 4)
             }
         }
         .padding(.vertical, 8)
@@ -466,5 +478,3 @@ enum AlertFilter {
     case unread
     case important
 }
-
-//need to add the channel name too in alerts otherwise user can't differentiate between same event types from different channels
