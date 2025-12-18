@@ -24,13 +24,14 @@ class WebSocketService: ObservableObject {
     private let maxReconnectAttempts = Int.max
     private let reconnectDelay: TimeInterval = 5.0
     
-    // ✅ CRITICAL FIX: Single serial queue for WebSocket operations ONLY
+    // ✅ CRITICAL FIX: One serial queue for ALL WebSocket/blocking operations
+    // This prevents race conditions AND deadlocks
     private let wsQueue = DispatchQueue(label: "com.iccc.websocket", qos: .userInitiated)
     
-    // ✅ CRITICAL FIX: Concurrent queue for event processing (non-blocking)
+    // ✅ FIXED: Concurrent queue for CPU-bound event processing (non-blocking)
     private let processingQueue = DispatchQueue(label: "com.iccc.processing", qos: .userInitiated, attributes: .concurrent)
     
-    // ACK batching
+    // ACK batching (uses wsQueue, no separate ackQueue)
     private var pendingAcks: [String] = []
     private let ackBatchSize = 100
     private var ackTimer: Timer?
@@ -106,8 +107,8 @@ class WebSocketService: ObservableObject {
         startAckFlusher()
         startStatsLogging()
         
-        // ✅ Send subscription on background thread
-        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.1) { [weak self] in
+        // ✅ FIX: Send subscription on WebSocket queue
+        wsQueue.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             self?.sendSubscriptionV2()
         }
     }
@@ -170,18 +171,20 @@ class WebSocketService: ObservableObject {
         
         guard let messageText = text else { return }
         
-        // ✅ Update counter on main thread (async, non-blocking)
+        // ✅ Update counter on main thread (non-blocking, async)
         DispatchQueue.main.async { [weak self] in
             self?.receivedCount += 1
         }
         
-        // ✅ CRITICAL FIX: Process on CONCURRENT queue (non-blocking)
+        // ✅ CRITICAL FIX: Process on background CONCURRENT queue
+        // This allows multiple events to process in parallel WITHOUT blocking
         processingQueue.async { [weak self] in
             self?.processEvent(messageText)
         }
     }
     
-    // ✅ CRITICAL FIX: Completely rewritten to prevent blocking
+    // ✅ CRITICAL: NO blocking calls on wsQueue!
+    // All blocking operations (SubscriptionManager, ChannelSyncState) happen here on processingQueue
     private func processEvent(_ text: String) {
         // Check subscription confirmation
         if text.contains("\"status\":\"subscribed\"") || text.contains("\"status\":\"ok\"") {
@@ -220,12 +223,13 @@ class WebSocketService: ObservableObject {
         let eventData = json["data"] as? [String: Any] ?? [:]
         let requireAck = eventData["_requireAck"] as? Bool ?? true
         
-        // ✅ CRITICAL: Quick subscription check (thread-safe)
+        // ✅ CRITICAL: Check subscription WITHOUT blocking on wsQueue
         guard SubscriptionManager.shared.isSubscribed(channelId: channelId) else {
             DispatchQueue.main.async { [weak self] in
                 self?.droppedCount += 1
             }
             if requireAck { 
+                // ✅ Queue ACK (won't block)
                 queueAck(eventId: eventId)
             }
             return
@@ -241,7 +245,7 @@ class WebSocketService: ObservableObject {
         
         let timestamp = json["timestamp"] as? Int64 ?? 0
         
-        // ✅ CRITICAL: Record event (thread-safe)
+        // ✅ CRITICAL: Record event WITHOUT blocking on wsQueue
         let isNew = ChannelSyncState.shared.recordEventReceived(
             channelId: channelId,
             eventId: eventId,
@@ -266,16 +270,16 @@ class WebSocketService: ObservableObject {
             return
         }
         
-        // ✅ CRITICAL FIX: Add event (already thread-safe, non-blocking)
+        // ✅ CRITICAL FIX: Add event to storage (already on concurrent queue, no blocking)
         let added = SubscriptionManager.shared.addEvent(event: event)
         
         if added {
-            // ✅ Update counter on main thread (non-blocking)
+            // ✅ FIX: Update counter on main thread (non-blocking)
             DispatchQueue.main.async { [weak self] in
                 self?.processedCount += 1
             }
             
-            // ✅ Post notification on MAIN thread (async)
+            // ✅ FIX: Post notification on MAIN thread to avoid UIKit issues
             DispatchQueue.main.async { [weak self] in
                 NotificationCenter.default.post(
                     name: .newEventReceived,
@@ -335,9 +339,10 @@ class WebSocketService: ObservableObject {
     }
     
     // MARK: - ACK Management
-    
-    // ✅ Queue ACK without blocking
+    // ✅ CRITICAL FIX: Queue ACK without blocking
     private func queueAck(eventId: String) {
+        // ✅ Just append to array and schedule flush
+        // This is non-blocking
         wsQueue.async { [weak self] in
             guard let self = self else { return }
             self.pendingAcks.append(eventId)
@@ -349,6 +354,7 @@ class WebSocketService: ObservableObject {
     }
     
     private func flushAcks() {
+        // ✅ Call on wsQueue
         wsQueue.async { [weak self] in
             self?.flushAcksInternal()
         }
@@ -379,6 +385,7 @@ class WebSocketService: ObservableObject {
         if let jsonData = try? JSONSerialization.data(withJSONObject: ackMessage),
            let jsonString = String(data: jsonData, encoding: .utf8) {
             
+            // ✅ CRITICAL: Send directly without using send() to avoid nested wsQueue.async
             let wsMessage = URLSessionWebSocketTask.Message.string(jsonString)
             webSocketTask?.send(wsMessage) { [weak self] error in
                 if error != nil {
@@ -410,11 +417,13 @@ class WebSocketService: ObservableObject {
             self?.flushAcksInternal()
         }
     }
-
-
+    
+    // MARK: - Subscription Management (✅ COMPLETELY REWRITTEN)
+    
     /// Send subscription to server - MUST be called on background thread
     func sendSubscriptionV2() {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        // ✅ CRITICAL FIX: Execute on WebSocket queue to prevent race conditions
+        wsQueue.async { [weak self] in
             guard let self = self else { return }
             
             guard self.isConnected, self.webSocketTask != nil else {
@@ -422,7 +431,7 @@ class WebSocketService: ObservableObject {
                 return
             }
             
-            // ✅ Get subscriptions safely (thread-safe)
+            // ✅ Get subscriptions safely
             let subscriptions = SubscriptionManager.shared.getSubscriptions()
             
             guard !subscriptions.isEmpty else {
@@ -435,7 +444,8 @@ class WebSocketService: ObservableObject {
             let filters = subscriptions.map { sub in
                 SubscriptionFilter(area: sub.area, eventType: sub.eventType)
             }
-
+            
+            // ✅ Always reset for live events only
             let request = SubscriptionRequest(
                 clientId: self.clientId,
                 filters: filters,
@@ -448,17 +458,15 @@ class WebSocketService: ObservableObject {
                 self.logger.logError("SUBSCRIPTION", "Failed to encode request")
                 return
             }
-
-            self.wsQueue.async {
-                let message = URLSessionWebSocketTask.Message.string(jsonString)
-                self.webSocketTask?.send(message) { [weak self] error in
-                    guard let self = self else { return }
-                    if error == nil {
-                        self.hasSubscribed = true
-                        self.logger.log("SUBSCRIPTION", "✅ Subscription SENT successfully")
-                    } else {
-                        self.logger.logError("SUBSCRIPTION", "❌ Failed to send subscription")
-                    }
+            
+            // ✅ Send on WebSocket queue (already here)
+            self.send(message: jsonString) { [weak self] success in
+                guard let self = self else { return }
+                if success {
+                    self.hasSubscribed = true
+                    self.logger.log("SUBSCRIPTION", "✅ Subscription SENT successfully")
+                } else {
+                    self.logger.logError("SUBSCRIPTION", "❌ Failed to send subscription")
                 }
             }
         }
@@ -502,6 +510,20 @@ class WebSocketService: ObservableObject {
         }
     }
 
+    private func send(message: String, completion: ((Bool) -> Void)? = nil) {
+        // ✅ CRITICAL FIX: Send directly, don't nest async blocks
+        let wsMessage = URLSessionWebSocketTask.Message.string(message)
+        webSocketTask?.send(wsMessage) { [weak self] error in
+            if let error = error {
+                self?.logger.logError("SEND", "Failed: \(error.localizedDescription)")
+                completion?(false)
+            } else {
+                completion?(true)
+            }
+        }
+    }
+    
+    // MARK: - Stats Logging
     private func startStatsLogging() {
         DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 10.0) { [weak self] in
             self?.logStats()
@@ -522,6 +544,7 @@ class WebSocketService: ObservableObject {
     }
 }
 
+// MARK: - Notification Names
 extension Notification.Name {
     static let newEventReceived = Notification.Name("newEventReceived")
     static let subscriptionsUpdated = Notification.Name("subscriptionsUpdated")

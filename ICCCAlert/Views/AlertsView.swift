@@ -10,15 +10,17 @@ struct AlertsView: View {
     // ✅ FIX: Proper cleanup tracking
     @State private var eventObserver: NSObjectProtocol?
     
-    // ✅ CRITICAL FIX: Debouncing to prevent rapid UI updates
-    @State private var refreshDebouncer: DispatchWorkItem?
-    @State private var isRefreshing = false
-    
-    // ✅ NEW: Pre-compute on background thread
+    // ✅ OPTIMIZATION: Cache channel groups to avoid recomputation
     @State private var cachedChannelGroups: [(channel: Channel, events: [Event])] = []
+    @State private var isRefreshing = false
+    @State private var refreshDebouncer: DispatchWorkItem?
     
-    // Compute channel groups (called only when needed)
-    private func computeChannelGroups() -> [(channel: Channel, events: [Event])] {
+    // Compute channel groups
+    private var channelGroups: [(channel: Channel, events: [Event])] {
+        if isRefreshing {
+            return cachedChannelGroups
+        }
+        
         var groups: [(Channel, [Event])] = []
         
         for channel in subscriptionManager.subscribedChannels {
@@ -35,11 +37,6 @@ struct AlertsView: View {
             let time2 = group2.1.first?.timestamp ?? 0
             return time1 > time2
         }
-    }
-    
-    private var channelGroups: [(channel: Channel, events: [Event])] {
-        // Use cached version during refresh
-        return isRefreshing ? cachedChannelGroups : computeChannelGroups()
     }
     
     private var hasSubscriptions: Bool {
@@ -315,42 +312,35 @@ struct AlertsView: View {
         }
     }
     
-    // ✅ COMPLETELY FIXED: Proper closure capturing for struct
+    // ✅ CRITICAL FIX: Aggressive debouncing for high-frequency events
     private func setupNotificationObservers() {
         // Remove any existing observers first
         removeNotificationObservers()
         
-        // Process on BACKGROUND queue to prevent main thread blocking
+        // ✅ Process on BACKGROUND queue to prevent main thread blocking
         eventObserver = NotificationCenter.default.addObserver(
             forName: .newEventReceived,
             object: nil,
             queue: OperationQueue()  // Background queue!
-        ) { _ in
-            // ✅ Cancel pending refresh and schedule new one
+        ) { [self] _ in
+            // ✅ CRITICAL: Cancel pending refresh and schedule new one
             // This batches rapid-fire events into a single UI update
-            DispatchQueue.main.async {
-                self.refreshDebouncer?.cancel()
-                
-                let workItem = DispatchWorkItem {
-                    // Compute new data on background thread
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        let newGroups = self.computeChannelGroups()
-                        
-                        // Update on main thread
-                        DispatchQueue.main.async {
-                            self.cachedChannelGroups = newGroups
-                            self.refreshTrigger = UUID()
-                            self.isRefreshing = false
-                        }
-                    }
+            self.refreshDebouncer?.cancel()
+            
+            let workItem = DispatchWorkItem { [self] in
+                // Update on main thread
+                DispatchQueue.main.async {
+                    self.cachedChannelGroups = self.channelGroups
+                    self.refreshTrigger = UUID()
+                    self.isRefreshing = false
                 }
-                
-                self.refreshDebouncer = workItem
-                self.isRefreshing = true
-                
-                // ✅ Wait 500ms before refreshing (batches multiple events)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: workItem)
             }
+            
+            self.refreshDebouncer = workItem
+            self.isRefreshing = true
+            
+            // ✅ Wait 300ms before refreshing (batches multiple events)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: workItem)
         }
         
         print("📱 AlertsView: Notification observers setup complete")

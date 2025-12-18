@@ -4,95 +4,183 @@ import Combine
 class SubscriptionManager: ObservableObject {
     static let shared = SubscriptionManager()
     
+    // MARK: - Published Properties
     @Published var subscribedChannels: [Channel] = []
     @Published var channelEvents: [String: [Event]] = [:]
     @Published var unreadCounts: [String: Int] = [:]
     
+    // MARK: - Private Properties
     private let defaults = UserDefaults.standard
     private let channelsKey = "subscribed_channels"
     private let eventsKey = "channel_events"
     private let unreadKey = "unread_counts"
+    private let lastRuntimeCheckKey = "last_runtime_check"
+    private let serviceStartedAtKey = "service_started_at"
     
-    // ✅ SIMPLE: Just use a lock
-    private let lock = NSLock()
+    // ✅ CRITICAL FIX: Use NSRecursiveLock instead of NSLock
+    // This prevents deadlocks when same thread tries to lock twice
+    private let lock = NSRecursiveLock()
     
     private var recentEventIds: Set<String> = []
-    private var saveTimer: Timer?
+    private var eventTimestamps: [String: TimeInterval] = [:]
     
+    private var saveTimer: Timer?
+    private let saveDelay: TimeInterval = 0.5
+    
+    private var runtimeCheckTimer: Timer?
+    private var wasAppKilled = false
+    
+    // ✅ REMOVED: subscriptionQueue - causes deadlocks
+    // All operations will use the recursive lock instead
+    
+    // MARK: - Initialization
     private init() {
+        let wasAppKilled = detectAppKillOrBackgroundClear()
+        
         loadSubscriptions()
         loadEvents()
         loadUnreadCounts()
-        buildRecentEventIds()
+        
+        if wasAppKilled {
+            print("⚠️ APP WAS KILLED - Clearing recent event cache")
+            recentEventIds.removeAll()
+            eventTimestamps.removeAll()
+        } else {
+            buildRecentEventIds()
+        }
+        
+        markServiceRunning()
+        startRecentEventCleanup()
+        startRuntimeChecker()
+        
+        print("SubscriptionManager initialized (wasKilled=\(wasAppKilled))")
     }
     
-    // ✅ SIMPLE SUBSCRIBE - NO ASYNC
-    func subscribe(channel: Channel) {
-        lock.lock()
-        defer { lock.unlock() }
+    private func detectAppKillOrBackgroundClear() -> Bool {
+        let lastRuntimeCheck = defaults.double(forKey: lastRuntimeCheckKey)
+        let serviceStartedAt = defaults.double(forKey: serviceStartedAtKey)
+        let now = Date().timeIntervalSince1970
         
-        print("📝 Subscribe: \(channel.id)")
+        if serviceStartedAt > 0 && lastRuntimeCheck > 0 {
+            let timeSinceLastCheck = now - lastRuntimeCheck
+            
+            if timeSinceLastCheck > 2 * 60 {
+                print("🔴 DETECTED: App was killed (gap: \(timeSinceLastCheck)s)")
+                defaults.removeObject(forKey: serviceStartedAtKey)
+                return true
+            }
+        }
+        
+        return false
+    }
+    
+    private func markServiceRunning() {
+        let now = Date().timeIntervalSince1970
+        defaults.set(now, forKey: serviceStartedAtKey)
+        defaults.set(now, forKey: lastRuntimeCheckKey)
+    }
+    
+    private func startRuntimeChecker() {
+        DispatchQueue.main.async { [weak self] in
+            self?.runtimeCheckTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
+                self?.defaults.set(Date().timeIntervalSince1970, forKey: self?.lastRuntimeCheckKey ?? "")
+            }
+        }
+    }
+    
+    // MARK: - Channel Subscription (✅ COMPLETELY REWRITTEN)
+    
+    /// Subscribe to a channel - thread-safe and non-blocking
+    func subscribe(channel: Channel) {
+        print("📝 Subscribe called for: \(channel.id)")
+        
+        // ✅ FIX 1: Use recursive lock (no deadlocks)
+        lock.lock()
         
         var updatedChannel = channel
         updatedChannel.isSubscribed = true
         
+        // Check if already subscribed
         if subscribedChannels.contains(where: { $0.id == channel.id }) {
-            print("⚠️ Already subscribed")
+            lock.unlock()
+            print("⚠️ Already subscribed to \(channel.id)")
             return
         }
         
+        // Add to subscriptions
         subscribedChannels.append(updatedChannel)
         saveSubscriptions()
         
-        // Initialize sync state
-        if ChannelSyncState.shared.getSyncInfo(channelId: channel.id) == nil {
+        // Initialize sync state if needed
+        let channelId = channel.id
+        if ChannelSyncState.shared.getSyncInfo(channelId: channelId) == nil {
             _ = ChannelSyncState.shared.recordEventReceived(
-                channelId: channel.id,
+                channelId: channelId,
                 eventId: "init",
                 timestamp: Int64(Date().timeIntervalSince1970),
                 seq: 0
             )
+            print("🆕 Initialized sync state for: \(channelId)")
         }
+        
+        lock.unlock()
         
         print("✅ Subscribed to \(channel.id)")
         
-        // Update WebSocket in background
-        DispatchQueue.global().async {
+        // ✅ FIX 2: Update UI immediately on main thread
+        DispatchQueue.main.async { [weak self] in
+            self?.objectWillChange.send()
+        }
+        
+        // ✅ FIX 3: Send WebSocket update on background thread WITHOUT delay
+        // This prevents blocking the subscribe button
+        DispatchQueue.global(qos: .userInitiated).async {
             WebSocketService.shared.sendSubscriptionV2()
         }
     }
     
-    // ✅ SIMPLE UNSUBSCRIBE
+    /// Unsubscribe from a channel - thread-safe and non-blocking
     func unsubscribe(channelId: String) {
-        lock.lock()
-        defer { lock.unlock() }
+        print("📝 Unsubscribe called for: \(channelId)")
         
-        print("📝 Unsubscribe: \(channelId)")
+        lock.lock()
         
         subscribedChannels.removeAll { $0.id == channelId }
         
+        // Clean up events
         if let events = channelEvents[channelId] {
             events.forEach { event in
                 if let eventId = event.id {
                     recentEventIds.remove(eventId)
+                    eventTimestamps.removeValue(forKey: eventId)
                 }
             }
         }
         
         channelEvents.removeValue(forKey: channelId)
         unreadCounts.removeValue(forKey: channelId)
+        
         ChannelSyncState.shared.clearChannel(channelId: channelId)
         
         saveSubscriptions()
         scheduleSave()
         
+        lock.unlock()
+        
         print("✅ Unsubscribed from \(channelId)")
         
-        DispatchQueue.global().async {
+        // ✅ Update UI on main thread
+        DispatchQueue.main.async { [weak self] in
+            self?.objectWillChange.send()
+        }
+        
+        // ✅ Send WebSocket update on background thread
+        DispatchQueue.global(qos: .userInitiated).async {
             WebSocketService.shared.sendSubscriptionV2()
         }
     }
     
+    // ✅ CRITICAL FIX: Make getSubscriptions() lock-safe
     func getSubscriptions() -> [Channel] {
         lock.lock()
         defer { lock.unlock() }
@@ -120,35 +208,39 @@ class SubscriptionManager: ObservableObject {
         defer { lock.unlock() }
         return subscribedChannels.first(where: { $0.id == channelId })?.isMuted ?? false
     }
-    
+
     func addEvent(event: Event) -> Bool {
         guard let eventId = event.id else { return false }
         
+        let channelId = "\(event.area ?? "")_\(event.type ?? "")"
+        let timestamp = TimeInterval(event.timestamp)
+        let now = Date().timeIntervalSince1970
+        
         lock.lock()
         defer { lock.unlock() }
-        
-        let channelId = "\(event.area ?? "")_\(event.type ?? "")"
-        
-        // Check duplicate
+
         if let events = channelEvents[channelId],
            events.contains(where: { $0.id == eventId }) {
             return false
         }
         
-        // Check recent
-        if recentEventIds.contains(eventId) {
+        if let lastSeenTime = eventTimestamps[eventId],
+           (now - lastSeenTime) < 5 * 60 {
             return false
         }
-        
-        // Add event
+     
         if channelEvents[channelId] == nil {
             channelEvents[channelId] = []
         }
         channelEvents[channelId]?.insert(event, at: 0)
+      
         recentEventIds.insert(eventId)
+        eventTimestamps[eventId] = timestamp
+      
         unreadCounts[channelId] = (unreadCounts[channelId] ?? 0) + 1
         
         scheduleSave()
+        
         return true
     }
     
@@ -158,31 +250,10 @@ class SubscriptionManager: ObservableObject {
         return channelEvents[channelId] ?? []
     }
     
-    // ✅ NEW: Missing method that was causing build error
     func getLastEvent(channelId: String) -> Event? {
         lock.lock()
         defer { lock.unlock() }
         return channelEvents[channelId]?.first
-    }
-    
-    // ✅ NEW: Missing method that was causing build error
-    func getEventCount(channelId: String) -> Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return channelEvents[channelId]?.count ?? 0
-    }
-    
-    // ✅ NEW: Missing static method that was causing build error
-    static func getAllAvailableChannels() -> [Channel] {
-        // This returns all possible channels that can be subscribed to
-        // You should define your available channels here based on your backend
-        return [
-            Channel(id: "area1_cd", area: "area1", eventType: "cd", areaDisplay: "Area 1", eventTypeDisplay: "Camera Disconnect", description: "Alerts when cameras disconnect", isSubscribed: false, isMuted: false, isPinned: false),
-            Channel(id: "area1_id", area: "area1", eventType: "id", areaDisplay: "Area 1", eventTypeDisplay: "Intrusion Detection", description: "Alerts for intrusion events", isSubscribed: false, isMuted: false, isPinned: false),
-            Channel(id: "area1_ct", area: "area1", eventType: "ct", areaDisplay: "Area 1", eventTypeDisplay: "Camera Tamper", description: "Alerts when cameras are tampered", isSubscribed: false, isMuted: false, isPinned: false),
-            Channel(id: "area1_sh", area: "area1", eventType: "sh", areaDisplay: "Area 1", eventTypeDisplay: "Shock Detection", description: "Alerts for shock events", isSubscribed: false, isMuted: false, isPinned: false),
-            // Add more channels as needed based on your backend configuration
-        ]
     }
     
     func getUnreadCount(channelId: String) -> Int {
@@ -209,21 +280,19 @@ class SubscriptionManager: ObservableObject {
         return channelEvents.values.reduce(0) { $0 + $1.count }
     }
     
-    // ✅ NEW: Force save method for ICCCAlertApp
-    func forceSave() {
+    func getEventCount(channelId: String) -> Int {
         lock.lock()
         defer { lock.unlock() }
-        
-        saveTimer?.invalidate()
-        saveNow()
-        print("💾 Force saved all data")
+        return channelEvents[channelId]?.count ?? 0
     }
-    
+ 
     private func buildRecentEventIds() {
         lock.lock()
         defer { lock.unlock() }
         
         recentEventIds.removeAll()
+        eventTimestamps.removeAll()
+        
         let fiveMinutesAgo = Date().timeIntervalSince1970 - (5 * 60)
         
         for (_, events) in channelEvents {
@@ -231,11 +300,35 @@ class SubscriptionManager: ObservableObject {
                 let eventTime = TimeInterval(event.timestamp)
                 if eventTime > fiveMinutesAgo, let eventId = event.id {
                     recentEventIds.insert(eventId)
+                    eventTimestamps[eventId] = eventTime
                 }
             }
         }
     }
     
+    private func startRecentEventCleanup() {
+        DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 60.0) { [weak self] in
+            self?.cleanupRecentEvents()
+        }
+    }
+    
+    private func cleanupRecentEvents() {
+        lock.lock()
+        let fiveMinutesAgo = Date().timeIntervalSince1970 - (5 * 60)
+        
+        for (eventId, timestamp) in eventTimestamps {
+            if timestamp < fiveMinutesAgo {
+                recentEventIds.remove(eventId)
+                eventTimestamps.removeValue(forKey: eventId)
+            }
+        }
+        lock.unlock()
+        
+        DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 60.0) { [weak self] in
+            self?.cleanupRecentEvents()
+        }
+    }
+
     private func saveSubscriptions() {
         if let data = try? JSONEncoder().encode(subscribedChannels) {
             defaults.set(data, forKey: channelsKey)
@@ -250,24 +343,30 @@ class SubscriptionManager: ObservableObject {
     }
     
     private func scheduleSave() {
-        DispatchQueue.main.async {
-            self.saveTimer?.invalidate()
-            self.saveTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
-                self.saveNow()
+        saveTimer?.invalidate()
+        
+        DispatchQueue.main.async { [weak self] in
+            self?.saveTimer = Timer.scheduledTimer(withTimeInterval: self?.saveDelay ?? 0.5, repeats: false) { [weak self] _ in
+                self?.saveNow()
             }
         }
     }
     
     private func saveNow() {
         lock.lock()
-        defer { lock.unlock() }
+        let eventsSnapshot = channelEvents
+        let unreadSnapshot = unreadCounts
+        lock.unlock()
         
-        if let data = try? JSONEncoder().encode(channelEvents) {
+        if let data = try? JSONEncoder().encode(eventsSnapshot) {
             defaults.set(data, forKey: eventsKey)
         }
-        if let data = try? JSONEncoder().encode(unreadCounts) {
+        
+        if let data = try? JSONEncoder().encode(unreadSnapshot) {
             defaults.set(data, forKey: unreadKey)
         }
+        
+        defaults.set(Date().timeIntervalSince1970, forKey: lastRuntimeCheckKey)
     }
     
     private func loadEvents() {
@@ -282,5 +381,63 @@ class SubscriptionManager: ObservableObject {
            let counts = try? JSONDecoder().decode([String: Int].self, from: data) {
             unreadCounts = counts
         }
+    }
+    
+    func forceSave() {
+        saveTimer?.invalidate()
+        saveNow()
+    }
+}
+
+extension SubscriptionManager {
+    static let availableAreas: [(id: String, display: String)] = [
+        ("barkasayal", "Barka Sayal"),
+        ("argada", "Argada"),
+        ("northkaranpura", "North Karanpura"),
+        ("bokarokargali", "Bokaro & Kargali"),
+        ("kathara", "Kathara"),
+        ("giridih", "Giridih"),
+        ("amrapali", "Amrapali & Chandragupta"),
+        ("rajhara", "Rajhara"),
+        ("kuju", "Kuju"),
+        ("hazaribagh", "Hazaribagh"),
+        ("rajrappa", "Rajrappa"),
+        ("dhori", "Dhori"),
+        ("piparwar", "Piparwar")
+    ]
+    
+    static let availableEventTypes: [(id: String, display: String)] = [
+        ("cd", "Crowd Detection"),
+        ("vd", "Vehicle Detection"),
+        ("pd", "Person Detection"),
+        ("id", "Intrusion Detection"),
+        ("vc", "Vehicle Congestion"),
+        ("ls", "Loading Status"),
+        ("us", "Unloading Status"),
+        ("ct", "Camera Tampering"),
+        ("sh", "Safety Hazard"),
+        ("ii", "Insufficient Illumination"),
+        ("off-route", "Off-Route Alert"),
+        ("tamper", "Tamper Alert")
+    ]
+    
+    static func getAllAvailableChannels() -> [Channel] {
+        var channels: [Channel] = []
+        
+        for area in availableAreas {
+            for eventType in availableEventTypes {
+                let channel = Channel(
+                    id: "\(area.id)_\(eventType.id)",
+                    area: area.id,
+                    areaDisplay: area.display,
+                    eventType: eventType.id,
+                    eventTypeDisplay: eventType.display,
+                    description: "\(area.display) - \(eventType.display)"
+                )
+                channels.append(channel)
+            }
+        }
+        
+        return channels
     }
 }
