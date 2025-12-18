@@ -12,7 +12,6 @@ struct ChannelDetailView: View {
     @State private var showingImageDetail = false
     @State private var refreshTrigger = UUID()
     
-    // ✅ CRITICAL FIX: Proper observer management
     @State private var eventObserver: NSObjectProtocol?
     
     @Environment(\.presentationMode) var presentationMode
@@ -35,53 +34,40 @@ struct ChannelDetailView: View {
     
     var body: some View {
         ZStack(alignment: .top) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    // Channel Header
-                    channelHeader
-                    
-                    Divider()
-                    
-                    // Subscription Controls
-                    subscriptionSection
-                    
-                    Divider()
-                    
-                    // Events Section
-                    if isSubscribed {
-                        eventsSection
-                    }
-                }
-                .padding()
+            // ✅ FIXED: Show events list immediately if subscribed
+            if isSubscribed {
+                eventsListView
+            } else {
+                subscriptionPromptView
             }
             
             // New Events Banner
             if showNewEventsBanner && pendingEventsCount > 0 {
-                VStack {
-                    HStack {
-                        Image(systemName: "bell.badge.fill")
-                        Text("\(pendingEventsCount) new event\(pendingEventsCount == 1 ? "" : "s")")
-                            .font(.system(size: 14, weight: .semibold))
-                        Spacer()
-                        Button("View") {
-                            showNewEventsBanner = false
-                            pendingEventsCount = 0
-                            refreshTrigger = UUID()
-                        }
-                        .font(.system(size: 14, weight: .semibold))
-                    }
-                    .padding()
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(12)
-                    .padding()
-                    .shadow(radius: 5)
-                    
-                    Spacer()
-                }
+                newEventsBanner
             }
         }
         .navigationBarTitleDisplayMode(.inline)
+        .navigationTitle(channel.areaDisplay)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                HStack(spacing: 16) {
+                    // Mute/Unmute button
+                    if isSubscribed {
+                        Button(action: toggleMute) {
+                            Image(systemName: isMuted ? "bell.slash.fill" : "bell.fill")
+                                .foregroundColor(isMuted ? .orange : .blue)
+                        }
+                    }
+                    
+                    // Subscribe/Unsubscribe button
+                    Button(action: toggleSubscription) {
+                        Text(isSubscribed ? "Unsubscribe" : "Subscribe")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(isSubscribed ? .red : .blue)
+                    }
+                }
+            }
+        }
         .alert(isPresented: $showingAlert) {
             Alert(
                 title: Text("Subscription"),
@@ -102,151 +88,185 @@ struct ChannelDetailView: View {
         .id(refreshTrigger)
     }
     
-    // MARK: - Views
+    // MARK: - Events List View (Telegram Style)
     
-    private var channelHeader: some View {
-        HStack(alignment: .top) {
-            ZStack {
-                Circle()
-                    .fill(iconColor.opacity(0.2))
-                    .frame(width: 80, height: 80)
-                
-                Text(iconText)
-                    .font(.system(size: 30, weight: .semibold))
-                    .foregroundColor(iconColor)
-            }
+    private var eventsListView: some View {
+        VStack(spacing: 0) {
+            // Channel Info Header
+            channelInfoHeader
             
-            Spacer()
-        }
-        .padding(.top)
-    }
-    
-    private var subscriptionSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Channel Details")
-                .font(.headline)
+            Divider()
             
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Area")
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    Text(channel.areaDisplay)
-                        .font(.system(size: 17, weight: .semibold))
-                }
-                
-                HStack {
-                    Text("Type")
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    Text(channel.eventTypeDisplay)
-                        .font(.system(size: 17, weight: .semibold))
-                }
-                
-                if isSubscribed {
-                    HStack {
-                        Text("Status")
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(Color.green)
-                                .frame(width: 8, height: 8)
-                            Text("Subscribed")
-                                .font(.system(size: 17, weight: .semibold))
-                                .foregroundColor(.green)
+            // Events List
+            if events.isEmpty {
+                emptyEventsView
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(events) { event in
+                            EventMessageRow(event: event, channel: channel) {
+                                selectedEvent = event
+                                showingImageDetail = true
+                            }
+                            
+                            Divider()
+                                .padding(.leading, 80)
                         }
                     }
                 }
             }
-            
-            Divider()
-            
-            // Subscription Toggle
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(isSubscribed ? "Subscribed to alerts" : "Subscribe to alerts")
-                        .font(.body)
-                    Text("Receive notifications for new events")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
+        }
+    }
+    
+    // MARK: - Channel Info Header
+    
+    private var channelInfoHeader: some View {
+        HStack(spacing: 12) {
+            // Channel Icon
+            ZStack {
+                Circle()
+                    .fill(iconColor.opacity(0.2))
+                    .frame(width: 50, height: 50)
                 
-                Spacer()
-                
-                // ✅ CRITICAL FIX: Simple button without complex state
-                Button(action: toggleSubscription) {
-                    Text(isSubscribed ? "Unsubscribe" : "Subscribe")
-                        .font(.system(size: 14, weight: .semibold))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(isSubscribed ? Color.red.opacity(0.1) : Color.blue)
-                        .foregroundColor(isSubscribed ? .red : .white)
-                        .cornerRadius(8)
-                }
-                // ✅ Disable button briefly after click to prevent double-tap
-                .disabled(showingAlert)
+                Text(iconText)
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundColor(iconColor)
             }
             
-            // Mute Toggle (only if subscribed)
-            if isSubscribed {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Mute notifications")
-                            .font(.body)
-                        Text("Stop receiving push notifications")
+            VStack(alignment: .leading, spacing: 4) {
+                Text(channel.areaDisplay)
+                    .font(.headline)
+                
+                Text(channel.eventTypeDisplay)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                
+                HStack(spacing: 8) {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(isSubscribed ? Color.green : Color.gray)
+                            .frame(width: 8, height: 8)
+                        Text(isSubscribed ? "Subscribed" : "Not subscribed")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
                     
-                    Spacer()
-                    
-                    Toggle("", isOn: Binding(
-                        get: { isMuted },
-                        set: { _ in toggleMute() }
-                    ))
-                    .labelsHidden()
+                    if events.count > 0 {
+                        Text("•")
+                            .foregroundColor(.secondary)
+                        Text("\(events.count) events")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
+            
+            Spacer()
         }
+        .padding()
+        .background(Color(.systemBackground))
     }
     
-    private var eventsSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Recent Events")
+    // MARK: - Empty Events View
+    
+    private var emptyEventsView: some View {
+        VStack(spacing: 16) {
+            Spacer()
+            
+            Image(systemName: "tray")
+                .font(.system(size: 50))
+                .foregroundColor(.gray)
+            
+            Text("No events yet")
+                .font(.headline)
+                .foregroundColor(.primary)
+            
+            Text("New events will appear here automatically")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+            
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    // MARK: - Subscription Prompt View
+    
+    private var subscriptionPromptView: some View {
+        VStack(spacing: 20) {
+            Spacer()
+            
+            ZStack {
+                Circle()
+                    .fill(iconColor.opacity(0.2))
+                    .frame(width: 100, height: 100)
+                
+                Text(iconText)
+                    .font(.system(size: 40, weight: .semibold))
+                    .foregroundColor(iconColor)
+            }
+            
+            VStack(spacing: 8) {
+                Text(channel.areaDisplay)
+                    .font(.title2)
+                    .fontWeight(.bold)
+                
+                Text(channel.eventTypeDisplay)
                     .font(.headline)
-                
-                Spacer()
-                
-                Text("\(events.count) events")
-                    .font(.subheadline)
                     .foregroundColor(.secondary)
             }
             
-            if events.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "tray")
-                        .font(.system(size: 40))
-                        .foregroundColor(.gray)
-                    Text("No events yet")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    Text("New events will appear here")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+            Text("Subscribe to receive alerts for this channel")
+                .font(.body)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
+            
+            Button(action: toggleSubscription) {
+                HStack {
+                    Image(systemName: "bell.badge.fill")
+                    Text("Subscribe to Channel")
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 40)
-            } else {
-                ForEach(events) { event in
-                    EventRowView(event: event) {
-                        selectedEvent = event
-                        showingImageDetail = true
-                    }
-                    .padding(.vertical, 8)
-                }
+                .font(.headline)
+                .foregroundColor(.white)
+                .padding(.horizontal, 30)
+                .padding(.vertical, 15)
+                .background(Color.blue)
+                .cornerRadius(12)
             }
+            .padding(.top, 20)
+            
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    // MARK: - New Events Banner
+    
+    private var newEventsBanner: some View {
+        VStack {
+            HStack {
+                Image(systemName: "bell.badge.fill")
+                Text("\(pendingEventsCount) new event\(pendingEventsCount == 1 ? "" : "s")")
+                    .font(.system(size: 14, weight: .semibold))
+                Spacer()
+                Button("View") {
+                    showNewEventsBanner = false
+                    pendingEventsCount = 0
+                    refreshTrigger = UUID()
+                }
+                .font(.system(size: 14, weight: .semibold))
+            }
+            .padding()
+            .background(Color.blue)
+            .foregroundColor(.white)
+            .cornerRadius(12)
+            .padding()
+            .shadow(radius: 5)
+            
+            Spacer()
         }
     }
     
@@ -277,36 +297,26 @@ struct ChannelDetailView: View {
         }
     }
     
-    // MARK: - Actions (✅ COMPLETELY REWRITTEN)
+    // MARK: - Actions
     
-    /// Toggle subscription - non-blocking and thread-safe
     private func toggleSubscription() {
-        print("🔘 Toggle subscription button tapped")
-        
-        // ✅ FIX 1: Capture current state BEFORE any async work
         let wasSubscribed = isSubscribed
         let channelToSubscribe = channel
         
-        // ✅ FIX 2: Show alert immediately to prevent double-tap
         alertMessage = wasSubscribed ? "Unsubscribing..." : "Subscribing..."
         showingAlert = true
         
-        // ✅ FIX 3: Do subscription work asynchronously
         if wasSubscribed {
-            // Unsubscribe
             subscriptionManager.unsubscribe(channelId: channelToSubscribe.id)
             
-            // Update UI after short delay
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 alertMessage = "Unsubscribed from \(channelToSubscribe.areaDisplay)"
                 showingAlert = true
                 refreshTrigger = UUID()
             }
         } else {
-            // Subscribe
             subscriptionManager.subscribe(channel: channelToSubscribe)
             
-            // Update UI after short delay
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 alertMessage = "Subscribed to \(channelToSubscribe.areaDisplay)"
                 showingAlert = true
@@ -334,21 +344,17 @@ struct ChannelDetailView: View {
         }
     }
     
-    // MARK: - Event Notifications (✅ COMPLETELY REWRITTEN FOR PERFORMANCE)
+    // MARK: - Event Notifications
     
-    /// Setup notification observer - optimized for high-frequency events
     private func setupNotificationObserver() {
-        // ✅ Remove any existing observer first
         removeNotificationObserver()
         
-        // ✅ Capture channel ID as a local constant
         let channelId = channel.id
         
-        // ✅ CRITICAL FIX: Process notifications on BACKGROUND queue to prevent main thread blocking
         eventObserver = NotificationCenter.default.addObserver(
             forName: .newEventReceived,
             object: nil,
-            queue: OperationQueue()  // Background queue!
+            queue: OperationQueue()
         ) { notification in
             guard let userInfo = notification.userInfo,
                   let eventChannelId = userInfo["channelId"] as? String,
@@ -356,13 +362,11 @@ struct ChannelDetailView: View {
                 return
             }
             
-            // ✅ Update UI on main thread (but in a non-blocking way)
             DispatchQueue.main.async {
                 self.pendingEventsCount += 1
                 self.showNewEventsBanner = true
                 self.refreshTrigger = UUID()
                 
-                // Auto-hide banner after 5 seconds
                 DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
                     self.showNewEventsBanner = false
                 }
@@ -370,7 +374,6 @@ struct ChannelDetailView: View {
         }
     }
     
-    /// Remove notification observer
     private func removeNotificationObserver() {
         if let observer = eventObserver {
             NotificationCenter.default.removeObserver(observer)
@@ -379,52 +382,102 @@ struct ChannelDetailView: View {
     }
 }
 
-// MARK: - EventRowView
+// MARK: - Event Message Row (Telegram Style)
 
-struct EventRowView: View {
+struct EventMessageRow: View {
     let event: Event
+    let channel: Channel
     let onTap: () -> Void
     
     private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.dateFormat = "MMM dd, yyyy HH:mm"
+        formatter.dateFormat = "HH:mm"
+        return formatter
+    }()
+    
+    private let fullDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM dd, yyyy"
         return formatter
     }()
     
     var body: some View {
         Button(action: onTap) {
             HStack(alignment: .top, spacing: 12) {
-                // Event indicator
-                Circle()
-                    .fill(Color.blue)
-                    .frame(width: 10, height: 10)
-                    .padding(.top, 4)
+                // Event Type Icon
+                ZStack {
+                    Circle()
+                        .fill(eventColor.opacity(0.2))
+                        .frame(width: 40, height: 40)
+                    
+                    Text(eventIconText)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(eventColor)
+                }
+                .padding(.top, 4)
                 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(event.typeDisplay ?? event.type ?? "Event")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(.primary)
+                VStack(alignment: .leading, spacing: 8) {
+                    // Event Header
+                    HStack {
+                        Text(event.typeDisplay ?? event.type ?? "Event")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.primary)
+                        
+                        Spacer()
+                        
+                        Text(dateFormatter.string(from: event.date))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                     
+                    // Event Location
                     Text(event.location)
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundColor(.secondary)
+                        .lineLimit(2)
                     
-                    Text(dateFormatter.string(from: event.date))
+                    // Event Image (using CachedEventImage helper)
+                    CachedEventImage(event: event)
+                        .frame(height: 200)
+                        .clipped()
+                        .cornerRadius(12)
+                    
+                    // Event Date
+                    Text(fullDateFormatter.string(from: event.date))
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
                 
-                Spacer()
-                
-                // Indicate tappable
-                Image(systemName: "photo")
-                    .foregroundColor(.blue)
-                    .font(.system(size: 20))
+                Spacer(minLength: 0)
             }
-            .padding()
-            .background(Color(.systemGray6))
-            .cornerRadius(8)
+            .padding(.horizontal)
+            .padding(.vertical, 12)
         }
         .buttonStyle(PlainButtonStyle())
+    }
+    
+    private var eventIconText: String {
+        let type = (event.type ?? "").uppercased()
+        if type.count <= 2 {
+            return type
+        }
+        return String(type.prefix(2))
+    }
+    
+    private var eventColor: Color {
+        switch (event.type ?? "").lowercased() {
+        case "cd": return Color(hex: "FF5722")
+        case "id": return Color(hex: "F44336")
+        case "ct": return Color(hex: "E91E63")
+        case "sh": return Color(hex: "FF9800")
+        case "vd": return Color(hex: "2196F3")
+        case "pd": return Color(hex: "4CAF50")
+        case "vc": return Color(hex: "FFC107")
+        case "ii": return Color(hex: "9C27B0")
+        case "ls": return Color(hex: "00BCD4")
+        case "off-route": return Color(hex: "FF5722")
+        case "tamper": return Color(hex: "F44336")
+        default: return Color(hex: "9E9E9E")
+        }
     }
 }

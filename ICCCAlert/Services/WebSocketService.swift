@@ -14,6 +14,9 @@ class WebSocketService: ObservableObject {
     
     private let baseURL = "ws://192.168.29.70:19999"
     
+    // ✅ FIX: Track pending subscription updates
+    private var pendingSubscriptionUpdate = false
+    
     private var clientId: String {
         if let uuid = UIDevice.current.identifierForVendor?.uuidString {
             return "ios-\(String(uuid.prefix(8)))"
@@ -69,6 +72,17 @@ class WebSocketService: ObservableObject {
         DebugLogger.shared.log("Disconnected", emoji: "🔌", color: .gray)
     }
     
+    // ✅ FIX: Reconnect method for recovery
+    private func reconnect() {
+        DebugLogger.shared.log("Attempting reconnect...", emoji: "🔄", color: .orange)
+        
+        disconnect()
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            self.connect()
+        }
+    }
+    
     private func receiveMessage() {
         webSocketTask?.receive { [weak self] result in
             guard let self = self else { return }
@@ -92,6 +106,11 @@ class WebSocketService: ObservableObject {
             case .failure(let error):
                 DebugLogger.shared.log("WebSocket error: \(error.localizedDescription)", emoji: "❌", color: .red)
                 self.isConnected = false
+                
+                // ✅ FIX: Auto-reconnect on connection loss
+                if self.webSocketTask?.state != .canceling {
+                    self.reconnect()
+                }
             }
         }
     }
@@ -100,6 +119,7 @@ class WebSocketService: ObservableObject {
         // Skip confirmations
         if text.contains("\"status\":\"subscribed\"") {
             DebugLogger.shared.log("Subscription confirmed", emoji: "✅", color: .green)
+            pendingSubscriptionUpdate = false
             return
         }
         
@@ -198,23 +218,63 @@ class WebSocketService: ObservableObject {
         
         DebugLogger.shared.log("Sending subscription: \(subscriptions.count) channels", emoji: "📤", color: .blue)
         
+        // ✅ FIX: Check connection state before sending
+        guard webSocketTask?.state == .running else {
+            DebugLogger.shared.log("WebSocket not connected, reconnecting...", emoji: "⚠️", color: .orange)
+            pendingSubscriptionUpdate = true
+            reconnect()
+            return
+        }
+        
         webSocketTask?.send(.string(str)) { error in
             if let error = error {
                 DebugLogger.shared.log("Subscription failed: \(error.localizedDescription)", emoji: "❌", color: .red)
+                // ✅ FIX: Reconnect on subscription failure
+                self.reconnect()
             } else {
                 DebugLogger.shared.log("Subscription sent successfully", emoji: "✅", color: .green)
             }
         }
     }
     
+    // ✅ FIX: Enhanced sendSubscriptionV2 with connection check
     func sendSubscriptionV2() {
-        sendSubscription()
+        // If connection is lost, reconnect first
+        if !isConnected || webSocketTask?.state != .running {
+            DebugLogger.shared.log("Connection lost, reconnecting before subscription update...", emoji: "🔄", color: .orange)
+            pendingSubscriptionUpdate = true
+            reconnect()
+            
+            // Wait for reconnection and send subscription
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                if self.isConnected {
+                    self.sendSubscription()
+                } else {
+                    DebugLogger.shared.log("Reconnection failed, subscription update pending", emoji: "❌", color: .red)
+                }
+            }
+        } else {
+            sendSubscription()
+        }
     }
     
     private func startPing() {
         pingTimer?.invalidate()
         pingTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            self?.webSocketTask?.sendPing { _ in }
+            guard let self = self else { return }
+            
+            // ✅ FIX: Check connection state before ping
+            if self.webSocketTask?.state == .running {
+                self.webSocketTask?.sendPing { error in
+                    if let error = error {
+                        DebugLogger.shared.log("Ping failed: \(error.localizedDescription)", emoji: "❌", color: .red)
+                        self.reconnect()
+                    }
+                }
+            } else {
+                DebugLogger.shared.log("Connection lost during ping, reconnecting...", emoji: "🔄", color: .orange)
+                self.reconnect()
+            }
         }
     }
 }
