@@ -4,16 +4,23 @@ struct AlertsView: View {
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @StateObject private var webSocketService = WebSocketService.shared
     @State private var selectedFilter: AlertFilter = .all
+    @State private var refreshTrigger = UUID()
     @State private var isInitialLoad = true
     
-    // ✅ FIX: Remove refresh trigger - let List update automatically
+    // ✅ FIX: Proper cleanup tracking
     @State private var eventObserver: NSObjectProtocol?
     
-    // ✅ FIX: Use @State to trigger List updates without full view refresh
-    @State private var lastUpdateTime = Date()
+    // ✅ OPTIMIZATION: Cache channel groups to avoid recomputation
+    @State private var cachedChannelGroups: [(channel: Channel, events: [Event])] = []
+    @State private var isRefreshing = false
+    @State private var refreshDebouncer: DispatchWorkItem?
     
     // Compute channel groups
     private var channelGroups: [(channel: Channel, events: [Event])] {
+        if isRefreshing {
+            return cachedChannelGroups
+        }
+        
         var groups: [(Channel, [Event])] = []
         
         for channel in subscriptionManager.subscribedChannels {
@@ -80,6 +87,7 @@ struct AlertsView: View {
             print("📱 AlertsView: Disappeared")
             removeNotificationObservers()
         }
+        .id(refreshTrigger)
     }
     
     // MARK: - Content View
@@ -257,7 +265,6 @@ struct AlertsView: View {
     // MARK: - Channels List
     
     private var channelsList: some View {
-        // ✅ FIX: List automatically updates when data changes, no manual refresh needed
         List {
             ForEach(channelGroups, id: \.channel.id) { group in
                 NavigationLink(
@@ -271,8 +278,6 @@ struct AlertsView: View {
                 }
             }
         }
-        // ✅ FIX: Use animation for smooth updates
-        .animation(.default, value: lastUpdateTime)
     }
     
     // MARK: - Filter Logic
@@ -307,25 +312,45 @@ struct AlertsView: View {
         }
     }
     
-    // ✅ FIX: Silent update - just update timestamp, List handles the rest
+    // ✅ CRITICAL FIX: Aggressive debouncing for high-frequency events
     private func setupNotificationObservers() {
+        // Remove any existing observers first
         removeNotificationObservers()
         
+        // ✅ Process on BACKGROUND queue to prevent main thread blocking
         eventObserver = NotificationCenter.default.addObserver(
             forName: .newEventReceived,
             object: nil,
-            queue: OperationQueue.main
+            queue: OperationQueue()  // Background queue!
         ) { [self] _ in
-            // ✅ FIX: Just update timestamp - List will automatically refresh
-            // No full view refresh, no animation flash
-            self.lastUpdateTime = Date()
-            print("📱 AlertsView: Event received, List will update automatically")
+            // ✅ CRITICAL: Cancel pending refresh and schedule new one
+            // This batches rapid-fire events into a single UI update
+            self.refreshDebouncer?.cancel()
+            
+            let workItem = DispatchWorkItem { [self] in
+                // Update on main thread
+                DispatchQueue.main.async {
+                    self.cachedChannelGroups = self.channelGroups
+                    self.refreshTrigger = UUID()
+                    self.isRefreshing = false
+                }
+            }
+            
+            self.refreshDebouncer = workItem
+            self.isRefreshing = true
+            
+            // ✅ Wait 300ms before refreshing (batches multiple events)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: workItem)
         }
         
         print("📱 AlertsView: Notification observers setup complete")
     }
     
     private func removeNotificationObservers() {
+        // Cancel any pending refresh
+        refreshDebouncer?.cancel()
+        refreshDebouncer = nil
+        
         if let observer = eventObserver {
             NotificationCenter.default.removeObserver(observer)
             eventObserver = nil
@@ -348,7 +373,7 @@ struct AlertsView: View {
             subscriptionManager.markAsRead(channelId: channel.id)
         }
         
-        lastUpdateTime = Date()
+        refreshTrigger = UUID()
     }
 }
 
