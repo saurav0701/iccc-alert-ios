@@ -48,12 +48,20 @@ struct Channel: Codable, Identifiable {
 // MARK: - User
 
 struct User: Codable {
-    let id: String
+    let id: Int  // ✅ Changed from String to Int
     let name: String
     let phone: String
     let area: String
     let designation: String
-    let workingFor: String
+    let organisation: String  // ✅ Changed from workingFor to organisation
+    let isActive: Bool
+    let createdAt: String
+    let updatedAt: String
+    
+    // Custom CodingKeys if backend uses different naming
+    enum CodingKeys: String, CodingKey {
+        case id, name, phone, area, designation, organisation, isActive, createdAt, updatedAt
+    }
 }
 
 // MARK: - Auth
