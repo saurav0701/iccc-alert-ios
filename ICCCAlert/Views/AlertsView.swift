@@ -4,40 +4,12 @@ struct AlertsView: View {
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @StateObject private var webSocketService = WebSocketService.shared
     @State private var selectedFilter: AlertFilter = .all
-    @State private var refreshTrigger = UUID()
     @State private var isInitialLoad = true
     
-    // ✅ FIX: Proper cleanup tracking
     @State private var eventObserver: NSObjectProtocol?
     
-    // ✅ OPTIMIZATION: Cache channel groups to avoid recomputation
-    @State private var cachedChannelGroups: [(channel: Channel, events: [Event])] = []
-    @State private var isRefreshing = false
-    @State private var refreshDebouncer: DispatchWorkItem?
-    
-    // Compute channel groups
-    private var channelGroups: [(channel: Channel, events: [Event])] {
-        if isRefreshing {
-            return cachedChannelGroups
-        }
-        
-        var groups: [(Channel, [Event])] = []
-        
-        for channel in subscriptionManager.subscribedChannels {
-            let channelEvents = subscriptionManager.getEvents(channelId: channel.id)
-            let filtered = filterEvents(channelEvents)
-            
-            if !filtered.isEmpty {
-                groups.append((channel, filtered))
-            }
-        }
-        
-        return groups.sorted { group1, group2 in
-            let time1 = group1.1.first?.timestamp ?? 0
-            let time2 = group2.1.first?.timestamp ?? 0
-            return time1 > time2
-        }
-    }
+    // ✅ FIX: Use @State for dynamic data instead of computed property
+    @State private var channelGroups: [(channel: Channel, events: [Event])] = []
     
     private var hasSubscriptions: Bool {
         !subscriptionManager.subscribedChannels.isEmpty
@@ -87,7 +59,9 @@ struct AlertsView: View {
             print("📱 AlertsView: Disappeared")
             removeNotificationObservers()
         }
-        .id(refreshTrigger)
+        .onChange(of: selectedFilter) { _ in
+            updateChannelGroups()
+        }
     }
     
     // MARK: - Content View
@@ -293,6 +267,26 @@ struct AlertsView: View {
         }
     }
     
+    // ✅ FIX: Update channel groups without full refresh
+    private func updateChannelGroups() {
+        var groups: [(Channel, [Event])] = []
+        
+        for channel in subscriptionManager.subscribedChannels {
+            let channelEvents = subscriptionManager.getEvents(channelId: channel.id)
+            let filtered = filterEvents(channelEvents)
+            
+            if !filtered.isEmpty {
+                groups.append((channel, filtered))
+            }
+        }
+        
+        channelGroups = groups.sorted { group1, group2 in
+            let time1 = group1.1.first?.timestamp ?? 0
+            let time2 = group2.1.first?.timestamp ?? 0
+            return time1 > time2
+        }
+    }
+    
     // MARK: - Computed Properties
     
     private var hasNoUnread: Bool {
@@ -305,6 +299,7 @@ struct AlertsView: View {
     
     private func handleViewAppear() {
         connectIfNeeded()
+        updateChannelGroups()
         setupNotificationObservers()
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
@@ -312,45 +307,23 @@ struct AlertsView: View {
         }
     }
     
-    // ✅ CRITICAL FIX: Aggressive debouncing for high-frequency events
+    // ✅ FIX: Only update data without triggering full view refresh
     private func setupNotificationObservers() {
-        // Remove any existing observers first
         removeNotificationObservers()
         
-        // ✅ Process on BACKGROUND queue to prevent main thread blocking
         eventObserver = NotificationCenter.default.addObserver(
             forName: .newEventReceived,
             object: nil,
-            queue: OperationQueue()  // Background queue!
+            queue: OperationQueue.main
         ) { [self] _ in
-            // ✅ CRITICAL: Cancel pending refresh and schedule new one
-            // This batches rapid-fire events into a single UI update
-            self.refreshDebouncer?.cancel()
-            
-            let workItem = DispatchWorkItem { [self] in
-                // Update on main thread
-                DispatchQueue.main.async {
-                    self.cachedChannelGroups = self.channelGroups
-                    self.refreshTrigger = UUID()
-                    self.isRefreshing = false
-                }
-            }
-            
-            self.refreshDebouncer = workItem
-            self.isRefreshing = true
-            
-            // ✅ Wait 300ms before refreshing (batches multiple events)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: workItem)
+            // ✅ Only update the data, not the entire view
+            self.updateChannelGroups()
         }
         
         print("📱 AlertsView: Notification observers setup complete")
     }
     
     private func removeNotificationObservers() {
-        // Cancel any pending refresh
-        refreshDebouncer?.cancel()
-        refreshDebouncer = nil
-        
         if let observer = eventObserver {
             NotificationCenter.default.removeObserver(observer)
             eventObserver = nil
@@ -373,7 +346,7 @@ struct AlertsView: View {
             subscriptionManager.markAsRead(channelId: channel.id)
         }
         
-        refreshTrigger = UUID()
+        updateChannelGroups()
     }
 }
 

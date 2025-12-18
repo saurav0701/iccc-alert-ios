@@ -4,82 +4,43 @@ struct ChannelsView: View {
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @StateObject private var webSocketService = WebSocketService.shared
     @State private var searchText = ""
-    @State private var selectedCategory: String? = nil
-    @State private var refreshTrigger = UUID()
     
-    var availableChannels: [Channel] {
-        SubscriptionManager.getAllAvailableChannels()
-    }
-    
-    var categories: [String] {
-        Array(Set(availableChannels.map { $0.eventTypeDisplay })).sorted()
-    }
-    
-    var filteredChannels: [Channel] {
-        var channels = availableChannels
+    var availableAreas: [(area: String, display: String)] {
+        let areas = [
+            ("barkasayal", "Barka Sayal"),
+            ("argada", "Argada"),
+            ("northkaranpura", "North Karanpura"),
+            ("bokarokargali", "Bokaro & Kargali"),
+            ("kathara", "Kathara"),
+            ("giridih", "Giridih"),
+            ("amrapali", "Amrapali & Chandragupta"),
+            ("magadh", "Magadh & Sanghmitra"),
+            ("rajhara", "Rajhara"),
+            ("kuju", "Kuju"),
+            ("hazaribagh", "Hazaribagh"),
+            ("rajrappa", "Rajrappa"),
+            ("dhori", "Dhori"),
+            ("piparwar", "Piparwar")
+        ]
         
-        // Apply category filter
-        if let category = selectedCategory {
-            channels = channels.filter { $0.eventTypeDisplay == category }
+        if searchText.isEmpty {
+            return areas
         }
         
-        // Apply search filter
-        if !searchText.isEmpty {
-            channels = channels.filter {
-                $0.areaDisplay.localizedCaseInsensitiveContains(searchText) ||
-                $0.eventTypeDisplay.localizedCaseInsensitiveContains(searchText)
-            }
-        }
-        
-        // Mark subscribed channels
-        let subscribedIds = Set(subscriptionManager.subscribedChannels.map { $0.id })
-        return channels.map { channel in
-            var updated = channel
-            updated.isSubscribed = subscribedIds.contains(channel.id)
-            return updated
-        }
+        return areas.filter { $0.display.localizedCaseInsensitiveContains(searchText) }
     }
     
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
                 // Connection Status Banner
-                if !webSocketService.isConnected {
-                    HStack {
-                        Image(systemName: "wifi.slash")
-                        Text(webSocketService.connectionStatus)
-                            .font(.caption)
-                        Spacer()
-                        Button("Reconnect") {
-                            webSocketService.connect()
-                        }
-                        .font(.caption)
-                    }
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .background(Color.orange.opacity(0.2))
-                } else {
-                    HStack {
-                        Image(systemName: "wifi")
-                            .foregroundColor(.green)
-                        Text("Connected")
-                            .font(.caption)
-                            .foregroundColor(.green)
-                        Spacer()
-                        Text("\(subscriptionManager.subscribedChannels.count) subscribed")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .background(Color.green.opacity(0.1))
-                }
+                connectionStatusBanner
                 
                 // Search Bar
                 HStack {
                     Image(systemName: "magnifyingglass")
                         .foregroundColor(.gray)
-                    TextField("Search channels", text: $searchText)
+                    TextField("Search areas...", text: $searchText)
                         .textFieldStyle(PlainTextFieldStyle())
                     if !searchText.isEmpty {
                         Button(action: { searchText = "" }) {
@@ -93,219 +54,299 @@ struct ChannelsView: View {
                 .cornerRadius(10)
                 .padding()
                 
-                // Category Filter
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        FilterChip(title: "All", isSelected: selectedCategory == nil) {
-                            selectedCategory = nil
-                        }
-                        ForEach(categories, id: \.self) { category in
-                            FilterChip(title: category, isSelected: selectedCategory == category) {
-                                selectedCategory = category
+                // Areas List
+                if availableAreas.isEmpty {
+                    emptySearchView
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 12) {
+                            ForEach(availableAreas, id: \.area) { area in
+                                AreaCard(
+                                    area: area.area,
+                                    areaDisplay: area.display
+                                )
                             }
                         }
+                        .padding()
                     }
-                    .padding(.horizontal)
-                }
-                .padding(.bottom)
-                
-                // Channels List
-                if filteredChannels.isEmpty {
-                    VStack(spacing: 16) {
-                        Image(systemName: "bell.slash")
-                            .font(.system(size: 50))
-                            .foregroundColor(.gray)
-                        Text("No channels found")
-                            .font(.headline)
-                        Text("Try adjusting your search or filters")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    List(filteredChannels) { channel in
-                        NavigationLink(
-                            destination: ChannelDetailView(channel: channel)
-                        ) {
-                            ChannelRowView(channel: channel)
-                        }
-                    }
-                    .id(refreshTrigger)
                 }
             }
             .navigationTitle("Channels")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    HStack {
-                        // Stats badge
-                        if subscriptionManager.subscribedChannels.count > 0 {
-                            Text("\(subscriptionManager.getTotalEventCount())")
-                                .font(.caption)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(Color.blue)
-                                .foregroundColor(.white)
-                                .clipShape(Capsule())
-                        }
-                    }
-                }
-            }
         }
         .onAppear {
-            // Connect WebSocket if not connected
             if !webSocketService.isConnected {
                 webSocketService.connect()
             }
         }
     }
-}
-
-struct FilterChip: View {
-    let title: String
-    let isSelected: Bool
-    let action: () -> Void
     
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.subheadline)
-                .fontWeight(isSelected ? .semibold : .regular)
-                .padding(.horizontal, 16)
+    private var connectionStatusBanner: some View {
+        Group {
+            if !webSocketService.isConnected {
+                HStack {
+                    Image(systemName: "wifi.slash")
+                    Text("Disconnected")
+                        .font(.caption)
+                    Spacer()
+                    Button("Reconnect") {
+                        webSocketService.connect()
+                    }
+                    .font(.caption)
+                }
+                .padding(.horizontal)
                 .padding(.vertical, 8)
-                .background(isSelected ? Color.blue : Color(.systemGray6))
-                .foregroundColor(isSelected ? .white : .primary)
-                .cornerRadius(20)
+                .background(Color.orange.opacity(0.2))
+            } else {
+                HStack {
+                    Image(systemName: "wifi")
+                        .foregroundColor(.green)
+                    Text("Connected")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                    Spacer()
+                    Text("\(subscriptionManager.subscribedChannels.count) subscribed")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(Color.green.opacity(0.1))
+            }
         }
     }
+    
+    private var emptySearchView: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 50))
+                .foregroundColor(.gray)
+            Text("No areas found")
+                .font(.headline)
+            Text("Try adjusting your search")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 }
 
-struct ChannelRowView: View {
-    let channel: Channel
+// MARK: - Area Card
+
+struct AreaCard: View {
+    let area: String
+    let areaDisplay: String
+    
     @StateObject private var subscriptionManager = SubscriptionManager.shared
+    @State private var isExpanded = false
     
-    var unreadCount: Int {
-        subscriptionManager.getUnreadCount(channelId: channel.id)
-    }
+    private let eventTypes = [
+        ("cd", "Crowd Detection", "FF5722"),
+        ("vd", "Vehicle Detection", "2196F3"),
+        ("pd", "Person Detection", "4CAF50"),
+        ("id", "Intrusion Detection", "F44336"),
+        ("vc", "Vehicle Congestion", "FFC107"),
+        ("ls", "Loading Status", "00BCD4"),
+        ("ct", "Camera Tampering", "E91E63"),
+        ("sh", "Safety Hazard", "FF9800"),
+        ("ii", "Insufficient Illumination", "9C27B0"),
+        ("off-route", "Off-Route Alert", "FF5722"),
+        ("tamper", "Tamper Alert", "F44336")
+    ]
     
-    var lastEvent: Event? {
-        subscriptionManager.getLastEvent(channelId: channel.id)
+    private var subscribedCount: Int {
+        eventTypes.filter { type in
+            subscriptionManager.isSubscribed(channelId: "\(area)_\(type.0)")
+        }.count
     }
     
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            // Channel Icon
-            ZStack {
-                Circle()
-                    .fill(iconColor.opacity(0.2))
-                    .frame(width: 50, height: 50)
-                
-                Text(iconText)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundColor(iconColor)
-            }
-            
-            // Channel Info
-            VStack(alignment: .leading, spacing: 4) {
+        VStack(spacing: 0) {
+            // Header
+            Button(action: { withAnimation { isExpanded.toggle() } }) {
                 HStack {
-                    Text(channel.areaDisplay)
+                    Text(areaDisplay)
                         .font(.headline)
-                    
-                    if channel.isSubscribed {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.caption)
-                            .foregroundColor(.green)
-                    }
+                        .foregroundColor(.primary)
                     
                     Spacer()
                     
-                    if unreadCount > 0 {
-                        Text("\(unreadCount)")
-                            .font(.system(size: 12, weight: .semibold))
+                    if subscribedCount > 0 {
+                        Text("\(subscribedCount) subscribed")
+                            .font(.caption)
+                            .foregroundColor(.green)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
-                            .background(Color.red)
-                            .foregroundColor(.white)
-                            .clipShape(Capsule())
+                            .background(Color.green.opacity(0.1))
+                            .cornerRadius(4)
                     }
-                }
-                
-                Text(channel.eventTypeDisplay)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                
-                if let event = lastEvent {
-                    Text(event.location)
+                    
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                        .lineLimit(1)
                 }
-                
-                HStack {
-                    Text(channel.eventTypeDisplay)
-                        .font(.caption)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(iconColor.opacity(0.1))
-                        .foregroundColor(iconColor)
-                        .cornerRadius(4)
-                    
-                    if let event = lastEvent {
-                        Spacer()
-                        Text(timeAgo(from: event.date))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
+                .padding()
+                .background(Color(.systemBackground))
             }
             
-            Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundColor(.gray)
+            // Event Types (Expandable)
+            if isExpanded {
+                VStack(spacing: 8) {
+                    ForEach(eventTypes, id: \.0) { type in
+                        EventTypeRow(
+                            area: area,
+                            eventType: type.0,
+                            eventTypeDisplay: type.1,
+                            colorHex: type.2
+                        )
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(Color(.systemGray6))
+            }
         }
-        .padding(.vertical, 8)
+        .background(Color(.systemBackground))
+        .cornerRadius(12)
+        .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
+    }
+}
+
+// MARK: - Event Type Row
+
+struct EventTypeRow: View {
+    let area: String
+    let eventType: String
+    let eventTypeDisplay: String
+    let colorHex: String
+    
+    @StateObject private var subscriptionManager = SubscriptionManager.shared
+    @State private var isSubscribing = false
+    
+    private var channelId: String {
+        "\(area)_\(eventType)"
+    }
+    
+    private var isSubscribed: Bool {
+        subscriptionManager.isSubscribed(channelId: channelId)
     }
     
     private var iconText: String {
-        let type = channel.eventType.uppercased()
+        let type = eventType.uppercased()
         if type.count <= 2 {
             return type
         }
         return String(type.prefix(2))
     }
     
-    private var iconColor: Color {
-        switch channel.eventType.lowercased() {
-        case "cd": return Color(hex: "FF5722")
-        case "id": return Color(hex: "F44336")
-        case "ct": return Color(hex: "E91E63")
-        case "sh": return Color(hex: "FF9800")
-        case "vd": return Color(hex: "2196F3")
-        case "pd": return Color(hex: "4CAF50")
-        case "vc": return Color(hex: "FFC107")
-        case "ii": return Color(hex: "9C27B0")
-        case "ls": return Color(hex: "00BCD4")
-        case "off-route": return Color(hex: "FF5722")
-        case "tamper": return Color(hex: "F44336")
-        default: return Color(hex: "9E9E9E")
+    var body: some View {
+        HStack(spacing: 12) {
+            // Icon
+            ZStack {
+                Circle()
+                    .fill(Color(hex: colorHex).opacity(0.2))
+                    .frame(width: 40, height: 40)
+                
+                Text(iconText)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(Color(hex: colorHex))
+            }
+            
+            // Title
+            Text(eventTypeDisplay)
+                .font(.subheadline)
+                .foregroundColor(.primary)
+            
+            Spacer()
+            
+            // Subscribe Button
+            Button(action: toggleSubscription) {
+                if isSubscribing {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                } else if isSubscribed {
+                    Text("Subscribed")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.green.opacity(0.2))
+                        .foregroundColor(.green)
+                        .cornerRadius(8)
+                } else {
+                    Text("Subscribe")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
+                }
+            }
+            .disabled(isSubscribing)
         }
+        .padding(.vertical, 4)
     }
     
-    private func timeAgo(from date: Date) -> String {
-        let now = Date()
-        let interval = now.timeIntervalSince(date)
+    private func toggleSubscription() {
+        isSubscribing = true
         
-        if interval < 60 {
-            return "Just now"
-        } else if interval < 3600 {
-            let minutes = Int(interval / 60)
-            return "\(minutes)m ago"
-        } else if interval < 86400 {
-            let hours = Int(interval / 3600)
-            return "\(hours)h ago"
+        if isSubscribed {
+            // Unsubscribe
+            subscriptionManager.unsubscribe(channelId: channelId)
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                isSubscribing = false
+            }
         } else {
-            let days = Int(interval / 86400)
-            return "\(days)d ago"
+            // Subscribe
+            let channel = Channel(
+                id: channelId,
+                area: area,
+                areaDisplay: eventTypeDisplay,
+                eventType: eventType,
+                eventTypeDisplay: eventTypeDisplay,
+                description: "\(area) - \(eventTypeDisplay)",
+                isSubscribed: true,
+                isMuted: false,
+                isPinned: false
+            )
+            
+            subscriptionManager.subscribe(channel: channel)
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                isSubscribing = false
+            }
         }
+    }
+}
+
+// MARK: - Color Extension
+
+extension Color {
+    init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&int)
+        let a, r, g, b: UInt64
+        switch hex.count {
+        case 3: // RGB (12-bit)
+            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
+        case 6: // RGB (24-bit)
+            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
+        case 8: // ARGB (32-bit)
+            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+        default:
+            (a, r, g, b) = (255, 0, 0, 0)
+        }
+        
+        self.init(
+            .sRGB,
+            red: Double(r) / 255,
+            green: Double(g) / 255,
+            blue:  Double(b) / 255,
+            opacity: Double(a) / 255
+        )
     }
 }
