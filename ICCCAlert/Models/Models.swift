@@ -23,11 +23,51 @@ struct Event: Codable, Identifiable {
     }
     
     var message: String {
-        return data?["location"]?.stringValue ?? "Unknown location"
+        // ✅ Handle both GPS and camera event formats
+        
+        // For GPS events: check geofence name first
+        if let geofence = data?["geofence"]?.dictionaryValue,
+           let name = geofence["name"]?.stringValue {
+            return name
+        }
+        
+        // For camera events: use location field
+        if let location = data?["location"]?.stringValue {
+            return location
+        }
+        
+        // For GPS events: try alertLocation
+        if let alertLoc = data?["alertLocation"]?.dictionaryValue,
+           let lat = alertLoc["lat"]?.doubleValue,
+           let lng = alertLoc["lng"]?.doubleValue {
+            return String(format: "%.4f, %.4f", lat, lng)
+        }
+        
+        return "Unknown location"
     }
     
     var location: String {
-        return data?["location"]?.stringValue ?? "Unknown location"
+        // ✅ Handle both GPS and camera event formats
+        
+        // For GPS events: check geofence name first
+        if let geofence = data?["geofence"]?.dictionaryValue,
+           let name = geofence["name"]?.stringValue {
+            return name
+        }
+        
+        // For camera events: use location field
+        if let location = data?["location"]?.stringValue {
+            return location
+        }
+        
+        // For GPS events: try alertLocation
+        if let alertLoc = data?["alertLocation"]?.dictionaryValue,
+           let lat = alertLoc["lat"]?.doubleValue,
+           let lng = alertLoc["lng"]?.doubleValue {
+            return String(format: "%.4f, %.4f", lat, lng)
+        }
+        
+        return "Unknown location"
     }
 }
 
@@ -138,6 +178,13 @@ enum AnyCodableValue: Codable {
     
     var boolValue: Bool? {
         if case .bool(let value) = self {
+            return value
+        }
+        return nil
+    }
+    
+    var dictionaryValue: [String: AnyCodableValue]? {
+        if case .dictionary(let value) = self {
             return value
         }
         return nil

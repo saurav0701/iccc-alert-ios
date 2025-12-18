@@ -15,8 +15,9 @@ class WebSocketService: ObservableObject {
     private var reconnectAttempts = 0
     private let maxReconnectAttempts = Int.max
     
-    private let baseURL = "ws://192.168.29.70:19999" // CCL
-
+    // ✅ CRITICAL FIX: Use port 19999 for WebSocket (not 19998)
+    private let baseURL = "ws://192.168.29.70:19999" // CCL WebSocket port
+    // private let baseURL = "ws://192.168.29.70:2222" // BCCL WebSocket port
     
     private var wsURL: String {
         return "\(baseURL)/ws"
@@ -128,6 +129,7 @@ class WebSocketService: ObservableObject {
         }
         
         startStatsTimer()
+        startAckTimer()
     }
     
     private func handleConnectionFailure(error: Error?) {
@@ -209,6 +211,7 @@ class WebSocketService: ObservableObject {
     private func processMessage(_ text: String) {
         // Skip subscription confirmations
         if text.contains("\"status\":\"subscribed\"") {
+            print("📥 Subscription confirmation received")
             return
         }
         
@@ -219,31 +222,42 @@ class WebSocketService: ObservableObject {
             return
         }
         
+        // ✅ DEBUG: Log raw message
+        print("📥 RAW MESSAGE: \(text.prefix(200))...")
+        
         // Parse event
         guard let data = text.data(using: .utf8),
               let event = try? JSONDecoder().decode(Event.self, from: data) else {
             errorCount += 1
+            print("❌ Failed to decode event")
             return
         }
+        
+        print("✅ Decoded event: id=\(event.id ?? "nil"), area=\(event.area ?? "nil"), type=\(event.type ?? "nil")")
         
         guard let eventId = event.id,
               let area = event.area,
               let type = event.type else {
             droppedCount += 1
+            print("❌ Event missing required fields: id=\(event.id ?? "nil"), area=\(event.area ?? "nil"), type=\(event.type ?? "nil")")
             return
         }
         
         let channelId = "\(area)_\(type)"
+        print("📍 Channel ID: \(channelId)")
         
         // Check subscription
         guard SubscriptionManager.shared.isSubscribed(channelId: channelId) else {
             droppedCount += 1
+            print("⏭️ Not subscribed to \(channelId), dropping event")
             sendAck(eventId: eventId)
             return
         }
         
+        print("✅ Subscribed to \(channelId), processing event")
+        
         // Get sequence number
-        let seq = event.data?["_seq"] as? Int64 ?? 0
+        let seq = event.data?["_seq"]?.int64Value ?? 0
         
         // Record in sync state
         let isNew = ChannelSyncState.shared.recordEventReceived(
@@ -383,15 +397,15 @@ class WebSocketService: ObservableObject {
         var hasSyncState = false
         
         for channel in subscriptions {
-    if let info = ChannelSyncState.shared.getSyncInfo(channelId: channel.id) {
-        hasSyncState = true
-        syncState[channel.id] = [
-            "lastEventId": info.lastEventId ?? "",
-            "lastTimestamp": info.lastEventTimestamp,  // ✅ FIXED: Changed from lastTimestamp
-            "lastSeq": info.highestSeq
-        ]
-    }
-}
+            if let info = ChannelSyncState.shared.getSyncInfo(channelId: channel.id) {
+                hasSyncState = true
+                syncState[channel.id] = [
+                    "lastEventId": info.lastEventId ?? "",
+                    "lastTimestamp": info.lastEventTimestamp,
+                    "lastSeq": info.highestSeq
+                ]
+            }
+        }
         
         let resetConsumers = !hasSyncState
         
