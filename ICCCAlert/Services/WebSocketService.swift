@@ -14,8 +14,26 @@ class WebSocketService: ObservableObject {
     
     private let baseURL = "ws://192.168.29.70:19999"
     
-    // ✅ FIX: Track pending subscription updates
+    // ✅ NEW: Track pending subscriptions
     private var pendingSubscriptionUpdate = false
+    private var hasSubscribed = false
+    private var lastSubscriptionTime: TimeInterval = 0
+    
+    // ✅ NEW: Event processing queue (like Android's ConcurrentLinkedQueue)
+    private let eventQueue = DispatchQueue(label: "com.iccc.eventProcessing", qos: .userInitiated, attributes: .concurrent)
+    private let ackQueue = DispatchQueue(label: "com.iccc.ackProcessing", qos: .utility)
+    
+    // ✅ NEW: Pending ACKs (events waiting to be acknowledged)
+    private var pendingAcks: [String] = []
+    private let ackLock = NSLock()
+    private let maxAckBatchSize = 50
+    private var ackFlushTimer: Timer?
+    
+    // ✅ NEW: Stats tracking (like Android)
+    private var receivedCount = 0
+    private var processedCount = 0
+    private var droppedCount = 0
+    private var ackedCount = 0
     
     private var clientId: String {
         if let uuid = UIDevice.current.identifierForVendor?.uuidString {
@@ -28,6 +46,9 @@ class WebSocketService: ObservableObject {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
         session = URLSession(configuration: config)
+        
+        // Start ACK flusher
+        startAckFlusher()
     }
     
     func connect() {
@@ -52,11 +73,13 @@ class WebSocketService: ObservableObject {
             if self.webSocketTask?.state == .running {
                 self.isConnected = true
                 self.connectionStatus = "Connected"
+                self.hasSubscribed = false
                 DebugLogger.shared.log("Connected successfully", emoji: "✅", color: .green)
                 self.startPing()
                 
+                // ✅ Send subscription after connection
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    self.sendSubscription()
+                    self.sendSubscriptionV2()
                 }
             } else {
                 DebugLogger.shared.log("Connection failed", emoji: "❌", color: .red)
@@ -65,18 +88,26 @@ class WebSocketService: ObservableObject {
     }
     
     func disconnect() {
+        // ✅ CRITICAL: Flush all pending ACKs before disconnect
+        flushAcksSync()
+        
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         webSocketTask = nil
         isConnected = false
+        hasSubscribed = false
         pingTimer?.invalidate()
+        ackFlushTimer?.invalidate()
         DebugLogger.shared.log("Disconnected", emoji: "🔌", color: .gray)
     }
     
-    // ✅ FIX: Reconnect method for recovery
     private func reconnect() {
         DebugLogger.shared.log("Attempting reconnect...", emoji: "🔄", color: .orange)
         
-        disconnect()
+        // ✅ Don't flush ACKs on disconnect - they'll be NAKed by backend
+        webSocketTask?.cancel(with: .goingAway, reason: nil)
+        webSocketTask = nil
+        isConnected = false
+        hasSubscribed = false
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             self.connect()
@@ -91,12 +122,22 @@ class WebSocketService: ObservableObject {
             case .success(let message):
                 switch message {
                 case .string(let text):
+                    self.receivedCount += 1
                     DebugLogger.shared.log("Received: \(text.prefix(100))...", emoji: "📥", color: .blue)
-                    self.handleMessage(text)
+                    
+                    // ✅ Process on background queue (like Android's parallel processors)
+                    self.eventQueue.async {
+                        self.handleMessage(text)
+                    }
+                    
                 case .data(let data):
                     if let text = String(data: data, encoding: .utf8) {
+                        self.receivedCount += 1
                         DebugLogger.shared.log("Received: \(text.prefix(100))...", emoji: "📥", color: .blue)
-                        self.handleMessage(text)
+                        
+                        self.eventQueue.async {
+                            self.handleMessage(text)
+                        }
                     }
                 @unknown default:
                     break
@@ -107,7 +148,6 @@ class WebSocketService: ObservableObject {
                 DebugLogger.shared.log("WebSocket error: \(error.localizedDescription)", emoji: "❌", color: .red)
                 self.isConnected = false
                 
-                // ✅ FIX: Auto-reconnect on connection loss
                 if self.webSocketTask?.state != .canceling {
                     self.reconnect()
                 }
@@ -115,8 +155,9 @@ class WebSocketService: ObservableObject {
         }
     }
     
+    // ✅ OPTIMIZED: Fast event processing (like Android)
     private func handleMessage(_ text: String) {
-        // Skip confirmations
+        // Skip subscription confirmations
         if text.contains("\"status\":\"subscribed\"") {
             DebugLogger.shared.log("Subscription confirmed", emoji: "✅", color: .green)
             pendingSubscriptionUpdate = false
@@ -138,26 +179,62 @@ class WebSocketService: ObservableObject {
               let area = event.area,
               let type = event.type else {
             DebugLogger.shared.log("Event missing required fields", emoji: "❌", color: .red)
+            droppedCount += 1
             return
         }
         
         let channelId = "\(area)_\(type)"
-        DebugLogger.shared.log("Event received: \(channelId) - \(eventId)", emoji: "🔔", color: .purple)
+        
+        // ✅ Extract sequence number from data (like Android)
+        let sequence: Int64 = {
+            if let seqValue = event.data?["_seq"] {
+                switch seqValue {
+                case .int64(let val):
+                    return val
+                case .int(let val):
+                    return Int64(val)
+                default:
+                    return 0
+                }
+            }
+            return 0
+        }()
+        
+        DebugLogger.shared.log("Event: \(channelId) - \(eventId) (seq: \(sequence))", emoji: "🔔", color: .purple)
         
         // Check if subscribed
         if !SubscriptionManager.shared.isSubscribed(channelId: channelId) {
             DebugLogger.shared.log("Not subscribed to \(channelId)", emoji: "⏭️", color: .orange)
+            droppedCount += 1
+            
+            // ✅ CRITICAL: Still ACK even if not subscribed (backend expects it)
             sendAck(eventId: eventId)
             return
         }
         
-        DebugLogger.shared.log("Subscribed to \(channelId), adding event", emoji: "✅", color: .green)
+        // ✅ Check for duplicates using sequence (like Android's ChannelSyncState)
+        let isNew = ChannelSyncState.shared.recordEventReceived(
+            channelId: channelId,
+            eventId: eventId,
+            timestamp: event.timestamp,
+            seq: sequence
+        )
         
-        // Add event
+        if !isNew && sequence > 0 {
+            DebugLogger.shared.log("Duplicate event \(eventId)", emoji: "⏭️", color: .orange)
+            droppedCount += 1
+            
+            // ✅ CRITICAL: ACK duplicates too
+            sendAck(eventId: eventId)
+            return
+        }
+        
+        // ✅ CRITICAL: Add to storage FIRST (priority)
         let added = SubscriptionManager.shared.addEvent(event)
         
         if added {
-            DebugLogger.shared.log("Event added successfully", emoji: "💾", color: .green)
+            processedCount += 1
+            DebugLogger.shared.log("Event stored successfully", emoji: "💾", color: .green)
             
             // Notify UI
             DispatchQueue.main.async {
@@ -169,45 +246,175 @@ class WebSocketService: ObservableObject {
                 DebugLogger.shared.log("UI notification posted", emoji: "📢", color: .blue)
             }
         } else {
+            droppedCount += 1
             DebugLogger.shared.log("Event rejected (duplicate)", emoji: "⏭️", color: .orange)
         }
         
+        // ✅ CRITICAL: Always ACK after processing decision
         sendAck(eventId: eventId)
+        
+        // Log stats periodically
+        if processedCount % 100 == 0 {
+            let stats = "received=\(receivedCount), processed=\(processedCount), dropped=\(droppedCount), acked=\(ackedCount)"
+            DebugLogger.shared.log("STATS: \(stats)", emoji: "📊", color: .blue)
+        }
     }
     
+    // ✅ NEW: Queue ACK for batching (like Android)
     private func sendAck(eventId: String) {
+        ackLock.lock()
+        pendingAcks.append(eventId)
+        let shouldFlush = pendingAcks.count >= maxAckBatchSize
+        ackLock.unlock()
+        
+        if shouldFlush {
+            flushAcks()
+        }
+    }
+    
+    // ✅ NEW: Periodic ACK flusher (like Android)
+    private func startAckFlusher() {
+        ackFlushTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            self?.flushAcks()
+        }
+    }
+    
+    // ✅ NEW: Batch ACK sender (like Android's flushAcks)
+    private func flushAcks() {
+        ackQueue.async { [weak self] in
+            guard let self = self else { return }
+            guard self.isConnected, self.webSocketTask?.state == .running else { return }
+            
+            self.ackLock.lock()
+            guard !self.pendingAcks.isEmpty else {
+                self.ackLock.unlock()
+                return
+            }
+            
+            // Take up to 100 ACKs
+            let count = min(self.pendingAcks.count, 100)
+            let acksToSend = Array(self.pendingAcks.prefix(count))
+            self.pendingAcks.removeFirst(count)
+            self.ackLock.unlock()
+            
+            let msg: [String: Any]
+            if acksToSend.count == 1 {
+                msg = [
+                    "type": "ack",
+                    "eventId": acksToSend[0],
+                    "clientId": self.clientId
+                ]
+            } else {
+                msg = [
+                    "type": "batch_ack",
+                    "eventIds": acksToSend,
+                    "clientId": self.clientId
+                ]
+            }
+            
+            guard let data = try? JSONSerialization.data(withJSONObject: msg),
+                  let str = String(data: data, encoding: .utf8) else {
+                // Re-queue on failure
+                self.ackLock.lock()
+                self.pendingAcks.insert(contentsOf: acksToSend, at: 0)
+                self.ackLock.unlock()
+                return
+            }
+            
+            self.webSocketTask?.send(.string(str)) { error in
+                if let error = error {
+                    DebugLogger.shared.log("ACK failed: \(error.localizedDescription)", emoji: "❌", color: .red)
+                    // Re-queue on failure
+                    self.ackLock.lock()
+                    self.pendingAcks.insert(contentsOf: acksToSend, at: 0)
+                    self.ackLock.unlock()
+                } else {
+                    self.ackedCount += acksToSend.count
+                    
+                    if acksToSend.count > 50 {
+                        DebugLogger.shared.log("Sent BULK ACK: \(acksToSend.count) events", emoji: "✅", color: .green)
+                    }
+                }
+            }
+        }
+    }
+    
+    // ✅ NEW: Synchronous flush for app shutdown
+    private func flushAcksSync() {
+        ackLock.lock()
+        let allAcks = pendingAcks
+        pendingAcks.removeAll()
+        ackLock.unlock()
+        
+        guard !allAcks.isEmpty else { return }
+        
         let msg: [String: Any] = [
-            "type": "ack",
-            "eventId": eventId,
+            "type": "batch_ack",
+            "eventIds": allAcks,
             "clientId": clientId
         ]
         
         guard let data = try? JSONSerialization.data(withJSONObject: msg),
               let str = String(data: data, encoding: .utf8) else { return }
         
-        webSocketTask?.send(.string(str)) { error in
-            if let error = error {
-                DebugLogger.shared.log("ACK failed: \(error.localizedDescription)", emoji: "❌", color: .red)
-            }
+        let semaphore = DispatchSemaphore(value: 0)
+        webSocketTask?.send(.string(str)) { _ in
+            semaphore.signal()
         }
+        _ = semaphore.wait(timeout: .now() + 2)
+        
+        DebugLogger.shared.log("Flushed \(allAcks.count) ACKs on shutdown", emoji: "💾", color: .blue)
     }
     
-    private func sendSubscription() {
-        let subscriptions = SubscriptionManager.shared.subscribedChannels
-        
-        guard !subscriptions.isEmpty else {
-            DebugLogger.shared.log("No subscriptions to send", emoji: "⚠️", color: .orange)
+    // ✅ UPDATED: Enhanced subscription with sync state (like Android)
+    func sendSubscriptionV2() {
+        guard isConnected, webSocketTask?.state == .running else {
+            DebugLogger.shared.log("Cannot subscribe - not connected", emoji: "⚠️", color: .orange)
+            pendingSubscriptionUpdate = true
+            reconnect()
             return
         }
+        
+        let now = Date().timeIntervalSince1970
+        if hasSubscribed && (now - lastSubscriptionTime) < 5 {
+            DebugLogger.shared.log("Skipping duplicate subscription", emoji: "⚠️", color: .orange)
+            return
+        }
+        
+        let subscriptions = SubscriptionManager.shared.subscribedChannels
+        guard !subscriptions.isEmpty else { return }
         
         let filters = subscriptions.map { channel -> [String: String] in
             return ["area": channel.area, "eventType": channel.eventType]
         }
         
+        // ✅ Enable catch-up mode for all channels
+        subscriptions.forEach { channel in
+            ChannelSyncState.shared.enableCatchUpMode(channelId: channel.id)
+        }
+        
+        // ✅ Build sync state (like Android)
+        var hasSyncState = false
+        var syncState: [String: [String: Any]] = [:]
+        
+        subscriptions.forEach { channel in
+            if let info = ChannelSyncState.shared.getSyncInfo(channelId: channel.id) {
+                hasSyncState = true
+                syncState[channel.id] = [
+                    "lastEventId": info.lastEventId ?? "",
+                    "lastTimestamp": info.lastEventTimestamp,
+                    "lastSeq": info.highestSeq
+                ]
+            }
+        }
+        
+        let resetConsumers = !hasSyncState
+        
         let request: [String: Any] = [
             "clientId": clientId,
             "filters": filters,
-            "resetConsumers": true
+            "syncState": syncState,
+            "resetConsumers": resetConsumers
         ]
         
         guard let data = try? JSONSerialization.data(withJSONObject: request),
@@ -216,45 +423,24 @@ class WebSocketService: ObservableObject {
             return
         }
         
-        DebugLogger.shared.log("Sending subscription: \(subscriptions.count) channels", emoji: "📤", color: .blue)
+        let mode = resetConsumers ? "RESET" : "RESUME"
+        DebugLogger.shared.log("Sending subscription (\(mode)): \(subscriptions.count) channels", emoji: "📤", color: .blue)
         
-        // ✅ FIX: Check connection state before sending
-        guard webSocketTask?.state == .running else {
-            DebugLogger.shared.log("WebSocket not connected, reconnecting...", emoji: "⚠️", color: .orange)
-            pendingSubscriptionUpdate = true
-            reconnect()
-            return
+        if resetConsumers {
+            DebugLogger.shared.log("RESET MODE: Will delete old consumers", emoji: "⚠️", color: .orange)
+        } else {
+            DebugLogger.shared.log("RESUME MODE: \(syncState.count) channels with state", emoji: "✅", color: .green)
         }
         
         webSocketTask?.send(.string(str)) { error in
             if let error = error {
                 DebugLogger.shared.log("Subscription failed: \(error.localizedDescription)", emoji: "❌", color: .red)
-                // ✅ FIX: Reconnect on subscription failure
                 self.reconnect()
             } else {
-                DebugLogger.shared.log("Subscription sent successfully", emoji: "✅", color: .green)
+                self.hasSubscribed = true
+                self.lastSubscriptionTime = now
+                DebugLogger.shared.log("Subscription sent (reset=\(resetConsumers))", emoji: "✅", color: .green)
             }
-        }
-    }
-    
-    // ✅ FIX: Enhanced sendSubscriptionV2 with connection check
-    func sendSubscriptionV2() {
-        // If connection is lost, reconnect first
-        if !isConnected || webSocketTask?.state != .running {
-            DebugLogger.shared.log("Connection lost, reconnecting before subscription update...", emoji: "🔄", color: .orange)
-            pendingSubscriptionUpdate = true
-            reconnect()
-            
-            // Wait for reconnection and send subscription
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                if self.isConnected {
-                    self.sendSubscription()
-                } else {
-                    DebugLogger.shared.log("Reconnection failed, subscription update pending", emoji: "❌", color: .red)
-                }
-            }
-        } else {
-            sendSubscription()
         }
     }
     
@@ -263,7 +449,6 @@ class WebSocketService: ObservableObject {
         pingTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             
-            // ✅ FIX: Check connection state before ping
             if self.webSocketTask?.state == .running {
                 self.webSocketTask?.sendPing { error in
                     if let error = error {
@@ -272,7 +457,7 @@ class WebSocketService: ObservableObject {
                     }
                 }
             } else {
-                DebugLogger.shared.log("Connection lost during ping, reconnecting...", emoji: "🔄", color: .orange)
+                DebugLogger.shared.log("Connection lost during ping", emoji: "🔄", color: .orange)
                 self.reconnect()
             }
         }

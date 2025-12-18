@@ -10,6 +10,16 @@ struct ICCCAlertApp: App {
     
     init() {
         setupAppearance()
+        _ = BackgroundWebSocketManager.shared
+        
+        // ✅ Register for app termination notification
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            self.handleAppTermination()
+        }
     }
     
     var body: some Scene {
@@ -26,11 +36,9 @@ struct ICCCAlertApp: App {
             } else {
                 LoginView()
                     .environmentObject(authManager)
-                    // ✅ FIXED: Listen for authentication changes
                     .onChange(of: authManager.isAuthenticated) { isAuth in
                         if isAuth {
                             print("✅ User authenticated, connecting WebSocket")
-                            // Small delay to ensure UI is ready
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                                 connectWebSocket()
                             }
@@ -70,21 +78,43 @@ struct ICCCAlertApp: App {
             
         case .inactive:
             print("📱 App became inactive")
+            // ✅ Keep WebSocket running (iOS will suspend if needed)
             
         case .background:
             print("📱 App moved to background")
-            subscriptionManager.forceSave()
-            ChannelSyncState.shared.forceSave()
+            // ✅ CRITICAL: Force save state before suspension
+            saveAppState()
             
         @unknown default:
             break
         }
     }
     
+    // ✅ NEW: Handle app termination (iOS 13+)
+    private func handleAppTermination() {
+        print("🛑 App will terminate - saving state")
+        
+        // ✅ CRITICAL: Save everything synchronously
+        subscriptionManager.forceSave()
+        ChannelSyncState.shared.forceSave()
+        
+        // ✅ Disconnect cleanly (flushes ACKs)
+        webSocketService.disconnect()
+        
+        print("✅ App state saved on termination")
+    }
+    
+    // ✅ NEW: Force save app state
+    private func saveAppState() {
+        print("💾 Saving app state...")
+        subscriptionManager.forceSave()
+        ChannelSyncState.shared.forceSave()
+        print("✅ App state saved")
+    }
+    
     // MARK: - Appearance Setup
     
     private func setupAppearance() {
-        // Navigation Bar Appearance
         let navBarAppearance = UINavigationBarAppearance()
         navBarAppearance.configureWithOpaqueBackground()
         navBarAppearance.backgroundColor = .systemBackground
@@ -95,7 +125,6 @@ struct ICCCAlertApp: App {
         UINavigationBar.appearance().scrollEdgeAppearance = navBarAppearance
         UINavigationBar.appearance().compactAppearance = navBarAppearance
         
-        // Tab Bar Appearance
         let tabBarAppearance = UITabBarAppearance()
         tabBarAppearance.configureWithOpaqueBackground()
         tabBarAppearance.backgroundColor = .systemBackground
