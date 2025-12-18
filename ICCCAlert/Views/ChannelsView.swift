@@ -4,49 +4,39 @@ struct ChannelsView: View {
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @StateObject private var webSocketService = WebSocketService.shared
     @State private var searchText = ""
-    @State private var selectedArea: String? = nil
-    @State private var expandedAreas: Set<String> = []
+    @State private var selectedCategory: String? = nil
+    @State private var refreshTrigger = UUID()
     
-    // All available areas
-    private let areas = [
-        ("barkasayal", "Barka Sayal"),
-        ("argada", "Argada"),
-        ("northkaranpura", "North Karanpura"),
-        ("bokarokargali", "Bokaro & Kargali"),
-        ("kathara", "Kathara"),
-        ("giridih", "Giridih"),
-        ("amrapali", "Amrapali & Chandragupta"),
-        ("magadh", "Magadh & Sanghmitra"),
-        ("rajhara", "Rajhara"),
-        ("kuju", "Kuju"),
-        ("hazaribagh", "Hazaribagh"),
-        ("rajrappa", "Rajrappa"),
-        ("dhori", "Dhori"),
-        ("piparwar", "Piparwar")
-    ]
+    var availableChannels: [Channel] {
+        SubscriptionManager.getAllAvailableChannels()
+    }
     
-    // Event types for each area
-    private let eventTypes = [
-        ("cd", "Crowd Detection"),
-        ("vd", "Vehicle Detection"),
-        ("pd", "Person Detection"),
-        ("id", "Intrusion Detection"),
-        ("vc", "Vehicle Congestion"),
-        ("ls", "Loading Status"),
-        ("us", "Unloading Status"),
-        ("ct", "Camera Tampering"),
-        ("sh", "Safety Hazard"),
-        ("ii", "Insufficient Illumination"),
-        ("off-route", "Off-Route Alert"),
-        ("tamper", "Tamper Alert")
-    ]
+    var categories: [String] {
+        Array(Set(availableChannels.map { $0.eventTypeDisplay })).sorted()
+    }
     
-    var filteredAreas: [(String, String)] {
-        if searchText.isEmpty {
-            return areas
+    var filteredChannels: [Channel] {
+        var channels = availableChannels
+        
+        // Apply category filter
+        if let category = selectedCategory {
+            channels = channels.filter { $0.eventTypeDisplay == category }
         }
-        return areas.filter { area in
-            area.1.localizedCaseInsensitiveContains(searchText)
+        
+        // Apply search filter
+        if !searchText.isEmpty {
+            channels = channels.filter {
+                $0.areaDisplay.localizedCaseInsensitiveContains(searchText) ||
+                $0.eventTypeDisplay.localizedCaseInsensitiveContains(searchText)
+            }
+        }
+        
+        // Mark subscribed channels
+        let subscribedIds = Set(subscriptionManager.subscribedChannels.map { $0.id })
+        return channels.map { channel in
+            var updated = channel
+            updated.isSubscribed = subscribedIds.contains(channel.id)
+            return updated
         }
     }
     
@@ -54,34 +44,93 @@ struct ChannelsView: View {
         NavigationView {
             VStack(spacing: 0) {
                 // Connection Status Banner
-                connectionStatusBanner
+                if !webSocketService.isConnected {
+                    HStack {
+                        Image(systemName: "wifi.slash")
+                        Text(webSocketService.connectionStatus)
+                            .font(.caption)
+                        Spacer()
+                        Button("Reconnect") {
+                            webSocketService.connect()
+                        }
+                        .font(.caption)
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(Color.orange.opacity(0.2))
+                } else {
+                    HStack {
+                        Image(systemName: "wifi")
+                            .foregroundColor(.green)
+                        Text("Connected")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                        Spacer()
+                        Text("\(subscriptionManager.subscribedChannels.count) subscribed")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(Color.green.opacity(0.1))
+                }
                 
                 // Search Bar
-                searchBar
-                
-                // Channels List with Dropdown
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(filteredAreas, id: \.0) { area in
-                            AreaSection(
-                                area: area,
-                                eventTypes: eventTypes,
-                                isExpanded: expandedAreas.contains(area.0),
-                                onToggle: {
-                                    withAnimation {
-                                        if expandedAreas.contains(area.0) {
-                                            expandedAreas.remove(area.0)
-                                        } else {
-                                            expandedAreas.insert(area.0)
-                                        }
-                                    }
-                                },
-                                subscriptionManager: subscriptionManager
-                            )
-                            
-                            Divider()
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.gray)
+                    TextField("Search channels", text: $searchText)
+                        .textFieldStyle(PlainTextFieldStyle())
+                    if !searchText.isEmpty {
+                        Button(action: { searchText = "" }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.gray)
                         }
                     }
+                }
+                .padding(8)
+                .background(Color(.systemGray6))
+                .cornerRadius(10)
+                .padding()
+                
+                // Category Filter
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        FilterChip(title: "All", isSelected: selectedCategory == nil) {
+                            selectedCategory = nil
+                        }
+                        ForEach(categories, id: \.self) { category in
+                            FilterChip(title: category, isSelected: selectedCategory == category) {
+                                selectedCategory = category
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+                .padding(.bottom)
+                
+                // Channels List
+                if filteredChannels.isEmpty {
+                    VStack(spacing: 16) {
+                        Image(systemName: "bell.slash")
+                            .font(.system(size: 50))
+                            .foregroundColor(.gray)
+                        Text("No channels found")
+                            .font(.headline)
+                        Text("Try adjusting your search or filters")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    List(filteredChannels) { channel in
+                        NavigationLink(
+                            destination: ChannelDetailView(channel: channel)
+                        ) {
+                            ChannelRowView(channel: channel)
+                        }
+                    }
+                    .id(refreshTrigger)
                 }
             }
             .navigationTitle("Channels")
@@ -104,280 +153,121 @@ struct ChannelsView: View {
             }
         }
         .onAppear {
+            // Connect WebSocket if not connected
             if !webSocketService.isConnected {
                 webSocketService.connect()
             }
         }
     }
+}
+
+struct FilterChip: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
     
-    // MARK: - Connection Status Banner
-    
-    private var connectionStatusBanner: some View {
-        Group {
-            if !webSocketService.isConnected {
-                HStack {
-                    Image(systemName: "wifi.slash")
-                    Text(webSocketService.connectionStatus)
-                        .font(.caption)
-                    Spacer()
-                    Button("Reconnect") {
-                        webSocketService.connect()
-                    }
-                    .font(.caption)
-                }
-                .padding(.horizontal)
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.subheadline)
+                .fontWeight(isSelected ? .semibold : .regular)
+                .padding(.horizontal, 16)
                 .padding(.vertical, 8)
-                .background(Color.orange.opacity(0.2))
-            } else {
-                HStack {
-                    Image(systemName: "wifi")
-                        .foregroundColor(.green)
-                    Text("Connected")
-                        .font(.caption)
-                        .foregroundColor(.green)
-                    Spacer()
-                    Text("\(subscriptionManager.subscribedChannels.count) subscribed")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 8)
-                .background(Color.green.opacity(0.1))
-            }
+                .background(isSelected ? Color.blue : Color(.systemGray6))
+                .foregroundColor(isSelected ? .white : .primary)
+                .cornerRadius(20)
         }
-    }
-    
-    // MARK: - Search Bar
-    
-    private var searchBar: some View {
-        HStack {
-            Image(systemName: "magnifyingglass")
-                .foregroundColor(.gray)
-            TextField("Search areas...", text: $searchText)
-                .textFieldStyle(PlainTextFieldStyle())
-            if !searchText.isEmpty {
-                Button(action: { searchText = "" }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.gray)
-                }
-            }
-        }
-        .padding(8)
-        .background(Color(.systemGray6))
-        .cornerRadius(10)
-        .padding()
     }
 }
 
-// MARK: - Area Section (Expandable)
-
-struct AreaSection: View {
-    let area: (String, String)
-    let eventTypes: [(String, String)]
-    let isExpanded: Bool
-    let onToggle: () -> Void
-    let subscriptionManager: SubscriptionManager
+struct ChannelRowView: View {
+    let channel: Channel
+    @StateObject private var subscriptionManager = SubscriptionManager.shared
     
-    private var subscribedCount: Int {
-        subscriptionManager.subscribedChannels.filter { $0.area == area.0 }.count
+    var unreadCount: Int {
+        subscriptionManager.getUnreadCount(channelId: channel.id)
     }
     
-    private var totalEvents: Int {
-        subscriptionManager.subscribedChannels
-            .filter { $0.area == area.0 }
-            .reduce(0) { total, channel in
-                total + subscriptionManager.getEvents(channelId: channel.id).count
-            }
+    var lastEvent: Event? {
+        subscriptionManager.getLastEvent(channelId: channel.id)
     }
     
     var body: some View {
-        VStack(spacing: 0) {
-            // Area Header (Clickable)
-            Button(action: onToggle) {
-                HStack(spacing: 12) {
-                    // Area Icon
-                    ZStack {
-                        Circle()
-                            .fill(Color.blue.opacity(0.2))
-                            .frame(width: 50, height: 50)
-                        
-                        Image(systemName: "location.fill")
-                            .font(.system(size: 20))
-                            .foregroundColor(.blue)
-                    }
-                    
-                    // Area Info
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(area.1)
-                            .font(.headline)
-                            .foregroundColor(.primary)
-                        
-                        HStack(spacing: 8) {
-                            if subscribedCount > 0 {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .font(.caption)
-                                        .foregroundColor(.green)
-                                    Text("\(subscribedCount) subscribed")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            } else {
-                                Text("\(eventTypes.count) event types")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            
-                            if totalEvents > 0 {
-                                Text("•")
-                                    .foregroundColor(.secondary)
-                                Text("\(totalEvents) events")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                    }
-                    
-                    Spacer()
-                    
-                    // Expand/Collapse Icon
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.gray)
-                }
-                .padding()
-                .background(Color(.systemBackground))
+        HStack(alignment: .top, spacing: 12) {
+            // Channel Icon
+            ZStack {
+                Circle()
+                    .fill(iconColor.opacity(0.2))
+                    .frame(width: 50, height: 50)
+                
+                Text(iconText)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(iconColor)
             }
-            .buttonStyle(PlainButtonStyle())
             
-            // Event Types List (Expandable)
-            if isExpanded {
-                VStack(spacing: 0) {
-                    ForEach(eventTypes, id: \.0) { eventType in
-                        EventTypeRow(
-                            area: area,
-                            eventType: eventType,
-                            subscriptionManager: subscriptionManager
-                        )
-                        
-                        if eventType.0 != eventTypes.last?.0 {
-                            Divider()
-                                .padding(.leading, 80)
-                        }
-                    }
-                }
-                .background(Color(.systemGray6).opacity(0.3))
-            }
-        }
-    }
-}
-
-// MARK: - Event Type Row
-
-struct EventTypeRow: View {
-    let area: (String, String)
-    let eventType: (String, String)
-    let subscriptionManager: SubscriptionManager
-    
-    private var channelId: String {
-        "\(area.0)_\(eventType.0)"
-    }
-    
-    private var channel: Channel {
-        Channel(
-            id: channelId,
-            area: area.0,
-            areaDisplay: area.1,
-            eventType: eventType.0,
-            eventTypeDisplay: eventType.1,
-            description: "\(area.1) - \(eventType.1)",
-            isSubscribed: isSubscribed,
-            isMuted: false,
-            isPinned: false
-        )
-    }
-    
-    private var isSubscribed: Bool {
-        subscriptionManager.isSubscribed(channelId: channelId)
-    }
-    
-    private var unreadCount: Int {
-        subscriptionManager.getUnreadCount(channelId: channelId)
-    }
-    
-    private var eventCount: Int {
-        subscriptionManager.getEvents(channelId: channelId).count
-    }
-    
-    var body: some View {
-        NavigationLink(
-            destination: ChannelDetailView(channel: channel)
-        ) {
-            HStack(spacing: 12) {
-                // Event Type Icon
-                ZStack {
-                    Circle()
-                        .fill(iconColor.opacity(0.2))
-                        .frame(width: 40, height: 40)
+            // Channel Info
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(channel.areaDisplay)
+                        .font(.headline)
                     
-                    Text(iconText)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(iconColor)
+                    if channel.isSubscribed {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                    }
+                    
+                    Spacer()
+                    
+                    if unreadCount > 0 {
+                        Text("\(unreadCount)")
+                            .font(.system(size: 12, weight: .semibold))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.red)
+                            .foregroundColor(.white)
+                            .clipShape(Capsule())
+                    }
                 }
                 
-                // Event Type Info
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(eventType.1)
-                        .font(.subheadline)
-                        .foregroundColor(.primary)
+                Text(channel.eventTypeDisplay)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                
+                if let event = lastEvent {
+                    Text(event.location)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+                
+                HStack {
+                    Text(channel.eventTypeDisplay)
+                        .font(.caption)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(iconColor.opacity(0.1))
+                        .foregroundColor(iconColor)
+                        .cornerRadius(4)
                     
-                    if isSubscribed {
-                        HStack(spacing: 4) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.caption)
-                                .foregroundColor(.green)
-                            
-                            if eventCount > 0 {
-                                Text("\(eventCount) events")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            } else {
-                                Text("Subscribed")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                    } else {
-                        Text("Tap to subscribe")
+                    if let event = lastEvent {
+                        Spacer()
+                        Text(timeAgo(from: event.date))
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
                 }
-                
-                Spacer()
-                
-                // Unread Badge
-                if unreadCount > 0 {
-                    Text("\(unreadCount)")
-                        .font(.system(size: 12, weight: .semibold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.red)
-                        .foregroundColor(.white)
-                        .clipShape(Capsule())
-                }
-                
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundColor(.gray)
             }
-            .padding(.horizontal)
-            .padding(.vertical, 12)
+            
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundColor(.gray)
         }
+        .padding(.vertical, 8)
     }
     
     private var iconText: String {
-        let type = eventType.0.uppercased()
+        let type = channel.eventType.uppercased()
         if type.count <= 2 {
             return type
         }
@@ -385,7 +275,7 @@ struct EventTypeRow: View {
     }
     
     private var iconColor: Color {
-        switch eventType.0.lowercased() {
+        switch channel.eventType.lowercased() {
         case "cd": return Color(hex: "FF5722")
         case "id": return Color(hex: "F44336")
         case "ct": return Color(hex: "E91E63")
@@ -395,10 +285,27 @@ struct EventTypeRow: View {
         case "vc": return Color(hex: "FFC107")
         case "ii": return Color(hex: "9C27B0")
         case "ls": return Color(hex: "00BCD4")
-        case "us": return Color(hex: "3F51B5")
         case "off-route": return Color(hex: "FF5722")
         case "tamper": return Color(hex: "F44336")
         default: return Color(hex: "9E9E9E")
+        }
+    }
+    
+    private func timeAgo(from date: Date) -> String {
+        let now = Date()
+        let interval = now.timeIntervalSince(date)
+        
+        if interval < 60 {
+            return "Just now"
+        } else if interval < 3600 {
+            let minutes = Int(interval / 60)
+            return "\(minutes)m ago"
+        } else if interval < 86400 {
+            let hours = Int(interval / 3600)
+            return "\(hours)h ago"
+        } else {
+            let days = Int(interval / 86400)
+            return "\(days)d ago"
         }
     }
 }
