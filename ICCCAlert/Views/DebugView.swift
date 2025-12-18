@@ -1,10 +1,47 @@
 import SwiftUI
 
+// MARK: - Debug Logger (singleton)
+class DebugLogger: ObservableObject {
+    static let shared = DebugLogger()
+    
+    @Published var logs: [LogEntry] = []
+    private let maxLogs = 100
+    
+    struct LogEntry: Identifiable {
+        let id = UUID()
+        let timestamp: Date
+        let message: String
+        let emoji: String
+        let color: Color
+    }
+    
+    private init() {}
+    
+    func log(_ message: String, emoji: String = "📋", color: Color = .primary) {
+        DispatchQueue.main.async {
+            let entry = LogEntry(timestamp: Date(), message: message, emoji: emoji, color: color)
+            self.logs.append(entry)
+            
+            if self.logs.count > self.maxLogs {
+                self.logs.removeFirst(self.logs.count - self.maxLogs)
+            }
+        }
+    }
+    
+    func clear() {
+        DispatchQueue.main.async {
+            self.logs.removeAll()
+        }
+    }
+}
+
+// MARK: - Debug View
 struct DebugView: View {
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @StateObject private var webSocketService = WebSocketService.shared
     @StateObject private var logger = DebugLogger.shared
     @State private var refreshTrigger = UUID()
+    @State private var autoRefreshTimer: Timer?
     
     var body: some View {
         NavigationView {
@@ -90,7 +127,7 @@ struct DebugView: View {
                             HStack {
                                 Text(log.emoji)
                                 Text(log.message)
-                                    .font(.system(size: 12))
+                                    .font(.system(size: 11))
                                     .foregroundColor(log.color)
                                 Spacer()
                             }
@@ -112,52 +149,28 @@ struct DebugView: View {
             }
             .id(refreshTrigger)
             .onAppear {
-                // Refresh every 2 seconds
-                Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
-                    refreshTrigger = UUID()
-                }
+                startAutoRefresh()
+            }
+            .onDisappear {
+                stopAutoRefresh()
             }
         }
+    }
+    
+    private func startAutoRefresh() {
+        autoRefreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+            refreshTrigger = UUID()
+        }
+    }
+    
+    private func stopAutoRefresh() {
+        autoRefreshTimer?.invalidate()
+        autoRefreshTimer = nil
     }
     
     private func formatTime(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
         return formatter.string(from: date)
-    }
-}
-
-// MARK: - Debug Logger
-
-class DebugLogger: ObservableObject {
-    static let shared = DebugLogger()
-    
-    @Published var logs: [LogEntry] = []
-    private let maxLogs = 100
-    
-    struct LogEntry: Identifiable {
-        let id = UUID()
-        let timestamp: Date
-        let message: String
-        let emoji: String
-        let color: Color
-    }
-    
-    func log(_ message: String, emoji: String = "📋", color: Color = .primary) {
-        DispatchQueue.main.async {
-            let entry = LogEntry(timestamp: Date(), message: message, emoji: emoji, color: color)
-            self.logs.append(entry)
-            
-            // Keep only last 100 logs
-            if self.logs.count > self.maxLogs {
-                self.logs.removeFirst(self.logs.count - self.maxLogs)
-            }
-        }
-    }
-    
-    func clear() {
-        DispatchQueue.main.async {
-            self.logs.removeAll()
-        }
     }
 }
