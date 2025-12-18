@@ -377,19 +377,12 @@ struct AlertChannelRow: View {
             }
             
             VStack(alignment: .leading, spacing: 6) {
-                // ✅ FIX 1: Show area name prominently
+                // ✅ FIX: Show Area Name and Time in first row
                 HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        // Area Name (Prominent)
-                        Text(channel.areaDisplay)
-                            .font(.system(size: 17, weight: unreadCount > 0 ? .bold : .semibold))
-                            .foregroundColor(.primary)
-                        
-                        // Event Type (Secondary)
-                        Text(channel.eventTypeDisplay)
-                            .font(.system(size: 14))
-                            .foregroundColor(.secondary)
-                    }
+                    // Area Name (Prominent)
+                    Text(channel.areaDisplay)
+                        .font(.system(size: 17, weight: unreadCount > 0 ? .bold : .semibold))
+                        .foregroundColor(.primary)
                     
                     Spacer()
                     

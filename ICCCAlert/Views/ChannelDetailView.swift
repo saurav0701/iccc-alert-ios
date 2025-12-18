@@ -101,12 +101,12 @@ struct ChannelDetailView: View {
     
     private var eventsListView: some View {
         VStack(spacing: 0) {
-            // ✅ Modern Channel Header Card
+            // ✅ Compact Header (Telegram-style)
             channelHeaderCard
             
             Divider()
             
-            // Events List
+            // Events List (takes major space)
             if events.isEmpty {
                 emptyEventsView
             } else {
@@ -127,118 +127,91 @@ struct ChannelDetailView: View {
         .background(Color(.systemGroupedBackground))
     }
     
-    // MARK: - ✅ Modern Channel Header Card
+    // MARK: - ✅ Compact Channel Header (Telegram-style)
     
     private var channelHeaderCard: some View {
-        VStack(spacing: 0) {
-            // Top Section with Icon and Info
-            HStack(spacing: 16) {
-                // Modern Icon with Gradient
-                ZStack {
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                gradient: Gradient(colors: [iconColor, iconColor.opacity(0.7)]),
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
+        HStack(spacing: 16) {
+            // Icon with Gradient
+            ZStack {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            gradient: Gradient(colors: [iconColor, iconColor.opacity(0.7)]),
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
                         )
-                        .frame(width: 60, height: 60)
-                        .shadow(color: iconColor.opacity(0.3), radius: 8, x: 0, y: 4)
-                    
-                    Text(iconText)
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundColor(.white)
-                }
+                    )
+                    .frame(width: 60, height: 60)
+                    .shadow(color: iconColor.opacity(0.3), radius: 8, x: 0, y: 4)
                 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(channel.areaDisplay)
-                        .font(.title3)
-                        .fontWeight(.bold)
+                Text(iconText)
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundColor(.white)
+            }
+            
+            VStack(alignment: .leading, spacing: 6) {
+                Text(channel.areaDisplay)
+                    .font(.title3)
+                    .fontWeight(.bold)
+                
+                Text(channel.eventTypeDisplay)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                
+                HStack(spacing: 12) {
+                    // Status Badge
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(isSubscribed ? Color.green : Color.gray)
+                            .frame(width: 8, height: 8)
+                        Text(isSubscribed ? "Active" : "Inactive")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(isSubscribed ? Color.green.opacity(0.15) : Color.gray.opacity(0.15))
+                    .cornerRadius(6)
                     
-                    Text(channel.eventTypeDisplay)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    
-                    HStack(spacing: 12) {
-                        // Status Badge
+                    // Event Count
+                    if events.count > 0 {
                         HStack(spacing: 4) {
-                            Circle()
-                                .fill(isSubscribed ? Color.green : Color.gray)
-                                .frame(width: 8, height: 8)
-                            Text(isSubscribed ? "Active" : "Inactive")
+                            Image(systemName: "tray.fill")
+                                .font(.system(size: 10))
+                            Text("\(events.count)")
                                 .font(.caption)
                                 .fontWeight(.medium)
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(isSubscribed ? Color.green.opacity(0.15) : Color.gray.opacity(0.15))
+                        .background(Color.blue.opacity(0.15))
+                        .foregroundColor(.blue)
                         .cornerRadius(6)
-                        
-                        // Mute Status
-                        if isSubscribed && isMuted {
-                            HStack(spacing: 4) {
-                                Image(systemName: "bell.slash.fill")
-                                    .font(.system(size: 10))
-                                Text("Muted")
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                            }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.orange.opacity(0.15))
-                            .foregroundColor(.orange)
-                            .cornerRadius(6)
+                    }
+                    
+                    // Mute Status
+                    if isSubscribed && isMuted {
+                        HStack(spacing: 4) {
+                            Image(systemName: "bell.slash.fill")
+                                .font(.system(size: 10))
+                            Text("Muted")
+                                .font(.caption)
+                                .fontWeight(.medium)
                         }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.orange.opacity(0.15))
+                        .foregroundColor(.orange)
+                        .cornerRadius(6)
                     }
                 }
-                
-                Spacer()
             }
-            .padding()
             
-            // Stats Bar
-            if events.count > 0 {
-                Divider()
-                
-                HStack(spacing: 0) {
-                    // Total Events
-                    StatItem(
-                        icon: "list.bullet",
-                        value: "\(events.count)",
-                        label: "Events",
-                        color: .blue
-                    )
-                    
-                    Divider()
-                        .frame(height: 40)
-                    
-                    // Unread Count
-                    StatItem(
-                        icon: "envelope.badge",
-                        value: "\(unreadCount)",
-                        label: "Unread",
-                        color: unreadCount > 0 ? .orange : .green
-                    )
-                    
-                    Divider()
-                        .frame(height: 40)
-                    
-                    // Last Event Time
-                    StatItem(
-                        icon: "clock",
-                        value: lastEventTime,
-                        label: "Last",
-                        color: .purple
-                    )
-                }
-                .padding(.vertical, 12)
-            }
+            Spacer()
         }
-        .background(Color(.systemBackground))
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
         .padding()
+        .background(Color(.systemBackground))
+        .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
     }
     
     private var lastEventTime: String {
@@ -606,33 +579,5 @@ struct ModernEventCard: View {
         case "tamper": return Color(hex: "F44336")
         default: return Color(hex: "9E9E9E")
         }
-    }
-}
-
-// MARK: - ✅ Stat Item Component
-
-struct StatItem: View {
-    let icon: String
-    let value: String
-    let label: String
-    let color: Color
-    
-    var body: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 14))
-                    .foregroundColor(color)
-                
-                Text(value)
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundColor(.primary)
-            }
-            
-            Text(label)
-                .font(.caption)
-                .foregroundColor(.secondary)
-        }
-        .frame(maxWidth: .infinity)
     }
 }
