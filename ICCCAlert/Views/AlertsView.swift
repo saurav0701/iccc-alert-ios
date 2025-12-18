@@ -466,3 +466,5 @@ enum AlertFilter {
     case unread
     case important
 }
+
+//need to add the channel name too in alerts otherwise user can't differentiate between same event types from different channels
