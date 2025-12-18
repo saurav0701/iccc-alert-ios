@@ -15,8 +15,8 @@ class WebSocketService: ObservableObject {
     private var reconnectAttempts = 0
     private let maxReconnectAttempts = Int.max
     
-    private let baseURL = "ws://192.168.29.70:19998" // CCL
-    // private let baseURL = "ws://192.168.29.70:8890" // BCCL
+    private let baseURL = "ws://192.168.29.70:19999" // CCL
+
     
     private var wsURL: String {
         return "\(baseURL)/ws"
