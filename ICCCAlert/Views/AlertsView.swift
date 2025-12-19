@@ -357,8 +357,10 @@ struct AlertChannelRow: View {
     let unreadCount: Int
     
     private let dateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm"
+       let formatter = DateFormatter()
+formatter.dateFormat = "HH:mm"
+formatter.timeZone = TimeZone.current   // ✅ explicit
+
         return formatter
     }()
     
@@ -377,20 +379,32 @@ struct AlertChannelRow: View {
             
             VStack(alignment: .leading, spacing: 6) {
                 // ✅ FIX 1: Show Event Type as main title
-                HStack {
-                    Text(channel.eventTypeDisplay)
-                        .font(.system(size: 17, weight: unreadCount > 0 ? .bold : .semibold))
-                        .foregroundColor(.primary)
-                    
-                    Spacer()
-                    
-                    // Timestamp
-                    if let event = lastEvent {
-                        Text(dateFormatter.string(from: event.date))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
+                HStack(alignment: .center, spacing: 8) {
+    Text(channel.eventTypeDisplay)
+        .font(.system(size: 17, weight: unreadCount > 0 ? .bold : .semibold))
+        .foregroundColor(.primary)
+
+    // ✅ Unread badge inline (no height change)
+    if unreadCount > 0 {
+        Text("\(unreadCount)")
+            .font(.caption2)
+            .fontWeight(.bold)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.blue)
+            .foregroundColor(.white)
+            .clipShape(Capsule())
+    }
+
+    Spacer()
+
+    if let event = lastEvent {
+        Text(dateFormatter.string(from: event.date))
+            .font(.caption)
+            .foregroundColor(.secondary)
+    }
+}
+
                 
                 if let area = lastEvent?.areaDisplay ?? lastEvent?.area {
     Text(area)
@@ -408,23 +422,6 @@ struct AlertChannelRow: View {
                         .padding(.top, 2)
                 }
                 
-                // Bottom Row: Unread Count Badge Only
-                HStack {
-                    Spacer()
-                    
-                    // Unread Count Badge
-                    if unreadCount > 0 {
-                        Text("\(unreadCount)")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.blue)
-                            .foregroundColor(.white)
-                            .clipShape(Capsule())
-                    }
-                }
-                .padding(.top, 4)
             }
         }
         .padding(.vertical, 8)

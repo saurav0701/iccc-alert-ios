@@ -34,29 +34,24 @@ struct ChannelDetailView: View {
     
     var body: some View {
         ZStack(alignment: .top) {
-            // Main Content
             if isSubscribed {
                 eventsListView
             } else {
                 subscriptionPromptView
             }
-            
-            // New Events Banner
+
             if showNewEventsBanner && pendingEventsCount > 0 {
                 newEventsBanner
             }
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            // ✅ FIX: Single header in navigation bar with event count
             ToolbarItem(placement: .principal) {
     VStack(spacing: 2) {
-        // Event type (always from channel)
         Text(channel.eventTypeDisplay)
             .font(.headline)
         
         HStack(spacing: 8) {
-            // ✅ Area from EVENT, not CHANNEL
             if let area = headerAreaText {
                 Text(area)
                     .font(.caption)
@@ -79,15 +74,13 @@ struct ChannelDetailView: View {
             
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 16) {
-                    // Mute/Unmute button
                     if isSubscribed {
                         Button(action: toggleMute) {
                             Image(systemName: isMuted ? "bell.slash.fill" : "bell.fill")
                                 .foregroundColor(isMuted ? .orange : .blue)
                         }
                     }
-                    
-                    // Subscribe/Unsubscribe button
+
                     Button(action: toggleSubscription) {
                         Text(isSubscribed ? "Unsubscribe" : "Subscribe")
                             .font(.system(size: 14, weight: .semibold))
@@ -125,7 +118,6 @@ struct ChannelDetailView: View {
     
     private var eventsListView: some View {
         VStack(spacing: 0) {
-            // Events List (full screen)
             if events.isEmpty {
                 emptyEventsView
             } else {
@@ -145,14 +137,11 @@ struct ChannelDetailView: View {
         }
         .background(Color(.systemGroupedBackground))
     }
-    
-    // MARK: - Empty Events View
-    
+
     private var emptyEventsView: some View {
         VStack(spacing: 20) {
             Spacer()
-            
-            // Modern Empty State
+
             ZStack {
                 Circle()
                     .fill(
@@ -184,14 +173,11 @@ struct ChannelDetailView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemGroupedBackground))
     }
-    
-    // MARK: - Subscription Prompt View (✅ MODERNIZED)
-    
+
     private var subscriptionPromptView: some View {
         VStack(spacing: 24) {
             Spacer()
-            
-            // Modern Icon with Gradient
+
             ZStack {
                 Circle()
                     .fill(
@@ -224,8 +210,7 @@ struct ChannelDetailView: View {
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
-            
-            // Modern Subscribe Button
+
             Button(action: toggleSubscription) {
                 HStack(spacing: 12) {
                     Image(systemName: "bell.badge.fill")
@@ -254,9 +239,7 @@ struct ChannelDetailView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemGroupedBackground))
     }
-    
-    // MARK: - New Events Banner (✅ MODERNIZED)
-    
+
     private var newEventsBanner: some View {
         VStack {
             HStack(spacing: 12) {
@@ -294,9 +277,7 @@ struct ChannelDetailView: View {
         }
         .transition(.move(edge: .top).combined(with: .opacity))
     }
-    
-    // MARK: - Computed Properties
-    
+
     private var iconText: String {
         let type = channel.eventType.uppercased()
         if type.count <= 2 {
@@ -321,9 +302,7 @@ struct ChannelDetailView: View {
         default: return Color(hex: "9E9E9E")
         }
     }
-    
-    // MARK: - Actions
-    
+
     private func toggleSubscription() {
         let wasSubscribed = isSubscribed
         let channelToSubscribe = channel
@@ -372,9 +351,7 @@ struct ChannelDetailView: View {
             subscriptionManager.markAsRead(channelId: channel.id)
         }
     }
-    
-    // MARK: - Event Notifications
-    
+ 
     private func setupNotificationObserver() {
         removeNotificationObserver()
         
@@ -415,8 +392,6 @@ struct ChannelDetailView: View {
     }
 }
 
-// MARK: - ✅ Modern Event Card
-
 struct ModernEventCard: View {
     let event: Event
     let channel: Channel
@@ -437,9 +412,7 @@ struct ModernEventCard: View {
     var body: some View {
         Button(action: onTap) {
             VStack(alignment: .leading, spacing: 12) {
-                // Header with Icon and Time
                 HStack {
-                    // Event Type Badge
                     HStack(spacing: 6) {
                         Circle()
                             .fill(eventColor)
@@ -461,22 +434,19 @@ struct ModernEventCard: View {
                         .fontWeight(.medium)
                         .foregroundColor(.secondary)
                 }
-                
-                // Location
+
                 Text(event.location)
                     .font(.body)
                     .fontWeight(.medium)
                     .foregroundColor(.primary)
                     .lineLimit(2)
-                
-                // Event Image
+
                 CachedEventImage(event: event)
                     .frame(height: 200)
                     .clipped()
                     .cornerRadius(12)
                     .shadow(color: Color.black.opacity(0.1), radius: 5, x: 0, y: 2)
-                
-                // Full Date
+
                 Text(fullDateFormatter.string(from: event.date))
                     .font(.caption)
                     .foregroundColor(.secondary)
