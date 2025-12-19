@@ -4,8 +4,9 @@ struct AlertsView: View {
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @StateObject private var webSocketService = WebSocketService.shared
     @State private var selectedReadFilter: AlertFilter = .all
-    @State private var selectedAreaFilter: String = "all"
-    @State private var selectedEventTypeFilter: String = "all"
+    @State private var selectedAreas: Set<String> = []
+    @State private var selectedEventTypes: Set<String> = []
+
     @State private var isInitialLoad = true
     @State private var showFilterSheet = false
     
@@ -21,16 +22,14 @@ struct AlertsView: View {
     }
     
     private var availableAreas: [String] {
-    let areas = Set(subscriptionManager.subscribedChannels.map { $0.area })
-    return ["all"] + Array(areas).sorted()
+    Array(Set(subscriptionManager.subscribedChannels.map { $0.area })).sorted()
 }
 
-    
-    // Get unique event types from subscribed channels
+
     private var availableEventTypes: [String] {
-        let types = Set(subscriptionManager.subscribedChannels.map { $0.eventTypeDisplay })
-        return ["all"] + Array(types).sorted()
-    }
+    Array(Set(subscriptionManager.subscribedChannels.map { $0.eventTypeDisplay })).sorted()
+}
+
     
     private var activeFilterCount: Int {
         var count = 0
@@ -99,11 +98,12 @@ struct AlertsView: View {
             }
             .sheet(isPresented: $showFilterSheet) {
                 FilterSheetView(
-                    selectedAreaFilter: $selectedAreaFilter,
-                    selectedEventTypeFilter: $selectedEventTypeFilter,
-                    availableAreas: availableAreas,
-                    availableEventTypes: availableEventTypes
-                )
+    selectedAreas: $selectedAreas,
+    selectedEventTypes: $selectedEventTypes,
+    availableAreas: availableAreas,
+    availableEventTypes: availableEventTypes
+)
+
             }
         }
         .onAppear {
@@ -118,9 +118,7 @@ struct AlertsView: View {
         .onChange(of: selectedAreaFilter) { _ in updateChannelGroups() }
         .onChange(of: selectedEventTypeFilter) { _ in updateChannelGroups() }
     }
-    
-    // MARK: - Content View
-    
+
     @ViewBuilder
     private var contentView: some View {
         if isInitialLoad && !webSocketService.isConnected {
@@ -346,30 +344,46 @@ struct AlertsView: View {
     }
     
     private func updateChannelGroups() {
-        var groups: [(Channel, [Event])] = []
-        
-        for channel in subscriptionManager.subscribedChannels {
-            // Apply channel-level filters
-            if !shouldIncludeChannel(channel) {
-                continue
-            }
-            
-            let channelEvents = subscriptionManager.getEvents(channelId: channel.id)
-            let filtered = filterEvents(channelEvents)
-            
-            if !filtered.isEmpty {
-                groups.append((channel, filtered))
-            }
+    var groups: [(Channel, [Event])] = []
+
+    for channel in subscriptionManager.subscribedChannels {
+
+        // ✅ Area multi-select filter
+        if !selectedAreas.isEmpty,
+           !selectedAreas.contains(channel.area) {
+            continue
         }
-        
-        channelGroups = groups.sorted { group1, group2 in
-            let time1 = group1.1.first?.timestamp ?? 0
-            let time2 = group2.1.first?.timestamp ?? 0
-            return time1 > time2
+
+        // ✅ Event type multi-select filter
+        if !selectedEventTypes.isEmpty,
+           !selectedEventTypes.contains(channel.eventTypeDisplay) {
+            continue
         }
+
+        let events = subscriptionManager.getEvents(channelId: channel.id)
+
+        let filteredEvents: [Event] = {
+            switch selectedReadFilter {
+            case .all:
+                return events
+            case .unread:
+                return events.filter { !$0.isRead }
+            case .important:
+                return events.filter { $0.priority?.lowercased() == "high" }
+            }
+        }()
+
+        if filteredEvents.isEmpty { continue }
+
+        groups.append((channel, filteredEvents))
     }
-    
-    // MARK: - Computed Properties
+
+    channelGroups = groups.sorted {
+        ($0.1.first?.timestamp ?? 0) >
+        ($1.1.first?.timestamp ?? 0)
+    }
+}
+
     
     private var hasNoUnread: Bool {
         channelGroups.allSatisfy { group in
@@ -537,51 +551,86 @@ struct ImprovedAlertChannelRow: View {
     }
 }
 
-// MARK: - Filter Sheet View
-
 struct FilterSheetView: View {
-    @Binding var selectedAreaFilter: String
-    @Binding var selectedEventTypeFilter: String
+    @Binding var selectedAreas: Set<String>
+    @Binding var selectedEventTypes: Set<String>
+
     let availableAreas: [String]
     let availableEventTypes: [String]
+
     @Environment(\.presentationMode) var presentationMode
-    
+
     var body: some View {
         NavigationView {
-            Form {
+            List {
+
+                // ✅ AREA MULTI SELECT
                 Section(header: Text("Filter by Area")) {
-                    Picker("Area", selection: $selectedAreaFilter) {
-                        ForEach(availableAreas, id: \.self) { area in
-                            Text(area == "all" ? "All Areas" : area).tag(area)
+                    ForEach(availableAreas, id: \.self) { area in
+                        MultipleSelectionRow(
+                            title: area,
+                            isSelected: selectedAreas.contains(area)
+                        ) {
+                            toggle(&selectedAreas, value: area)
                         }
                     }
-                    .pickerStyle(MenuPickerStyle())
                 }
-                
+
+                // ✅ EVENT TYPE MULTI SELECT
                 Section(header: Text("Filter by Event Type")) {
-                    Picker("Event Type", selection: $selectedEventTypeFilter) {
-                        ForEach(availableEventTypes, id: \.self) { type in
-                            Text(type == "all" ? "All Types" : type).tag(type)
+                    ForEach(availableEventTypes, id: \.self) { type in
+                        MultipleSelectionRow(
+                            title: type,
+                            isSelected: selectedEventTypes.contains(type)
+                        ) {
+                            toggle(&selectedEventTypes, value: type)
                         }
                     }
-                    .pickerStyle(MenuPickerStyle())
                 }
-                
+
                 Section {
                     Button("Clear All Filters") {
-                        selectedAreaFilter = "all"
-                        selectedEventTypeFilter = "all"
+                        selectedAreas.removeAll()
+                        selectedEventTypes.removeAll()
                     }
                     .foregroundColor(.red)
                 }
             }
-            .navigationTitle("Advanced Filters")
+            .navigationTitle("Filters")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
                         presentationMode.wrappedValue.dismiss()
                     }
+                }
+            }
+        }
+    }
+
+    private func toggle(_ set: inout Set<String>, value: String) {
+        if set.contains(value) {
+            set.remove(value)
+        } else {
+            set.insert(value)
+        }
+    }
+}
+
+struct MultipleSelectionRow: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Text(title)
+                    .foregroundColor(.primary)
+                Spacer()
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .foregroundColor(.blue)
                 }
             }
         }
