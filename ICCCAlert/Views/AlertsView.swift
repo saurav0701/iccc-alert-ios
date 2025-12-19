@@ -350,7 +350,6 @@ struct AlertsView: View {
     }
 }
 
-// MARK: - Alert Channel Row (✅ FIXED: Shows both Event Type AND Area Name)
 
 struct AlertChannelRow: View {
     let channel: Channel
@@ -393,10 +392,12 @@ struct AlertChannelRow: View {
                     }
                 }
                 
-                // ✅ FIX 2: Show Area Name as subtitle
-                Text(channel.areaDisplay)
-                    .font(.system(size: 14))
-                    .foregroundColor(.secondary)
+                if let area = lastEvent?.areaDisplay ?? lastEvent?.area {
+    Text(area)
+        .font(.system(size: 14))
+        .foregroundColor(.secondary)
+}
+
                 
                 // Last Event Message
                 if let event = lastEvent {
