@@ -20,11 +20,11 @@ struct AlertsView: View {
         subscriptionManager.getTotalEventCount()
     }
     
-    // Get unique areas from subscribed channels
     private var availableAreas: [String] {
-        let areas = Set(subscriptionManager.subscribedChannels.map { $0.areaDisplay })
-        return ["all"] + Array(areas).sorted()
-    }
+    let areas = Set(subscriptionManager.subscribedChannels.map { $0.area })
+    return ["all"] + Array(areas).sorted()
+}
+
     
     // Get unique event types from subscribed channels
     private var availableEventTypes: [String] {
@@ -332,9 +332,10 @@ struct AlertsView: View {
     
     private func shouldIncludeChannel(_ channel: Channel) -> Bool {
         // Area filter
-        if selectedAreaFilter != "all" && channel.areaDisplay != selectedAreaFilter {
-            return false
-        }
+        if selectedAreaFilter != "all" && channel.area != selectedAreaFilter {
+    return false
+}
+
         
         // Event type filter
         if selectedEventTypeFilter != "all" && channel.eventTypeDisplay != selectedEventTypeFilter {
