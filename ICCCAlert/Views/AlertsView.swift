@@ -80,7 +80,7 @@ struct AlertsView: View {
             print("🔄 Event types changed, updating groups")
             updateChannelGroups() 
         }
-        .onChange(of: subscriptionManager.objectWillChange) { _ in
+        .onReceive(subscriptionManager.objectWillChange) { _ in
             print("🔄 SubscriptionManager changed, updating groups")
             updateChannelGroups()
         }
