@@ -26,7 +26,11 @@ struct Event: Codable, Identifiable {
     }
     
     var date: Date {
-        return Date(timeIntervalSince1970: TimeInterval(timestamp))
+        // Backend sends timestamp in milliseconds (IST timezone already applied)
+        // Convert to seconds and subtract IST offset to get correct UTC timestamp
+        let timestampInSeconds = TimeInterval(timestamp) / 1000.0
+        let istOffset: TimeInterval = 5.5 * 3600 // 5 hours 30 minutes in seconds
+        return Date(timeIntervalSince1970: timestampInSeconds - istOffset)
     }
     
     var message: String {
