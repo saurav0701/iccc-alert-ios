@@ -32,12 +32,13 @@ struct AlertsView: View {
 
     
     private var activeFilterCount: Int {
-        var count = 0
-        if selectedReadFilter != .all { count += 1 }
-        if selectedAreaFilter != "all" { count += 1 }
-        if selectedEventTypeFilter != "all" { count += 1 }
-        return count
-    }
+    var count = 0
+    if selectedReadFilter != .all { count += 1 }
+    if !selectedAreas.isEmpty { count += 1 }
+    if !selectedEventTypes.isEmpty { count += 1 }
+    return count
+}
+
     
     var body: some View {
         NavigationView {
@@ -115,8 +116,9 @@ struct AlertsView: View {
             removeNotificationObservers()
         }
         .onChange(of: selectedReadFilter) { _ in updateChannelGroups() }
-        .onChange(of: selectedAreaFilter) { _ in updateChannelGroups() }
-        .onChange(of: selectedEventTypeFilter) { _ in updateChannelGroups() }
+        .onChange(of: selectedAreas) { _ in updateChannelGroups() }
+        .onChange(of: selectedEventTypes) { _ in updateChannelGroups() }
+
     }
 
     @ViewBuilder
@@ -279,10 +281,11 @@ struct AlertsView: View {
                 .multilineTextAlignment(.center)
             
             Button("Clear Filters") {
-                selectedReadFilter = .all
-                selectedAreaFilter = "all"
-                selectedEventTypeFilter = "all"
-            }
+    selectedReadFilter = .all
+    selectedAreas.removeAll()
+    selectedEventTypes.removeAll()
+}
+
             .padding()
             .background(Color.blue)
             .foregroundColor(.white)
@@ -327,22 +330,7 @@ struct AlertsView: View {
         
         return filtered
     }
-    
-    private func shouldIncludeChannel(_ channel: Channel) -> Bool {
-        // Area filter
-        if selectedAreaFilter != "all" && channel.area != selectedAreaFilter {
-    return false
-}
-
-        
-        // Event type filter
-        if selectedEventTypeFilter != "all" && channel.eventTypeDisplay != selectedEventTypeFilter {
-            return false
-        }
-        
-        return true
-    }
-    
+     
     private func updateChannelGroups() {
     var groups: [(Channel, [Event])] = []
 
