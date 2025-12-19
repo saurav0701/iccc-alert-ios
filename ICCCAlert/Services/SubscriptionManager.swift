@@ -99,6 +99,12 @@ class SubscriptionManager: ObservableObject {
         return subscribedChannels.first(where: { $0.id == channelId })?.isMuted ?? false
     }
     
+    // MARK: - NEW: Get All Available Channels
+    
+    func getAllAvailableChannels() -> [Channel] {
+        return subscribedChannels
+    }
+    
     // MARK: - Event Management
     
     func addEvent(_ event: Event) -> Bool {

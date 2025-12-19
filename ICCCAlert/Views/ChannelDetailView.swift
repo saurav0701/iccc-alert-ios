@@ -96,9 +96,7 @@ struct ChannelDetailView: View {
             )
         }
         .fullScreenCover(item: $selectedEvent) { event in
-            ImageDetailView(event: event, onSaveToggle: {
-                toggleSaveEvent(event)
-            })
+            ImageDetailView(event: event)
         }
         .onAppear {
             print("📱 ChannelDetailView appeared - marking as read")
@@ -504,71 +502,6 @@ struct ModernEventCard: View {
         case "off-route": return Color(hex: "FF5722")
         case "tamper": return Color(hex: "F44336")
         default: return Color(hex: "9E9E9E")
-        }
-    }
-}
-
-// MARK: - Image Detail View with Save Option
-
-struct ImageDetailView: View {
-    let event: Event
-    let onSaveToggle: () -> Void
-    @Environment(\.presentationMode) var presentationMode
-    
-    private let fullDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM dd, yyyy 'at' HH:mm"
-        return formatter
-    }()
-    
-    var body: some View {
-        ZStack {
-            Color.black.edgesIgnoringSafeArea(.all)
-            
-            VStack(spacing: 0) {
-                // Header
-                HStack {
-                    Button(action: { presentationMode.wrappedValue.dismiss() }) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundColor(.white)
-                            .frame(width: 44, height: 44)
-                    }
-                    
-                    Spacer()
-                    
-                    Button(action: onSaveToggle) {
-                        Image(systemName: event.isSaved ? "bookmark.fill" : "bookmark")
-                            .font(.system(size: 20))
-                            .foregroundColor(event.isSaved ? .yellow : .white)
-                            .frame(width: 44, height: 44)
-                    }
-                }
-                .padding(.horizontal)
-                .padding(.top, 50)
-                
-                Spacer()
-                
-                // Image
-                CachedEventImage(event: event)
-                    .aspectRatio(contentMode: .fit)
-                
-                Spacer()
-                
-                // Info
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(event.location)
-                        .font(.headline)
-                        .foregroundColor(.white)
-                    
-                    Text(fullDateFormatter.string(from: event.date))
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.7))
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
-                .background(Color.black.opacity(0.5))
-            }
         }
     }
 }
