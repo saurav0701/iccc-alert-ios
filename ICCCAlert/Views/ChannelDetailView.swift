@@ -50,25 +50,32 @@ struct ChannelDetailView: View {
         .toolbar {
             // ✅ FIX: Single header in navigation bar with event count
             ToolbarItem(placement: .principal) {
-                VStack(spacing: 2) {
-                    Text(channel.eventTypeDisplay)
-                        .font(.headline)
-                    HStack(spacing: 8) {
-                        Text(channel.areaDisplay)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        
-                        if isSubscribed && events.count > 0 {
-                            Text("•")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Text("\(events.count) events")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
+    VStack(spacing: 2) {
+        // Event type (always from channel)
+        Text(channel.eventTypeDisplay)
+            .font(.headline)
+        
+        HStack(spacing: 8) {
+            // ✅ Area from EVENT, not CHANNEL
+            if let area = headerAreaText {
+                Text(area)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
+            
+            if isSubscribed && events.count > 0 {
+                Text("•")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
+                Text("\(events.count) events")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+}
+
             
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 16) {
@@ -109,7 +116,12 @@ struct ChannelDetailView: View {
         .id(refreshTrigger)
     }
     
-    // MARK: - Events List View (✅ NO HEADER CARD)
+    private var headerAreaText: String? {
+    let latestEvent = events.first
+    return latestEvent?.areaDisplay
+        ?? latestEvent?.area
+}
+
     
     private var eventsListView: some View {
         VStack(spacing: 0) {
