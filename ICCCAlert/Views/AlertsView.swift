@@ -22,23 +22,20 @@ struct AlertsView: View {
     }
     
     private var availableAreas: [String] {
-    Array(Set(subscriptionManager.subscribedChannels.map { $0.area })).sorted()
-}
-
+        Array(Set(subscriptionManager.subscribedChannels.map { $0.area })).sorted()
+    }
 
     private var availableEventTypes: [String] {
-    Array(Set(subscriptionManager.subscribedChannels.map { $0.eventTypeDisplay })).sorted()
-}
-
+        Array(Set(subscriptionManager.subscribedChannels.map { $0.eventTypeDisplay })).sorted()
+    }
     
     private var activeFilterCount: Int {
-    var count = 0
-    if selectedReadFilter != .all { count += 1 }
-    if !selectedAreas.isEmpty { count += 1 }
-    if !selectedEventTypes.isEmpty { count += 1 }
-    return count
-}
-
+        var count = 0
+        if selectedReadFilter != .all { count += 1 }
+        if !selectedAreas.isEmpty { count += 1 }
+        if !selectedEventTypes.isEmpty { count += 1 }
+        return count
+    }
     
     var body: some View {
         NavigationView {
@@ -99,12 +96,11 @@ struct AlertsView: View {
             }
             .sheet(isPresented: $showFilterSheet) {
                 FilterSheetView(
-    selectedAreas: $selectedAreas,
-    selectedEventTypes: $selectedEventTypes,
-    availableAreas: availableAreas,
-    availableEventTypes: availableEventTypes
-)
-
+                    selectedAreas: $selectedAreas,
+                    selectedEventTypes: $selectedEventTypes,
+                    availableAreas: availableAreas,
+                    availableEventTypes: availableEventTypes
+                )
             }
         }
         .onAppear {
@@ -118,7 +114,6 @@ struct AlertsView: View {
         .onChange(of: selectedReadFilter) { _ in updateChannelGroups() }
         .onChange(of: selectedAreas) { _ in updateChannelGroups() }
         .onChange(of: selectedEventTypes) { _ in updateChannelGroups() }
-
     }
 
     @ViewBuilder
@@ -281,11 +276,10 @@ struct AlertsView: View {
                 .multilineTextAlignment(.center)
             
             Button("Clear Filters") {
-    selectedReadFilter = .all
-    selectedAreas.removeAll()
-    selectedEventTypes.removeAll()
-}
-
+                selectedReadFilter = .all
+                selectedAreas.removeAll()
+                selectedEventTypes.removeAll()
+            }
             .padding()
             .background(Color.blue)
             .foregroundColor(.white)
@@ -313,65 +307,49 @@ struct AlertsView: View {
         .listStyle(PlainListStyle())
     }
     
-    // MARK: - Filter Logic
+    // MARK: - Filter Logic - FIXED
     
-    private func filterEvents(_ events: [Event]) -> [Event] {
-        var filtered = events
-        
-        // Apply read filter
-        switch selectedReadFilter {
-        case .all:
-            break
-        case .unread:
-            filtered = filtered.filter { !$0.isRead }
-        case .important:
-            filtered = filtered.filter { $0.priority?.lowercased() == "high" }
-        }
-        
-        return filtered
-    }
-     
     private func updateChannelGroups() {
-    var groups: [(Channel, [Event])] = []
+        var groups: [(Channel, [Event])] = []
 
-    for channel in subscriptionManager.subscribedChannels {
-
-        // ✅ Area multi-select filter
-        if !selectedAreas.isEmpty,
-           !selectedAreas.contains(channel.area) {
-            continue
-        }
-
-        // ✅ Event type multi-select filter
-        if !selectedEventTypes.isEmpty,
-           !selectedEventTypes.contains(channel.eventTypeDisplay) {
-            continue
-        }
-
-        let events = subscriptionManager.getEvents(channelId: channel.id)
-
-        let filteredEvents: [Event] = {
-            switch selectedReadFilter {
-            case .all:
-                return events
-            case .unread:
-                return events.filter { !$0.isRead }
-            case .important:
-                return events.filter { $0.priority?.lowercased() == "high" }
+        for channel in subscriptionManager.subscribedChannels {
+            // ✅ Area multi-select filter
+            if !selectedAreas.isEmpty, !selectedAreas.contains(channel.area) {
+                continue
             }
-        }()
 
-        if filteredEvents.isEmpty { continue }
+            // ✅ Event type multi-select filter
+            if !selectedEventTypes.isEmpty, !selectedEventTypes.contains(channel.eventTypeDisplay) {
+                continue
+            }
 
-        groups.append((channel, filteredEvents))
+            let allEvents = subscriptionManager.getEvents(channelId: channel.id)
+
+            // ✅ FIXED: Apply read/unread/important filter
+            let filteredEvents: [Event] = {
+                switch selectedReadFilter {
+                case .all:
+                    return allEvents
+                case .unread:
+                    return allEvents.filter { !$0.isRead }
+                case .important:
+                    return allEvents.filter { $0.priority?.lowercased() == "high" }
+                }
+            }()
+
+            // ✅ FIXED: Skip channel if no events match the filter
+            if filteredEvents.isEmpty {
+                continue
+            }
+
+            groups.append((channel, filteredEvents))
+        }
+
+        // Sort by most recent event
+        channelGroups = groups.sorted {
+            ($0.1.first?.timestamp ?? 0) > ($1.1.first?.timestamp ?? 0)
+        }
     }
-
-    channelGroups = groups.sorted {
-        ($0.1.first?.timestamp ?? 0) >
-        ($1.1.first?.timestamp ?? 0)
-    }
-}
-
     
     private var hasNoUnread: Bool {
         channelGroups.allSatisfy { group in
@@ -442,7 +420,7 @@ struct ImprovedAlertChannelRow: View {
     private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
-        formatter.timeZone = TimeZone.current // Use device timezone
+        formatter.timeZone = TimeZone.current
         return formatter
     }()
     
@@ -494,7 +472,7 @@ struct ImprovedAlertChannelRow: View {
                 }
             }
             
-            // Unread Badge (aligned to center)
+            // Unread Badge
             if unreadCount > 0 {
                 Text("\(unreadCount)")
                     .font(.caption)
@@ -539,6 +517,8 @@ struct ImprovedAlertChannelRow: View {
     }
 }
 
+// MARK: - Filter Sheet with Dropdown Menus
+
 struct FilterSheetView: View {
     @Binding var selectedAreas: Set<String>
     @Binding var selectedEventTypes: Set<String>
@@ -547,35 +527,80 @@ struct FilterSheetView: View {
     let availableEventTypes: [String]
 
     @Environment(\.presentationMode) var presentationMode
+    
+    @State private var isAreaExpanded = false
+    @State private var isEventTypeExpanded = false
 
     var body: some View {
         NavigationView {
             List {
-
-                // ✅ AREA MULTI SELECT
-                Section(header: Text("Filter by Area")) {
-                    ForEach(availableAreas, id: \.self) { area in
-                        MultipleSelectionRow(
-                            title: area,
-                            isSelected: selectedAreas.contains(area)
-                        ) {
-                            toggle(&selectedAreas, value: area)
+                // ✅ AREA DROPDOWN
+                Section {
+                    DisclosureGroup(
+                        isExpanded: $isAreaExpanded,
+                        content: {
+                            ForEach(availableAreas, id: \.self) { area in
+                                MultipleSelectionRow(
+                                    title: area,
+                                    isSelected: selectedAreas.contains(area)
+                                ) {
+                                    toggle(&selectedAreas, value: area)
+                                }
+                            }
+                        },
+                        label: {
+                            HStack {
+                                Text("Filter by Area")
+                                    .font(.headline)
+                                Spacer()
+                                if !selectedAreas.isEmpty {
+                                    Text("\(selectedAreas.count) selected")
+                                        .font(.caption)
+                                        .foregroundColor(.blue)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color.blue.opacity(0.1))
+                                        .cornerRadius(12)
+                                }
+                            }
                         }
-                    }
+                    )
                 }
 
-                // ✅ EVENT TYPE MULTI SELECT
-                Section(header: Text("Filter by Event Type")) {
-                    ForEach(availableEventTypes, id: \.self) { type in
-                        MultipleSelectionRow(
-                            title: type,
-                            isSelected: selectedEventTypes.contains(type)
-                        ) {
-                            toggle(&selectedEventTypes, value: type)
+                // ✅ EVENT TYPE DROPDOWN
+                Section {
+                    DisclosureGroup(
+                        isExpanded: $isEventTypeExpanded,
+                        content: {
+                            ForEach(availableEventTypes, id: \.self) { type in
+                                MultipleSelectionRow(
+                                    title: type,
+                                    isSelected: selectedEventTypes.contains(type)
+                                ) {
+                                    toggle(&selectedEventTypes, value: type)
+                                }
+                            }
+                        },
+                        label: {
+                            HStack {
+                                Text("Filter by Event Type")
+                                    .font(.headline)
+                                Spacer()
+                                if !selectedEventTypes.isEmpty {
+                                    Text("\(selectedEventTypes.count) selected")
+                                        .font(.caption)
+                                        .foregroundColor(.blue)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color.blue.opacity(0.1))
+                                        .cornerRadius(12)
+                                }
+                            }
                         }
-                    }
+                    )
                 }
 
+                // Clear Button
                 Section {
                     Button("Clear All Filters") {
                         selectedAreas.removeAll()
