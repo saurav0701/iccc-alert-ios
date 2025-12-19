@@ -39,26 +39,69 @@ struct AlertsView: View {
     
     var body: some View {
         NavigationView {
-            contentViewWrapper
-                .navigationTitle("Alerts")
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        if !hasNoUnread {
-                            Button(action: markAllAsRead) {
-                                Text("Mark All Read")
-                                    .font(.subheadline)
+            VStack(spacing: 0) {
+                // Filter Button Bar
+                if totalEventCount > 0 {
+                    HStack(spacing: 12) {
+                        // Read/Unread Filter - ✅ CHANGED: Replaced "Important" with "Saved"
+                        Picker("", selection: $selectedReadFilter) {
+                            Text("All").tag(AlertFilter.all)
+                            Text("Unread").tag(AlertFilter.unread)
+                            Text("Saved").tag(AlertFilter.saved)  // ✅ CHANGED
+                        }
+                        .pickerStyle(SegmentedPickerStyle())
+                        
+                        // Advanced Filters Button
+                        Button(action: { showFilterSheet = true }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "line.3.horizontal.decrease.circle")
+                                if activeFilterCount > 0 {
+                                    Text("\(activeFilterCount)")
+                                        .font(.caption2)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(.white)
+                                        .frame(width: 16, height: 16)
+                                        .background(Color.blue)
+                                        .clipShape(Circle())
+                                }
                             }
+                            .font(.caption)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.blue.opacity(0.1))
+                            .foregroundColor(.blue)
+                            .cornerRadius(8)
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                }
+                
+                // Connection Status
+                connectionStatusBanner
+                
+                // Content
+                contentView
+            }
+            .navigationTitle("Alerts")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    if !hasNoUnread {
+                        Button(action: markAllAsRead) {
+                            Text("Mark All Read")
+                                .font(.subheadline)
                         }
                     }
                 }
-                .sheet(isPresented: $showFilterSheet) {
-                    FilterSheetView(
-                        selectedAreas: $selectedAreas,
-                        selectedEventTypes: $selectedEventTypes,
-                        availableAreas: availableAreas,
-                        availableEventTypes: availableEventTypes
-                    )
-                }
+            }
+            .sheet(isPresented: $showFilterSheet) {
+                FilterSheetView(
+                    selectedAreas: $selectedAreas,
+                    selectedEventTypes: $selectedEventTypes,
+                    availableAreas: availableAreas,
+                    availableEventTypes: availableEventTypes
+                )
+            }
         }
         .onAppear {
             print("📱 AlertsView: Appeared")
@@ -68,71 +111,9 @@ struct AlertsView: View {
             print("📱 AlertsView: Disappeared")
             removeNotificationObservers()
         }
-        .onChange(of: selectedReadFilter) { _ in 
-            print("🔄 Filter changed, updating groups")
-            updateChannelGroups() 
-        }
-        .onChange(of: selectedAreas) { _ in 
-            print("🔄 Areas changed, updating groups")
-            updateChannelGroups() 
-        }
-        .onChange(of: selectedEventTypes) { _ in 
-            print("🔄 Event types changed, updating groups")
-            updateChannelGroups() 
-        }
-        .onReceive(subscriptionManager.objectWillChange) { _ in
-            print("🔄 SubscriptionManager changed, updating groups")
-            updateChannelGroups()
-        }
-    }
-
-    // FIXED: Break down complex view into simpler parts
-    @ViewBuilder
-    private var contentViewWrapper: some View {
-        VStack(spacing: 0) {
-            if totalEventCount > 0 {
-                filterBar
-            }
-            
-            connectionStatusBanner
-            
-            contentView
-        }
-    }
-    
-    // FIXED: Extracted filter bar
-    private var filterBar: some View {
-        HStack(spacing: 12) {
-            Picker("", selection: $selectedReadFilter) {
-                Text("All").tag(AlertFilter.all)
-                Text("Unread").tag(AlertFilter.unread)
-                Text("Saved").tag(AlertFilter.saved)
-            }
-            .pickerStyle(SegmentedPickerStyle())
-            
-            Button(action: { showFilterSheet = true }) {
-                HStack(spacing: 4) {
-                    Image(systemName: "line.3.horizontal.decrease.circle")
-                    if activeFilterCount > 0 {
-                        Text("\(activeFilterCount)")
-                            .font(.caption2)
-                            .fontWeight(.bold)
-                            .foregroundColor(.white)
-                            .frame(width: 16, height: 16)
-                            .background(Color.blue)
-                            .clipShape(Circle())
-                    }
-                }
-                .font(.caption)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(Color.blue.opacity(0.1))
-                .foregroundColor(.blue)
-                .cornerRadius(8)
-            }
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
+        .onChange(of: selectedReadFilter) { _ in updateChannelGroups() }
+        .onChange(of: selectedAreas) { _ in updateChannelGroups() }
+        .onChange(of: selectedEventTypes) { _ in updateChannelGroups() }
     }
 
     @ViewBuilder
@@ -248,41 +229,36 @@ struct AlertsView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
             
-            subscribedChannelsList
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-    
-    // FIXED: Extracted subscribed channels list
-    private var subscribedChannelsList: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Subscribed Channels:")
-                .font(.caption)
-                .fontWeight(.semibold)
-                .foregroundColor(.secondary)
-            
-            ForEach(subscriptionManager.subscribedChannels.prefix(5)) { channel in
-                HStack {
-                    Circle()
-                        .fill(Color.blue)
-                        .frame(width: 6, height: 6)
-                    Text("\(channel.areaDisplay) - \(channel.eventTypeDisplay)")
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Subscribed Channels:")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.secondary)
+                
+                ForEach(subscriptionManager.subscribedChannels.prefix(5)) { channel in
+                    HStack {
+                        Circle()
+                            .fill(Color.blue)
+                            .frame(width: 6, height: 6)
+                        Text("\(channel.areaDisplay) - \(channel.eventTypeDisplay)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                if subscriptionManager.subscribedChannels.count > 5 {
+                    Text("+ \(subscriptionManager.subscribedChannels.count - 5) more")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                        .padding(.leading, 14)
                 }
             }
-            
-            if subscriptionManager.subscribedChannels.count > 5 {
-                Text("+ \(subscriptionManager.subscribedChannels.count - 5) more")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(.leading, 14)
-            }
+            .padding()
+            .background(Color(.systemGray6))
+            .cornerRadius(8)
+            .padding(.horizontal)
         }
-        .padding()
-        .background(Color(.systemGray6))
-        .cornerRadius(8)
-        .padding(.horizontal)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     
     // MARK: - No Filtered Events View
@@ -347,13 +323,14 @@ struct AlertsView: View {
 
             let allEvents = subscriptionManager.getEvents(channelId: channel.id)
 
+            // ✅ FIXED: Apply read/unread/saved filter
             let filteredEvents: [Event] = {
                 switch selectedReadFilter {
                 case .all:
                     return allEvents
                 case .unread:
                     return allEvents.filter { !$0.isRead }
-                case .saved:
+                case .saved:  // ✅ CHANGED: Filter saved events
                     return allEvents.filter { $0.isSaved }
                 }
             }()
@@ -391,25 +368,13 @@ struct AlertsView: View {
     private func setupNotificationObservers() {
         removeNotificationObservers()
         
-        let newEventObserver = NotificationCenter.default.addObserver(
+        eventObserver = NotificationCenter.default.addObserver(
             forName: .newEventReceived,
             object: nil,
             queue: OperationQueue.main
         ) { [self] _ in
-            print("🔔 New event received notification")
             self.updateChannelGroups()
         }
-        
-        _ = NotificationCenter.default.addObserver(
-            forName: .eventsMarkedAsRead,
-            object: nil,
-            queue: OperationQueue.main
-        ) { [self] _ in
-            print("✅ Events marked as read notification")
-            self.updateChannelGroups()
-        }
-        
-        eventObserver = newEventObserver
         
         print("📱 AlertsView: Notification observers setup complete")
     }
@@ -419,8 +384,6 @@ struct AlertsView: View {
             NotificationCenter.default.removeObserver(observer)
             eventObserver = nil
         }
-        
-        NotificationCenter.default.removeObserver(self, name: .eventsMarkedAsRead, object: nil)
         
         print("📱 AlertsView: Notification observers removed")
     }
@@ -450,6 +413,7 @@ struct ImprovedAlertChannelRow: View {
     let lastEvent: Event?
     let unreadCount: Int
     
+    // ✅ FIXED: Use user's timezone for formatting
     private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
@@ -459,6 +423,7 @@ struct ImprovedAlertChannelRow: View {
     
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
+            // Channel Icon
             ZStack {
                 Circle()
                     .fill(iconColor.opacity(0.2))
@@ -470,6 +435,7 @@ struct ImprovedAlertChannelRow: View {
             }
             
             VStack(alignment: .leading, spacing: 4) {
+                // Event Type (Main Title)
                 HStack {
                     Text(channel.eventTypeDisplay)
                         .font(.system(size: 16, weight: unreadCount > 0 ? .bold : .semibold))
@@ -478,13 +444,15 @@ struct ImprovedAlertChannelRow: View {
                     
                     Spacer()
                     
+                    // ✅ FIXED: Correct timestamp formatting
                     if let event = lastEvent {
-                        Text(formatTime(event.date))
+                        Text(dateFormatter.string(from: event.date))
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
                 }
                 
+                // Area Display
                 if let area = lastEvent?.areaDisplay ?? lastEvent?.area {
                     Text(area)
                         .font(.system(size: 13))
@@ -492,6 +460,7 @@ struct ImprovedAlertChannelRow: View {
                         .lineLimit(1)
                 }
                 
+                // Last Event Message
                 if let event = lastEvent {
                     Text(event.message)
                         .font(.system(size: 14, weight: unreadCount > 0 ? .medium : .regular))
@@ -500,6 +469,7 @@ struct ImprovedAlertChannelRow: View {
                 }
             }
             
+            // Unread Badge
             if unreadCount > 0 {
                 Text("\(unreadCount)")
                     .font(.caption)
@@ -512,10 +482,6 @@ struct ImprovedAlertChannelRow: View {
             }
         }
         .padding(.vertical, 8)
-    }
-    
-    private func formatTime(_ date: Date) -> String {
-        return dateFormatter.string(from: date)
     }
     
     private var iconText: String {
@@ -544,7 +510,7 @@ struct ImprovedAlertChannelRow: View {
     }
 }
 
-// MARK: - Filter Sheet
+// MARK: - Filter Sheet with Dropdown Menus
 
 struct FilterSheetView: View {
     @Binding var selectedAreas: Set<String>

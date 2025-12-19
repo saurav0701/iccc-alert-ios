@@ -5,71 +5,236 @@ class SubscriptionManager: ObservableObject {
     static let shared = SubscriptionManager()
     
     @Published var subscribedChannels: [Channel] = []
+    private var eventsCache: [String: [Event]] = [:]
+    private var unreadCountCache: [String: Int] = [:]
+    private var savedEventIds: Set<String> = []  // ✅ NEW: Track saved events
     
-    // Channel data storage: [channelId: ChannelData]
-    private var channels: [String: ChannelData] = [:]
-    private let channelsLock = NSLock()
+    private let userDefaults = UserDefaults.standard
+    private let channelsKey = "subscribed_channels"
+    private let eventsKey = "events_cache"
+    private let unreadKey = "unread_cache"
+    private let savedEventsKey = "saved_events"  // ✅ NEW
     
-    private let channelsKey = "subscribedChannels"
-    private let channelDataKey = "channelData"
+    // Deduplication
+    private var recentEventIds: Set<String> = []
+    private var eventTimestamps: [String: Int64] = [:]
     
-    struct ChannelData: Codable {
-        var channel: Channel
-        var events: [Event]
-        var lastSyncTimestamp: Int64
-    }
+    // App kill detection
+    private let lastRuntimeCheckKey = "last_runtime_check"
+    private let serviceStartedAtKey = "service_started_at"
+    private var runtimeCheckTimer: Timer?
+    
+    private var wasAppKilled = false
     
     private init() {
-        loadChannelsFromUserDefaults()
+        loadData()
+        detectAppKill()
+        markServiceRunning()
+        startRuntimeChecker()
         
-        // Auto-save periodically
-        Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            self?.saveChannelsToUserDefaults()
+        if !wasAppKilled {
+            buildRecentEventIds()
+        }
+        
+        startRecentEventCleanup()
+    }
+    
+    // MARK: - App Kill Detection
+    
+    private func detectAppKill() {
+        let lastRuntimeCheck = userDefaults.object(forKey: lastRuntimeCheckKey) as? Int64 ?? 0
+        let serviceStartedAt = userDefaults.object(forKey: serviceStartedAtKey) as? Int64 ?? 0
+        let now = Int64(Date().timeIntervalSince1970)
+        
+        if serviceStartedAt > 0 && lastRuntimeCheck > 0 {
+            let timeSinceLastCheck = now - lastRuntimeCheck
+            
+            if timeSinceLastCheck > 2 * 60 {
+                print("🔴 DETECTED: App was killed or cleared from background")
+                print("   - Service started at: \(serviceStartedAt)")
+                print("   - Last runtime check: \(lastRuntimeCheck)")
+                print("   - Gap: \(timeSinceLastCheck)s")
+                
+                userDefaults.removeObject(forKey: serviceStartedAtKey)
+                wasAppKilled = true
+            }
+        }
+    }
+    
+    private func markServiceRunning() {
+        let now = Int64(Date().timeIntervalSince1970)
+        userDefaults.set(now, forKey: serviceStartedAtKey)
+        userDefaults.set(now, forKey: lastRuntimeCheckKey)
+    }
+    
+    private func startRuntimeChecker() {
+        runtimeCheckTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
+            let now = Int64(Date().timeIntervalSince1970)
+            self?.userDefaults.set(now, forKey: self?.lastRuntimeCheckKey ?? "")
+        }
+    }
+    
+    // MARK: - Data Management
+    
+    private func loadData() {
+        // Load channels
+        if let data = userDefaults.data(forKey: channelsKey),
+           let channels = try? JSONDecoder().decode([Channel].self, from: data) {
+            subscribedChannels = channels
+            print("📦 Loaded \(channels.count) subscribed channels")
+        }
+        
+        // Load events
+        if let data = userDefaults.data(forKey: eventsKey),
+           let events = try? JSONDecoder().decode([String: [Event]].self, from: data) {
+            eventsCache = events
+            let totalEvents = events.values.reduce(0) { $0 + $1.count }
+            print("📦 Loaded \(totalEvents) events across \(events.count) channels")
+        }
+        
+        // Load unread counts
+        if let data = userDefaults.data(forKey: unreadKey),
+           let unread = try? JSONDecoder().decode([String: Int].self, from: data) {
+            unreadCountCache = unread
+        }
+        
+        // ✅ NEW: Load saved event IDs
+        if let savedIds = userDefaults.array(forKey: savedEventsKey) as? [String] {
+            savedEventIds = Set(savedIds)
+            print("📦 Loaded \(savedIds.count) saved events")
+        }
+    }
+    
+    func forceSave() {
+        saveChannels()
+        saveEvents()
+        saveUnreadCounts()
+        saveSavedEvents()  // ✅ NEW
+        
+        let now = Int64(Date().timeIntervalSince1970)
+        userDefaults.set(now, forKey: lastRuntimeCheckKey)
+        
+        print("💾 Force saved all data")
+    }
+    
+    private func saveChannels() {
+        if let data = try? JSONEncoder().encode(subscribedChannels) {
+            userDefaults.set(data, forKey: channelsKey)
+        }
+    }
+    
+    private func saveEvents() {
+        if let data = try? JSONEncoder().encode(eventsCache) {
+            userDefaults.set(data, forKey: eventsKey)
+            let totalEvents = eventsCache.values.reduce(0) { $0 + $1.count }
+            print("💾 Saved \(totalEvents) events across \(eventsCache.count) channels")
+        }
+    }
+    
+    private func saveUnreadCounts() {
+        if let data = try? JSONEncoder().encode(unreadCountCache) {
+            userDefaults.set(data, forKey: unreadKey)
+        }
+    }
+    
+    // ✅ NEW: Save saved events
+    private func saveSavedEvents() {
+        let savedArray = Array(savedEventIds)
+        userDefaults.set(savedArray, forKey: savedEventsKey)
+    }
+    
+    // MARK: - Recent Event IDs Management
+    
+    private func buildRecentEventIds() {
+        recentEventIds.removeAll()
+        eventTimestamps.removeAll()
+        
+        let fiveMinutesAgo = Int64(Date().timeIntervalSince1970) - (5 * 60)
+        var recentCount = 0
+        
+        for (_, events) in eventsCache {
+            for event in events {
+                if event.timestamp > fiveMinutesAgo {
+                    if let eventId = event.id {
+                        recentEventIds.insert(eventId)
+                        eventTimestamps[eventId] = event.timestamp
+                        recentCount += 1
+                    }
+                }
+            }
+        }
+        
+        print("📋 Built recent event IDs: \(recentCount) events from last 5 minutes")
+    }
+    
+    private func startRecentEventCleanup() {
+        Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            
+            let fiveMinutesAgo = Int64(Date().timeIntervalSince1970) - (5 * 60)
+            var cleaned = 0
+            
+            let idsToRemove = self.eventTimestamps.filter { $0.value < fiveMinutesAgo }.map { $0.key }
+            
+            for id in idsToRemove {
+                self.recentEventIds.remove(id)
+                self.eventTimestamps.removeValue(forKey: id)
+                cleaned += 1
+            }
+            
+            if cleaned > 0 {
+                print("🧹 Cleaned \(cleaned) old event IDs from memory")
+            }
         }
     }
     
     // MARK: - Subscription Management
     
     func subscribe(channel: Channel) {
+        guard !subscribedChannels.contains(where: { $0.id == channel.id }) else {
+            print("⚠️ Already subscribed to \(channel.id)")
+            return
+        }
+        
         var updatedChannel = channel
         updatedChannel.isSubscribed = true
+        subscribedChannels.append(updatedChannel)
         
-        if !subscribedChannels.contains(where: { $0.id == channel.id }) {
-            subscribedChannels.append(updatedChannel)
-            
-            // Initialize channel data if needed
-            channelsLock.lock()
-            if channels[channel.id] == nil {
-                channels[channel.id] = ChannelData(
-                    channel: updatedChannel,
-                    events: [],
-                    lastSyncTimestamp: 0
-                )
-            }
-            channelsLock.unlock()
-            
-            saveChannelsToUserDefaults()
-            print("✅ Subscribed to: \(channel.eventTypeDisplay)")
-            
-            DispatchQueue.main.async {
-                self.objectWillChange.send()
-            }
-        }
+        saveChannels()
+        
+        print("✅ Subscribed to \(channel.id)")
+        
+        WebSocketService.shared.sendSubscriptionV2()
     }
     
     func unsubscribe(channelId: String) {
-        subscribedChannels.removeAll { $0.id == channelId }
-        
-        channelsLock.lock()
-        channels.removeValue(forKey: channelId)
-        channelsLock.unlock()
-        
-        saveChannelsToUserDefaults()
-        print("✅ Unsubscribed from: \(channelId)")
-        
-        DispatchQueue.main.async {
-            self.objectWillChange.send()
+        guard let index = subscribedChannels.firstIndex(where: { $0.id == channelId }) else {
+            return
         }
+        
+        subscribedChannels.remove(at: index)
+        
+        if let events = eventsCache[channelId] {
+            for event in events {
+                if let eventId = event.id {
+                    recentEventIds.remove(eventId)
+                    eventTimestamps.removeValue(forKey: eventId)
+                }
+            }
+        }
+        
+        eventsCache.removeValue(forKey: channelId)
+        unreadCountCache.removeValue(forKey: channelId)
+        
+        ChannelSyncState.shared.clearChannel(channelId: channelId)
+        
+        saveChannels()
+        saveEvents()
+        saveUnreadCounts()
+        
+        print("❌ Unsubscribed from \(channelId)")
+        
+        WebSocketService.shared.sendSubscriptionV2()
     }
     
     func isSubscribed(channelId: String) -> Bool {
@@ -79,30 +244,12 @@ class SubscriptionManager: ObservableObject {
     func updateChannel(_ channel: Channel) {
         if let index = subscribedChannels.firstIndex(where: { $0.id == channel.id }) {
             subscribedChannels[index] = channel
-            
-            channelsLock.lock()
-            if var channelData = channels[channel.id] {
-                channelData.channel = channel
-                channels[channel.id] = channelData
-            }
-            channelsLock.unlock()
-            
-            saveChannelsToUserDefaults()
-            
-            DispatchQueue.main.async {
-                self.objectWillChange.send()
-            }
+            saveChannels()
         }
     }
     
     func isChannelMuted(channelId: String) -> Bool {
-        return subscribedChannels.first(where: { $0.id == channelId })?.isMuted ?? false
-    }
-    
-    // MARK: - NEW: Get All Available Channels
-    
-    func getAllAvailableChannels() -> [Channel] {
-        return subscribedChannels
+        return subscribedChannels.first { $0.id == channelId }?.isMuted ?? false
     }
     
     // MARK: - Event Management
@@ -111,220 +258,196 @@ class SubscriptionManager: ObservableObject {
         guard let eventId = event.id,
               let area = event.area,
               let type = event.type else {
-            print("⚠️ Event missing required fields")
             return false
         }
         
         let channelId = "\(area)_\(type)"
+        let timestamp = event.timestamp
+        let now = Int64(Date().timeIntervalSince1970)
         
-        channelsLock.lock()
-        defer { channelsLock.unlock() }
-        
-        guard var channelData = channels[channelId] else {
-            print("⚠️ Channel not found: \(channelId)")
-            return false
+        if let channelEvents = eventsCache[channelId] {
+            if channelEvents.contains(where: { $0.id == eventId }) {
+                print("⏭️ Event \(eventId) already in cache")
+                return false
+            }
         }
         
-        // Check for duplicates
-        if channelData.events.contains(where: { $0.id == eventId }) {
-            print("⏭️ Duplicate event: \(eventId)")
-            return false
+        if let lastSeenTime = eventTimestamps[eventId] {
+            if (now - lastSeenTime) < 5 * 60 {
+                print("⏭️ Event \(eventId) seen recently")
+                return false
+            }
         }
         
-        // Add event at the beginning (most recent first)
-        channelData.events.insert(event, at: 0)
-        
-        // Keep only last 100 events per channel
-        if channelData.events.count > 100 {
-            channelData.events = Array(channelData.events.prefix(100))
+        // ✅ Set saved status if event was saved before
+        var eventToAdd = event
+        if savedEventIds.contains(eventId) {
+            eventToAdd.isSaved = true
         }
         
-        // Update last sync timestamp
-        channelData.lastSyncTimestamp = event.timestamp
+        if eventsCache[channelId] == nil {
+            eventsCache[channelId] = []
+        }
         
-        channels[channelId] = channelData
+        eventsCache[channelId]?.insert(eventToAdd, at: 0)
         
-        print("✅ Event added: \(channelId) - \(eventId)")
+        recentEventIds.insert(eventId)
+        eventTimestamps[eventId] = timestamp
+        
+        print("✅ Added event \(eventId) to \(channelId) (total: \(eventsCache[channelId]?.count ?? 0))")
+        
+        unreadCountCache[channelId] = (unreadCountCache[channelId] ?? 0) + 1
+        
+        DispatchQueue.global(qos: .background).async {
+            self.saveEvents()
+            self.saveUnreadCounts()
+        }
+        
         return true
     }
     
     func getEvents(channelId: String) -> [Event] {
-        channelsLock.lock()
-        defer { channelsLock.unlock() }
+        guard var events = eventsCache[channelId] else { return [] }
         
-        return channels[channelId]?.events ?? []
+        // ✅ Update saved status for all events
+        for i in 0..<events.count {
+            if let eventId = events[i].id {
+                events[i].isSaved = savedEventIds.contains(eventId)
+            }
+        }
+        
+        return events
     }
     
-    func getTotalEventCount() -> Int {
-        channelsLock.lock()
-        defer { channelsLock.unlock() }
+    func getLastEvent(channelId: String) -> Event? {
+        guard var event = eventsCache[channelId]?.first else { return nil }
         
-        return channels.values.reduce(0) { $0 + $1.events.count }
+        // ✅ Update saved status
+        if let eventId = event.id {
+            event.isSaved = savedEventIds.contains(eventId)
+        }
+        
+        return event
     }
     
     func getUnreadCount(channelId: String) -> Int {
-        channelsLock.lock()
-        defer { channelsLock.unlock() }
-        
-        guard let channelData = channels[channelId] else { return 0 }
-        return channelData.events.filter { !$0.isRead }.count
+        return unreadCountCache[channelId] ?? 0
     }
     
-    // MARK: - Read Status Management
-    
+    // ✅ FIXED: Mark as read and force save
     func markAsRead(channelId: String) {
-        channelsLock.lock()
-        guard var channelData = channels[channelId] else {
-            channelsLock.unlock()
-            print("⚠️ Channel not found: \(channelId)")
-            return
+        unreadCountCache[channelId] = 0
+        saveUnreadCounts()
+        
+        // Force UI update
+        DispatchQueue.main.async {
+            self.objectWillChange.send()
         }
         
-        var markedCount = 0
-        for i in 0..<channelData.events.count {
-            if !channelData.events[i].isRead {
-                channelData.events[i].isRead = true
-                markedCount += 1
-            }
-        }
-        
-        if markedCount > 0 {
-            channels[channelId] = channelData
-            channelsLock.unlock()
-            
-            print("✅ Marked \(markedCount) events as read in channel: \(channelId)")
-            
-            // Persist changes
-            saveChannelsToUserDefaults()
-            
-            // Notify UI to refresh
-            DispatchQueue.main.async {
-                self.objectWillChange.send()
-                NotificationCenter.default.post(name: .eventsMarkedAsRead, object: nil)
-            }
+        print("✅ Marked \(channelId) as read")
+    }
+    
+    func getTotalEventCount() -> Int {
+        return eventsCache.values.reduce(0) { $0 + $1.count }
+    }
+    
+    // ✅ NEW: Saved Events Management
+    
+    func toggleSaved(eventId: String, channelId: String) {
+        if savedEventIds.contains(eventId) {
+            savedEventIds.remove(eventId)
+            print("🗑️ Removed event \(eventId) from saved")
         } else {
-            channelsLock.unlock()
-            print("ℹ️ No unread events to mark in channel: \(channelId)")
+            savedEventIds.insert(eventId)
+            print("💾 Saved event \(eventId)")
+        }
+        
+        // Update event in cache
+        if let index = eventsCache[channelId]?.firstIndex(where: { $0.id == eventId }) {
+            eventsCache[channelId]?[index].isSaved = savedEventIds.contains(eventId)
+        }
+        
+        saveSavedEvents()
+        saveEvents()
+        
+        // Force UI update
+        DispatchQueue.main.async {
+            self.objectWillChange.send()
         }
     }
     
-    // MARK: - Save/Bookmark Management
-    
-    func toggleSaveEvent(channelId: String, eventId: String) {
-        channelsLock.lock()
-        guard var channelData = channels[channelId] else {
-            channelsLock.unlock()
-            print("⚠️ Channel not found: \(channelId)")
-            return
-        }
-        
-        // Find and toggle the event's isSaved status
-        if let eventIndex = channelData.events.firstIndex(where: { $0.id == eventId }) {
-            channelData.events[eventIndex].isSaved.toggle()
-            let newStatus = channelData.events[eventIndex].isSaved
-            channels[channelId] = channelData
-            channelsLock.unlock()
-            
-            print("✅ Event \(eventId) save status: \(newStatus)")
-            
-            // Persist changes
-            saveChannelsToUserDefaults()
-            
-            // Notify UI to refresh
-            DispatchQueue.main.async {
-                self.objectWillChange.send()
-            }
-        } else {
-            channelsLock.unlock()
-            print("⚠️ Event not found: \(eventId)")
-        }
+    func isSaved(eventId: String) -> Bool {
+        return savedEventIds.contains(eventId)
     }
     
-    func getAllSavedEvents() -> [Event] {
-        channelsLock.lock()
-        defer { channelsLock.unlock() }
-        
+    func getSavedEvents() -> [Event] {
         var savedEvents: [Event] = []
         
-        for channelData in channels.values {
-            let saved = channelData.events.filter { $0.isSaved }
-            savedEvents.append(contentsOf: saved)
+        for (_, events) in eventsCache {
+            let channelSavedEvents = events.filter { event in
+                guard let eventId = event.id else { return false }
+                return savedEventIds.contains(eventId)
+            }
+            savedEvents.append(contentsOf: channelSavedEvents)
         }
         
-        // Sort by timestamp (most recent first)
+        // Sort by timestamp (newest first)
         return savedEvents.sorted { $0.timestamp > $1.timestamp }
     }
     
-    func getSavedCount(channelId: String) -> Int {
-        channelsLock.lock()
-        defer { channelsLock.unlock() }
+    // MARK: - Available Channels
+    
+    static func getAllAvailableChannels() -> [Channel] {
+        let areas = [
+            ("barkasayal", "Barka Sayal"),
+            ("argada", "Argada"),
+            ("northkaranpura", "North Karanpura"),
+            ("bokarokargali", "Bokaro & Kargali"),
+            ("kathara", "Kathara"),
+            ("giridih", "Giridih"),
+            ("amrapali", "Amrapali & Chandragupta"),
+            ("magadh", "Magadh & Sanghmitra"),
+            ("rajhara", "Rajhara"),
+            ("kuju", "Kuju"),
+            ("hazaribagh", "Hazaribagh"),
+            ("rajrappa", "Rajrappa"),
+            ("dhori", "Dhori"),
+            ("piparwar", "Piparwar")
+        ]
         
-        guard let channelData = channels[channelId] else { return 0 }
-        return channelData.events.filter { $0.isSaved }.count
-    }
-    
-    // MARK: - Persistence
-    
-    private func saveChannelsToUserDefaults() {
-        // Save subscribed channels list
-        if let encoded = try? JSONEncoder().encode(subscribedChannels) {
-            UserDefaults.standard.set(encoded, forKey: channelsKey)
+        let eventTypes = [
+            ("cd", "Crowd Detection"),
+            ("vd", "Vehicle Detection"),
+            ("pd", "Person Detection"),
+            ("id", "Intrusion Detection"),
+            ("vc", "Vehicle Congestion"),
+            ("ls", "Loading Status"),
+            ("us", "Unloading Status"),
+            ("ct", "Camera Tampering"),
+            ("sh", "Safety Hazard"),
+            ("ii", "Insufficient Illumination"),
+            ("off-route", "Off-Route Alert"),
+            ("tamper", "Tamper Alert")
+        ]
+        
+        var channels: [Channel] = []
+        
+        for (area, areaDisplay) in areas {
+            for (eventType, eventTypeDisplay) in eventTypes {
+                channels.append(Channel(
+                    id: "\(area)_\(eventType)",
+                    area: area,
+                    areaDisplay: areaDisplay,
+                    eventType: eventType,
+                    eventTypeDisplay: eventTypeDisplay,
+                    description: "\(areaDisplay) - \(eventTypeDisplay)",
+                    isSubscribed: false,
+                    isMuted: false,
+                    isPinned: false
+                ))
+            }
         }
         
-        // Save channel data (events)
-        channelsLock.lock()
-        let channelsToSave = channels
-        channelsLock.unlock()
-        
-        if let encoded = try? JSONEncoder().encode(channelsToSave) {
-            UserDefaults.standard.set(encoded, forKey: channelDataKey)
-        }
-        
-        UserDefaults.standard.synchronize()
+        return channels
     }
-    
-    func forceSave() {
-        saveChannelsToUserDefaults()
-        print("💾 Force saved SubscriptionManager state")
-    }
-    
-    private func loadChannelsFromUserDefaults() {
-        // Load subscribed channels
-        if let data = UserDefaults.standard.data(forKey: channelsKey),
-           let decoded = try? JSONDecoder().decode([Channel].self, from: data) {
-            subscribedChannels = decoded
-            print("✅ Loaded \(decoded.count) subscribed channels")
-        }
-        
-        // Load channel data (events)
-        if let data = UserDefaults.standard.data(forKey: channelDataKey),
-           let decoded = try? JSONDecoder().decode([String: ChannelData].self, from: data) {
-            channelsLock.lock()
-            channels = decoded
-            channelsLock.unlock()
-            
-            let totalEvents = channels.values.reduce(0) { $0 + $1.events.count }
-            print("✅ Loaded \(channels.count) channels with \(totalEvents) total events")
-        }
-    }
-    
-    // MARK: - Channel Sync State
-    
-    func getLastSyncInfo(channelId: String) -> (lastEventId: String?, lastTimestamp: Int64) {
-        channelsLock.lock()
-        defer { channelsLock.unlock() }
-        
-        guard let channelData = channels[channelId] else {
-            return (nil, 0)
-        }
-        
-        let lastEvent = channelData.events.first
-        return (lastEvent?.id, channelData.lastSyncTimestamp)
-    }
-}
-
-// MARK: - Notification Extensions
-
-extension Notification.Name {
-    static let eventsMarkedAsRead = Notification.Name("eventsMarkedAsRead")
 }

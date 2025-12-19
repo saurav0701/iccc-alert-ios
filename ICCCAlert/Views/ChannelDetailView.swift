@@ -99,13 +99,18 @@ struct ChannelDetailView: View {
             ImageDetailView(event: event)
         }
         .onAppear {
-            print("📱 ChannelDetailView appeared - marking as read")
-            markAsRead()
+            // ✅ FIXED: Always mark as read when view appears
+            if isSubscribed {
+                subscriptionManager.markAsRead(channelId: channel.id)
+            }
             setupNotificationObserver()
         }
         .onDisappear {
-            print("📱 ChannelDetailView disappeared")
             removeNotificationObserver()
+            // ✅ FIXED: Mark as read again when leaving
+            if isSubscribed {
+                subscriptionManager.markAsRead(channelId: channel.id)
+            }
         }
         .id(refreshTrigger)
     }
@@ -131,7 +136,11 @@ struct ChannelDetailView: View {
                                     showingImageDetail = true
                                 },
                                 onSaveToggle: {
-                                    toggleSaveEvent(event)
+                                    // ✅ NEW: Save/unsave toggle
+                                    if let eventId = event.id {
+                                        subscriptionManager.toggleSaved(eventId: eventId, channelId: channel.id)
+                                        refreshTrigger = UUID()
+                                    }
                                 }
                             )
                         }
@@ -351,26 +360,6 @@ struct ChannelDetailView: View {
             refreshTrigger = UUID()
         }
     }
-    
-    private func toggleSaveEvent(_ event: Event) {
-        subscriptionManager.toggleSaveEvent(channelId: channel.id, eventId: event.id ?? "")
-        
-        DispatchQueue.main.async {
-            refreshTrigger = UUID()
-        }
-    }
-    
-    private func markAsRead() {
-        if unreadCount > 0 {
-            print("✅ Marking \(unreadCount) events as read for channel: \(channel.id)")
-            subscriptionManager.markAsRead(channelId: channel.id)
-            
-            // Force refresh after marking as read
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                refreshTrigger = UUID()
-            }
-        }
-    }
  
     private func setupNotificationObserver() {
         removeNotificationObserver()
@@ -380,7 +369,7 @@ struct ChannelDetailView: View {
         eventObserver = NotificationCenter.default.addObserver(
             forName: .newEventReceived,
             object: nil,
-            queue: OperationQueue.main
+            queue: OperationQueue()
         ) { notification in
             guard let userInfo = notification.userInfo,
                   let eventChannelId = userInfo["channelId"] as? String,
@@ -412,26 +401,31 @@ struct ChannelDetailView: View {
     }
 }
 
+// ✅ UPDATED: ModernEventCard with Save Button
 struct ModernEventCard: View {
     let event: Event
     let channel: Channel
     let onTap: () -> Void
-    let onSaveToggle: () -> Void
+    let onSaveToggle: () -> Void  // ✅ NEW
     
+    // ✅ FIXED: Use user's timezone
     private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
+        formatter.timeZone = TimeZone.current
         return formatter
     }()
     
     private let fullDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "MMM dd, yyyy"
+        formatter.timeZone = TimeZone.current
         return formatter
     }()
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            // ✅ NEW: Header with Save Button
             HStack {
                 HStack(spacing: 6) {
                     Circle()
@@ -449,7 +443,7 @@ struct ModernEventCard: View {
                 
                 Spacer()
                 
-                // Save/Bookmark Button
+                // ✅ NEW: Save/Unsave Button
                 Button(action: onSaveToggle) {
                     Image(systemName: event.isSaved ? "bookmark.fill" : "bookmark")
                         .font(.system(size: 18))
@@ -469,6 +463,7 @@ struct ModernEventCard: View {
                 .foregroundColor(.primary)
                 .lineLimit(2)
 
+            // Image (tappable)
             Button(action: onTap) {
                 CachedEventImage(event: event)
                     .frame(height: 200)
