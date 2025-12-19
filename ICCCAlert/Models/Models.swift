@@ -16,21 +16,49 @@ struct Event: Codable, Identifiable {
     let data: [String: AnyCodableValue]?
     
     var isRead: Bool = false
+    var isSaved: Bool = false
     var priority: String?
     
     // Ignore extra fields from backend
     private enum CodingKeys: String, CodingKey {
         case id, timestamp, source, area, areaDisplay, type, typeDisplay
         case groupId, vehicleNumber, vehicleTransporter, data
-        // Don't include isRead, priority, or any backend fields we don't care about
+        // Don't include isRead, isSaved, priority, or any backend fields we don't care about
     }
     
     var date: Date {
-        // Backend sends timestamp in milliseconds (IST timezone already applied)
-        // Convert to seconds and subtract IST offset to get correct UTC timestamp
-        let timestampInSeconds = TimeInterval(timestamp) / 1000.0
-        let istOffset: TimeInterval = 5.5 * 3600 // 5 hours 30 minutes in seconds
-        return Date(timeIntervalSince1970: timestampInSeconds - istOffset)
+        // Debug: Print raw timestamp
+        let timestampString = String(timestamp)
+        
+        // Check if it's in YYMMDDHHmmss format (12 digits)
+        if timestampString.count == 12 {
+            // Parse: 191225131311 = 19-12-25 13:13:11
+            let year = 2000 + Int(timestampString.prefix(2))!
+            let month = Int(timestampString.dropFirst(2).prefix(2))!
+            let day = Int(timestampString.dropFirst(4).prefix(2))!
+            let hour = Int(timestampString.dropFirst(6).prefix(2))!
+            let minute = Int(timestampString.dropFirst(8).prefix(2))!
+            let second = Int(timestampString.dropFirst(10).prefix(2))!
+            
+            var components = DateComponents()
+            components.year = year
+            components.month = month
+            components.day = day
+            components.hour = hour
+            components.minute = minute
+            components.second = second
+            components.timeZone = TimeZone(identifier: "Asia/Kolkata") // IST timezone
+            
+            return Calendar.current.date(from: components) ?? Date()
+        }
+        
+        // If timestamp looks like milliseconds (13 digits)
+        if timestamp > 1000000000000 {
+            return Date(timeIntervalSince1970: TimeInterval(timestamp) / 1000.0)
+        }
+        
+        // Otherwise treat as seconds (Unix timestamp)
+        return Date(timeIntervalSince1970: TimeInterval(timestamp))
     }
     
     var message: String {

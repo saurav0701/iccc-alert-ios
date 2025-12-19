@@ -47,30 +47,29 @@ struct ChannelDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
-    VStack(spacing: 2) {
-        Text(channel.eventTypeDisplay)
-            .font(.headline)
-        
-        HStack(spacing: 8) {
-            if let area = headerAreaText {
-                Text(area)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                VStack(spacing: 2) {
+                    Text(channel.eventTypeDisplay)
+                        .font(.headline)
+                    
+                    HStack(spacing: 8) {
+                        if let area = headerAreaText {
+                            Text(area)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        if isSubscribed && events.count > 0 {
+                            Text("•")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            
+                            Text("\(events.count) events")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
             }
-            
-            if isSubscribed && events.count > 0 {
-                Text("•")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                
-                Text("\(events.count) events")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-        }
-    }
-}
-
             
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 16) {
@@ -97,24 +96,26 @@ struct ChannelDetailView: View {
             )
         }
         .fullScreenCover(item: $selectedEvent) { event in
-            ImageDetailView(event: event)
+            ImageDetailView(event: event, onSaveToggle: {
+                toggleSaveEvent(event)
+            })
         }
         .onAppear {
+            print("📱 ChannelDetailView appeared - marking as read")
             markAsRead()
             setupNotificationObserver()
         }
         .onDisappear {
+            print("📱 ChannelDetailView disappeared")
             removeNotificationObserver()
         }
         .id(refreshTrigger)
     }
     
     private var headerAreaText: String? {
-    let latestEvent = events.first
-    return latestEvent?.areaDisplay
-        ?? latestEvent?.area
-}
-
+        let latestEvent = events.first
+        return latestEvent?.areaDisplay ?? latestEvent?.area
+    }
     
     private var eventsListView: some View {
         VStack(spacing: 0) {
@@ -124,10 +125,17 @@ struct ChannelDetailView: View {
                 ScrollView {
                     LazyVStack(spacing: 12) {
                         ForEach(events) { event in
-                            ModernEventCard(event: event, channel: channel) {
-                                selectedEvent = event
-                                showingImageDetail = true
-                            }
+                            ModernEventCard(
+                                event: event,
+                                channel: channel,
+                                onTap: {
+                                    selectedEvent = event
+                                    showingImageDetail = true
+                                },
+                                onSaveToggle: {
+                                    toggleSaveEvent(event)
+                                }
+                            )
                         }
                     }
                     .padding(.horizontal)
@@ -346,9 +354,23 @@ struct ChannelDetailView: View {
         }
     }
     
+    private func toggleSaveEvent(_ event: Event) {
+        subscriptionManager.toggleSaveEvent(channelId: channel.id, eventId: event.id ?? "")
+        
+        DispatchQueue.main.async {
+            refreshTrigger = UUID()
+        }
+    }
+    
     private func markAsRead() {
         if unreadCount > 0 {
+            print("✅ Marking \(unreadCount) events as read for channel: \(channel.id)")
             subscriptionManager.markAsRead(channelId: channel.id)
+            
+            // Force refresh after marking as read
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                refreshTrigger = UUID()
+            }
         }
     }
  
@@ -360,7 +382,7 @@ struct ChannelDetailView: View {
         eventObserver = NotificationCenter.default.addObserver(
             forName: .newEventReceived,
             object: nil,
-            queue: OperationQueue()
+            queue: OperationQueue.main
         ) { notification in
             guard let userInfo = notification.userInfo,
                   let eventChannelId = userInfo["channelId"] as? String,
@@ -396,6 +418,7 @@ struct ModernEventCard: View {
     let event: Event
     let channel: Channel
     let onTap: () -> Void
+    let onSaveToggle: () -> Void
     
     private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -410,53 +433,61 @@ struct ModernEventCard: View {
     }()
     
     var body: some View {
-        Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(eventColor)
-                            .frame(width: 8, height: 8)
-                        
-                        Text(event.typeDisplay ?? event.type ?? "Event")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(eventColor)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(eventColor.opacity(0.15))
-                    .cornerRadius(8)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(eventColor)
+                        .frame(width: 8, height: 8)
                     
-                    Spacer()
-                    
-                    Text(dateFormatter.string(from: event.date))
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .foregroundColor(.secondary)
+                    Text(event.typeDisplay ?? event.type ?? "Event")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(eventColor)
                 }
-
-                Text(event.location)
-                    .font(.body)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(eventColor.opacity(0.15))
+                .cornerRadius(8)
+                
+                Spacer()
+                
+                // Save/Bookmark Button
+                Button(action: onSaveToggle) {
+                    Image(systemName: event.isSaved ? "bookmark.fill" : "bookmark")
+                        .font(.system(size: 18))
+                        .foregroundColor(event.isSaved ? .yellow : .gray)
+                }
+                .padding(.trailing, 8)
+                
+                Text(dateFormatter.string(from: event.date))
+                    .font(.caption)
                     .fontWeight(.medium)
-                    .foregroundColor(.primary)
-                    .lineLimit(2)
+                    .foregroundColor(.secondary)
+            }
 
+            Text(event.location)
+                .font(.body)
+                .fontWeight(.medium)
+                .foregroundColor(.primary)
+                .lineLimit(2)
+
+            Button(action: onTap) {
                 CachedEventImage(event: event)
                     .frame(height: 200)
                     .clipped()
                     .cornerRadius(12)
                     .shadow(color: Color.black.opacity(0.1), radius: 5, x: 0, y: 2)
-
-                Text(fullDateFormatter.string(from: event.date))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
             }
-            .padding()
-            .background(Color(.systemBackground))
-            .cornerRadius(16)
-            .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
+            .buttonStyle(PlainButtonStyle())
+
+            Text(fullDateFormatter.string(from: event.date))
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
-        .buttonStyle(PlainButtonStyle())
+        .padding()
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
     }
     
     private var eventColor: Color {
@@ -473,6 +504,71 @@ struct ModernEventCard: View {
         case "off-route": return Color(hex: "FF5722")
         case "tamper": return Color(hex: "F44336")
         default: return Color(hex: "9E9E9E")
+        }
+    }
+}
+
+// MARK: - Image Detail View with Save Option
+
+struct ImageDetailView: View {
+    let event: Event
+    let onSaveToggle: () -> Void
+    @Environment(\.presentationMode) var presentationMode
+    
+    private let fullDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM dd, yyyy 'at' HH:mm"
+        return formatter
+    }()
+    
+    var body: some View {
+        ZStack {
+            Color.black.edgesIgnoringSafeArea(.all)
+            
+            VStack(spacing: 0) {
+                // Header
+                HStack {
+                    Button(action: { presentationMode.wrappedValue.dismiss() }) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 44, height: 44)
+                    }
+                    
+                    Spacer()
+                    
+                    Button(action: onSaveToggle) {
+                        Image(systemName: event.isSaved ? "bookmark.fill" : "bookmark")
+                            .font(.system(size: 20))
+                            .foregroundColor(event.isSaved ? .yellow : .white)
+                            .frame(width: 44, height: 44)
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.top, 50)
+                
+                Spacer()
+                
+                // Image
+                CachedEventImage(event: event)
+                    .aspectRatio(contentMode: .fit)
+                
+                Spacer()
+                
+                // Info
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(event.location)
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    
+                    Text(fullDateFormatter.string(from: event.date))
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.7))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+                .background(Color.black.opacity(0.5))
+            }
         }
     }
 }

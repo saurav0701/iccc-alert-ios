@@ -47,7 +47,7 @@ struct AlertsView: View {
                         Picker("", selection: $selectedReadFilter) {
                             Text("All").tag(AlertFilter.all)
                             Text("Unread").tag(AlertFilter.unread)
-                            Text("Important").tag(AlertFilter.important)
+                            Text("Saved").tag(AlertFilter.saved)
                         }
                         .pickerStyle(SegmentedPickerStyle())
                         
@@ -111,9 +111,23 @@ struct AlertsView: View {
             print("📱 AlertsView: Disappeared")
             removeNotificationObservers()
         }
-        .onChange(of: selectedReadFilter) { _ in updateChannelGroups() }
-        .onChange(of: selectedAreas) { _ in updateChannelGroups() }
-        .onChange(of: selectedEventTypes) { _ in updateChannelGroups() }
+        .onChange(of: selectedReadFilter) { _ in 
+            print("🔄 Filter changed, updating groups")
+            updateChannelGroups() 
+        }
+        .onChange(of: selectedAreas) { _ in 
+            print("🔄 Areas changed, updating groups")
+            updateChannelGroups() 
+        }
+        .onChange(of: selectedEventTypes) { _ in 
+            print("🔄 Event types changed, updating groups")
+            updateChannelGroups() 
+        }
+        .onChange(of: subscriptionManager.objectWillChange) { _ in
+            // This will trigger when mark as read is called
+            print("🔄 SubscriptionManager changed, updating groups")
+            updateChannelGroups()
+        }
     }
 
     @ViewBuilder
@@ -332,8 +346,8 @@ struct AlertsView: View {
                     return allEvents
                 case .unread:
                     return allEvents.filter { !$0.isRead }
-                case .important:
-                    return allEvents.filter { $0.priority?.lowercased() == "high" }
+                case .saved:
+                    return allEvents.filter { $0.isSaved }
                 }
             }()
 
@@ -372,13 +386,27 @@ struct AlertsView: View {
     private func setupNotificationObservers() {
         removeNotificationObservers()
         
-        eventObserver = NotificationCenter.default.addObserver(
+        // Listen for new events
+        let newEventObserver = NotificationCenter.default.addObserver(
             forName: .newEventReceived,
             object: nil,
             queue: OperationQueue.main
         ) { [self] _ in
+            print("🔔 New event received notification")
             self.updateChannelGroups()
         }
+        
+        // Listen for events marked as read
+        let readEventObserver = NotificationCenter.default.addObserver(
+            forName: .eventsMarkedAsRead,
+            object: nil,
+            queue: OperationQueue.main
+        ) { [self] _ in
+            print("✅ Events marked as read notification")
+            self.updateChannelGroups()
+        }
+        
+        eventObserver = newEventObserver
         
         print("📱 AlertsView: Notification observers setup complete")
     }
@@ -388,6 +416,9 @@ struct AlertsView: View {
             NotificationCenter.default.removeObserver(observer)
             eventObserver = nil
         }
+        
+        // Also remove the read events observer
+        NotificationCenter.default.removeObserver(self, name: .eventsMarkedAsRead, object: nil)
         
         print("📱 AlertsView: Notification observers removed")
     }
@@ -653,5 +684,9 @@ struct MultipleSelectionRow: View {
 enum AlertFilter {
     case all
     case unread
-    case important
+    case saved
+}
+
+extension Notification.Name {
+    static let eventsMarkedAsRead = Notification.Name("eventsMarkedAsRead")
 }
