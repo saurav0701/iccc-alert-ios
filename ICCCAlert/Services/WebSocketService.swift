@@ -12,7 +12,7 @@ class WebSocketService: ObservableObject {
     private var session: URLSession?
     private var pingTimer: Timer?
     
-    private let baseURL = "ws://192.168.29.70:19999"
+    private let baseURL = "ws://192.168.29.69:19999"
     
     // ✅ NEW: Track pending subscriptions
     private var pendingSubscriptionUpdate = false
