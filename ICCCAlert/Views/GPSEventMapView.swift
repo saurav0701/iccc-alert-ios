@@ -42,16 +42,14 @@ struct GPSEventMapView: View {
             VStack(spacing: 0) {
                 headerView
                 Spacer()
-                bottomInfoView
             }
             
-            // Legend and Coordinates
+            // Legend only
             VStack {
                 Spacer()
                 HStack {
                     legendView
                     Spacer()
-                    coordinatesView
                 }
                 .padding()
             }
@@ -80,7 +78,7 @@ struct GPSEventMapView: View {
                     .font(.title2)
                     .fontWeight(.semibold)
                 
-                // Vehicle Info
+                // Vehicle Info Row
                 HStack(spacing: 20) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Vehicle Number")
@@ -99,6 +97,51 @@ struct GPSEventMapView: View {
                             .font(.subheadline)
                             .font(.system(size: 15, weight: .medium))
                     }
+                }
+                
+                // Coordinates and Time Row
+                HStack(spacing: 20) {
+                    if let alertLoc = event.gpsAlertLocation {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Coordinates")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            HStack(spacing: 4) {
+                                Image(systemName: "location.fill")
+                                    .font(.caption)
+                                    .foregroundColor(.red)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(String(format: "%.6f", alertLoc.lat))
+                                        .font(.system(size: 13, weight: .medium))
+                                    Text(String(format: "%.6f", alertLoc.lng))
+                                        .font(.system(size: 13, weight: .medium))
+                                }
+                            }
+                        }
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Time")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(formatTime(event.date))
+                                .font(.system(size: 13, weight: .medium))
+                            Text(formatDate(event.date))
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                
+                // Area Info
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Area")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(event.areaDisplay ?? event.area ?? "Unknown")
+                        .font(.subheadline)
+                        .font(.system(size: 15, weight: .medium))
                 }
                 
                 // Alert Subtype (for tamper)
@@ -156,8 +199,8 @@ struct GPSEventMapView: View {
     }
     
     private var geofenceColor: Color {
-        // Get color from attributes (same priority as Android)
-        if let colorStr = event.geofenceInfo?.attributes?.polylineColor ?? event.geofenceInfo?.attributes?.color {
+        // Get color from attributes (priority: color > polylineColor)
+        if let colorStr = event.geofenceInfo?.attributes?.color ?? event.geofenceInfo?.attributes?.polylineColor {
             return Color(hex: colorStr)
         }
         // Default based on type
@@ -165,60 +208,6 @@ struct GPSEventMapView: View {
             return Color(hex: "#FFC107") // Yellow for paths
         }
         return Color(hex: "#3388ff") // Blue default
-    }
-    
-    private var coordinatesView: some View {
-        VStack(alignment: .trailing, spacing: 4) {
-            if let alertLoc = event.gpsAlertLocation {
-                HStack(spacing: 4) {
-                    Image(systemName: "location.fill")
-                        .font(.caption)
-                    VStack(alignment: .trailing, spacing: 2) {
-                        Text(String(format: "%.6f", alertLoc.lat))
-                            .font(.caption)
-                            .font(.system(size: 12, weight: .medium))
-                        Text(String(format: "%.6f", alertLoc.lng))
-                            .font(.caption)
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                }
-            }
-        }
-        .padding(12)
-        .background(Color(.systemBackground).opacity(0.95))
-        .cornerRadius(8)
-        .shadow(color: .black.opacity(0.1), radius: 5)
-    }
-    
-    private var bottomInfoView: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Area")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text(event.areaDisplay ?? event.area ?? "Unknown")
-                    .font(.subheadline)
-                    .font(.system(size: 15, weight: .medium))
-            }
-            
-            Spacer()
-            
-            VStack(alignment: .trailing, spacing: 4) {
-                Text("Time")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                HStack(spacing: 4) {
-                    Text(formatTime(event.date))
-                    Text("•")
-                    Text(formatDate(event.date))
-                }
-                .font(.subheadline)
-                .font(.system(size: 15, weight: .medium))
-            }
-        }
-        .padding()
-        .background(Color(.systemBackground))
-        .shadow(color: .black.opacity(0.1), radius: 5, x: 0, y: -2)
     }
     
     private func setupMapData() {
@@ -385,12 +374,12 @@ struct GoogleHybridMapView: UIViewRepresentable {
            let geojson = geofence.geojson,
            let coords = geojson.coordinatesArray {
             
-            // Get color from attributes (same priority as Android)
+            // Get color from attributes (priority: color > polylineColor)
             let colorStr: String
-            if let polylineColor = geofence.attributes?.polylineColor {
-                colorStr = polylineColor
-            } else if let color = geofence.attributes?.color {
+            if let color = geofence.attributes?.color {
                 colorStr = color
+            } else if let polylineColor = geofence.attributes?.polylineColor {
+                colorStr = polylineColor
             } else if geofence.type == "P" {
                 colorStr = "#FFC107" // Yellow for paths
             } else {
