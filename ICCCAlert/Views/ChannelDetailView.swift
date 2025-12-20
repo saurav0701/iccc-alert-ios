@@ -111,11 +111,14 @@ struct ChannelDetailView: View {
             }
         }
         .onAppear {
-            if isSubscribed {
-                subscriptionManager.markAsRead(channelId: channel.id)
-            }
-            setupNotificationObserver()
-        }
+    if isSubscribed {
+        subscriptionManager.markAsRead(channelId: channel.id)
+        // ✅ NEW: Clear notifications for this channel
+        NotificationManager.shared.clearNotifications(for: channel.id)
+        NotificationManager.shared.updateBadgeCount()
+    }
+    setupNotificationObserver()
+}
         .onDisappear {
             removeNotificationObserver()
             if isSubscribed {

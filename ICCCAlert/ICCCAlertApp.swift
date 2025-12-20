@@ -12,13 +12,16 @@ struct ICCCAlertApp: App {
         setupAppearance()
         _ = BackgroundWebSocketManager.shared
         
+        // ✅ Setup notifications
+        NotificationManager.shared.requestAuthorization()
+        NotificationManager.shared.setupNotificationCategories()
+        
         // ✅ Register for app termination notification
         NotificationCenter.default.addObserver(
             forName: UIApplication.willTerminateNotification,
             object: nil,
             queue: .main
         ) { _ in
-            // ✅ Call static method instead of instance method
             ICCCAlertApp.handleAppTermination()
         }
     }
@@ -77,35 +80,36 @@ struct ICCCAlertApp: App {
                 webSocketService.connect()
             }
             
+            // ✅ Clear badge when app opens
+            NotificationManager.shared.updateBadgeCount()
+            
         case .inactive:
             print("📱 App became inactive")
-            // ✅ Keep WebSocket running (iOS will suspend if needed)
             
         case .background:
             print("📱 App moved to background")
-            // ✅ CRITICAL: Force save state before suspension
             saveAppState()
+            
+            // ✅ Update badge count
+            NotificationManager.shared.updateBadgeCount()
             
         @unknown default:
             break
         }
     }
     
-    // ✅ NEW: Handle app termination (static method to avoid capture issues)
+    // ✅ Handle app termination
     private static func handleAppTermination() {
         print("🛑 App will terminate - saving state")
         
-        // ✅ CRITICAL: Save everything synchronously
         SubscriptionManager.shared.forceSave()
         ChannelSyncState.shared.forceSave()
-        
-        // ✅ Disconnect cleanly (flushes ACKs)
         WebSocketService.shared.disconnect()
         
         print("✅ App state saved on termination")
     }
     
-    // ✅ NEW: Force save app state
+    // ✅ Force save app state
     private func saveAppState() {
         print("💾 Saving app state...")
         subscriptionManager.forceSave()

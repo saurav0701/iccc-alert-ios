@@ -232,19 +232,30 @@ class WebSocketService: ObservableObject {
         // ✅ CRITICAL: Add to storage FIRST (priority)
         let added = SubscriptionManager.shared.addEvent(event)
         
-        if added {
-            processedCount += 1
-            DebugLogger.shared.log("Event stored successfully", emoji: "💾", color: .green)
-            
-            // Notify UI
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(
-                    name: .newEventReceived,
-                    object: nil,
-                    userInfo: ["channelId": channelId, "eventId": eventId]
-                )
-                DebugLogger.shared.log("UI notification posted", emoji: "📢", color: .blue)
-            }
+        // Around line 180, after "Event stored successfully"
+if added {
+    processedCount += 1
+    DebugLogger.shared.log("Event stored successfully", emoji: "💾", color: .green)
+    
+    // ✅ NEW: Send local notification
+    NotificationManager.shared.sendEventNotification(event: event, channel: Channel(
+        id: channelId,
+        area: area,
+        eventType: type,
+        areaDisplay: event.areaDisplay,
+        eventTypeDisplay: event.typeDisplay ?? type
+    ))
+    
+    // Notify UI
+    DispatchQueue.main.async {
+        NotificationCenter.default.post(
+            name: .newEventReceived,
+            object: nil,
+            userInfo: ["channelId": channelId, "eventId": eventId]
+        )
+        DebugLogger.shared.log("UI notification posted", emoji: "📢", color: .blue)
+    }
+}
         } else {
             droppedCount += 1
             DebugLogger.shared.log("Event rejected (duplicate)", emoji: "⏭️", color: .orange)

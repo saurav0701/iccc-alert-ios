@@ -20,24 +20,35 @@
     <string>1</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
-    
+
+    <!-- ✅ Added notification settings -->
+    <key>UIUserNotificationSettings</key>
+    <dict>
+        <key>UIUserNotificationTypesAlert</key>
+        <true/>
+        <key>UIUserNotificationTypesBadge</key>
+        <true/>
+        <key>UIUserNotificationTypesSound</key>
+        <true/>
+    </dict>
+
     <key>UIApplicationSceneManifest</key>
     <dict>
         <key>UIApplicationSupportsMultipleScenes</key>
         <true/>
     </dict>
-    
+
     <key>UILaunchScreen</key>
     <dict/>
-    
+
     <key>UIRequiredDeviceCapabilities</key>
     <array>
         <string>armv7</string>
     </array>
 
     <key>NSLocationWhenInUseUsageDescription</key>
-<string>We need your location to show nearby events</string>
-    
+    <string>We need your location to show nearby events</string>
+
     <key>UISupportedInterfaceOrientations</key>
     <array>
         <string>UIInterfaceOrientationPortrait</string>
@@ -49,7 +60,7 @@
     <array>
         <string>com.icccalert.websocket.refresh</string>
     </array>
-    
+
     <key>UIBackgroundModes</key>
     <array>
         <string>fetch</string>
@@ -59,7 +70,7 @@
 
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
-    
+
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>
