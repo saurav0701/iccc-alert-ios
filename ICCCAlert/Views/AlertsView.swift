@@ -522,14 +522,7 @@ struct AlertsView: View {
     }
 }
 
-// ✅ NEW: System filter enum
-enum SystemFilter {
-    case all
-    case va   // Video Analytics (all except VTS)
-    case vts  // Vehicle Tracking System (off-route, tamper, overspeed)
-}
-
-// ✅ NEW: Filter chip component
+// MARK: - Filter chip component
 struct FilterChip: View {
     let title: String
     let icon: String
