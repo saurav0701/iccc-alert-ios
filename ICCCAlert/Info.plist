@@ -34,6 +34,9 @@
     <array>
         <string>armv7</string>
     </array>
+
+    <key>NSLocationWhenInUseUsageDescription</key>
+<string>We need your location to show nearby events</string>
     
     <key>UISupportedInterfaceOrientations</key>
     <array>
