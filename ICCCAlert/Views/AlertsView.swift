@@ -390,20 +390,24 @@ struct AlertsView: View {
                         unreadCount: subscriptionManager.getUnreadCount(channelId: group.channel.id)
                     )
                 }
-                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                    Button(role: .destructive) {
+                .contextMenu {
+                    Button(action: {
+                        subscriptionManager.markAsRead(channelId: group.channel.id)
+                        updateChannelGroups()
+                    }) {
+                        Label("Mark as Read", systemImage: "checkmark.circle")
+                    }
+                    
+                    Button(action: {
                         subscriptionManager.unsubscribe(channelId: group.channel.id)
                         updateChannelGroups()
-                    } label: {
+                    }) {
                         Label("Unsubscribe", systemImage: "bell.slash.fill")
                     }
                 }
             }
         }
         .listStyle(PlainListStyle())
-        .refreshable {
-            updateChannelGroups()
-        }
     }
     
     // ✅ UPDATED: Filter logic with VA/VTS support
@@ -770,7 +774,7 @@ struct FilterSheetView: View {
                     Button("Done") {
                         presentationMode.wrappedValue.dismiss()
                     }
-                    .fontWeight(.semibold)
+                    .font(.system(size: 17, weight: .semibold))
                 }
             }
         }
