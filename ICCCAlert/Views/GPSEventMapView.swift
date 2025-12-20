@@ -88,7 +88,7 @@ struct GPSEventMapView: View {
                             .foregroundColor(.secondary)
                         Text(event.vehicleNumber ?? "Unknown")
                             .font(.subheadline)
-                            .fontWeight(.medium)
+                            .font(.system(size: 15, weight: .medium))
                     }
                     
                     VStack(alignment: .leading, spacing: 4) {
@@ -97,7 +97,7 @@ struct GPSEventMapView: View {
                             .foregroundColor(.secondary)
                         Text(event.vehicleTransporter ?? "Unknown")
                             .font(.subheadline)
-                            .fontWeight(.medium)
+                            .font(.system(size: 15, weight: .medium))
                     }
                 }
                 
@@ -109,7 +109,7 @@ struct GPSEventMapView: View {
                             .foregroundColor(.secondary)
                         Text(subType)
                             .font(.subheadline)
-                            .fontWeight(.medium)
+                            .font(.system(size: 15, weight: .medium))
                             .foregroundColor(.orange)
                     }
                 }
@@ -176,10 +176,10 @@ struct GPSEventMapView: View {
                     VStack(alignment: .trailing, spacing: 2) {
                         Text(String(format: "%.6f", alertLoc.lat))
                             .font(.caption)
-                            .fontWeight(.medium)
+                            .font(.system(size: 12, weight: .medium))
                         Text(String(format: "%.6f", alertLoc.lng))
                             .font(.caption)
-                            .fontWeight(.medium)
+                            .font(.system(size: 12, weight: .medium))
                     }
                 }
             }
@@ -198,7 +198,7 @@ struct GPSEventMapView: View {
                     .foregroundColor(.secondary)
                 Text(event.areaDisplay ?? event.area ?? "Unknown")
                     .font(.subheadline)
-                    .fontWeight(.medium)
+                    .font(.system(size: 15, weight: .medium))
             }
             
             Spacer()
@@ -213,7 +213,7 @@ struct GPSEventMapView: View {
                     Text(formatDate(event.date))
                 }
                 .font(.subheadline)
-                .fontWeight(.medium)
+                .font(.system(size: 15, weight: .medium))
             }
         }
         .padding()
@@ -366,7 +366,7 @@ struct GoogleHybridMapView: UIViewRepresentable {
         mapView.removeAnnotations(mapView.annotations)
         
         // Remove old overlays (except tile overlay)
-        let tileOverlay = mapView.overlays.first { $0 is GoogleHybridTileOverlay }
+        _ = mapView.overlays.first { $0 is GoogleHybridTileOverlay }
         mapView.removeOverlays(mapView.overlays.filter { !($0 is GoogleHybridTileOverlay) })
         
         // Add new annotations
@@ -549,34 +549,5 @@ class CustomMapAnnotation: NSObject, MKAnnotation {
         self.title = title
         self.subtitle = subtitle
         self.color = color
-    }
-}
-
-// MARK: - Color Extension (Hex Support)
-
-extension Color {
-    init(hex: String) {
-        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var int: UInt64 = 0
-        Scanner(string: hex).scanHexInt64(&int)
-        let a, r, g, b: UInt64
-        switch hex.count {
-        case 3: // RGB (12-bit)
-            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
-        case 6: // RGB (24-bit)
-            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
-        case 8: // ARGB (32-bit)
-            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
-        default:
-            (a, r, g, b) = (255, 0, 0, 0)
-        }
-
-        self.init(
-            .sRGB,
-            red: Double(r) / 255,
-            green: Double(g) / 255,
-            blue: Double(b) / 255,
-            opacity: Double(a) / 255
-        )
     }
 }
