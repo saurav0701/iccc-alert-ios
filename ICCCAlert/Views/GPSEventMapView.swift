@@ -132,14 +132,12 @@ struct GPSEventMapView: View {
                                         .foregroundColor(.secondary)
                                     Text(String(format: "%.6f", alertLoc.lat))
                                         .fontWeight(.medium)
-                                        .textSelection(.enabled)
                                 }
                                 HStack(spacing: 12) {
                                     Text("Lng:")
                                         .foregroundColor(.secondary)
                                     Text(String(format: "%.6f", alertLoc.lng))
                                         .fontWeight(.medium)
-                                        .textSelection(.enabled)
                                 }
                             }
                         }
@@ -194,7 +192,7 @@ struct GPSEventMapView: View {
                     Button("Done") {
                         showInfoSheet = false
                     }
-                    .fontWeight(.semibold)
+                    .font(.body.weight(.semibold))
                 }
             }
         }
