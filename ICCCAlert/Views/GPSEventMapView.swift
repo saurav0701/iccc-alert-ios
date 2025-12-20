@@ -9,6 +9,7 @@ struct GPSEventMapView: View {
     
     @State private var region: MKCoordinateRegion
     @State private var annotations: [IdentifiableAnnotation] = []
+    @State private var showInfoSheet = false
     
     init(event: Event) {
         self.event = event
@@ -38,13 +39,40 @@ struct GPSEventMapView: View {
             )
             .edgesIgnoringSafeArea(.all)
             
-            // Header Overlay
-            VStack(spacing: 0) {
-                headerView
+            // Top Controls
+            VStack {
+                HStack {
+                    // Back Button
+                    Button(action: { presentationMode.wrappedValue.dismiss() }) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(.primary)
+                            .frame(width: 44, height: 44)
+                            .background(Color(.systemBackground))
+                            .clipShape(Circle())
+                            .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 2)
+                    }
+                    
+                    Spacer()
+                    
+                    // Info Button
+                    Button(action: { showInfoSheet = true }) {
+                        Image(systemName: "info.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundColor(.white)
+                            .frame(width: 44, height: 44)
+                            .background(Color.blue)
+                            .clipShape(Circle())
+                            .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 2)
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.top, 50)
+                
                 Spacer()
             }
             
-            // Legend only
+            // Legend at Bottom
             VStack {
                 Spacer()
                 HStack {
@@ -58,108 +86,117 @@ struct GPSEventMapView: View {
             setupMapData()
         }
         .navigationBarHidden(true)
+        .sheet(isPresented: $showInfoSheet) {
+            eventInfoSheet
+        }
     }
     
-    private var headerView: some View {
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 12) {
-                // Back Button
-                Button(action: { presentationMode.wrappedValue.dismiss() }) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "chevron.left")
-                        Text("Back")
-                    }
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(.primary)
-                }
-                
-                // Event Type
-                Text(event.typeDisplay ?? "GPS Alert")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                
-                // Vehicle Info Row
-                HStack(spacing: 20) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Vehicle Number")
+    private var eventInfoSheet: some View {
+        NavigationView {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    // Event Type
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Event Type")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        Text(event.vehicleNumber ?? "Unknown")
-                            .font(.subheadline)
-                            .font(.system(size: 15, weight: .medium))
+                            .textCase(.uppercase)
+                        Text(event.typeDisplay ?? "GPS Alert")
+                            .font(.title2)
+                            .fontWeight(.bold)
                     }
                     
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Transporter")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Text(event.vehicleTransporter ?? "Unknown")
-                            .font(.subheadline)
-                            .font(.system(size: 15, weight: .medium))
+                    Divider()
+                    
+                    // Vehicle Info
+                    VStack(alignment: .leading, spacing: 16) {
+                        InfoRow(label: "Vehicle Number", value: event.vehicleNumber ?? "Unknown", icon: "car.fill")
+                        InfoRow(label: "Transporter", value: event.vehicleTransporter ?? "Unknown", icon: "building.2.fill")
                     }
-                }
-                
-                // Coordinates and Time Row
-                HStack(spacing: 20) {
-                    if let alertLoc = event.gpsAlertLocation {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Coordinates")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            HStack(spacing: 4) {
-                                Image(systemName: "location.fill")
-                                    .font(.caption)
-                                    .foregroundColor(.red)
-                                VStack(alignment: .leading, spacing: 2) {
+                    
+                    Divider()
+                    
+                    // Location Info
+                    VStack(alignment: .leading, spacing: 16) {
+                        if let alertLoc = event.gpsAlertLocation {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Image(systemName: "location.fill")
+                                        .foregroundColor(.red)
+                                    Text("Coordinates")
+                                        .font(.subheadline)
+                                        .fontWeight(.semibold)
+                                }
+                                HStack(spacing: 12) {
+                                    Text("Lat:")
+                                        .foregroundColor(.secondary)
                                     Text(String(format: "%.6f", alertLoc.lat))
-                                        .font(.system(size: 13, weight: .medium))
+                                        .fontWeight(.medium)
+                                        .textSelection(.enabled)
+                                }
+                                HStack(spacing: 12) {
+                                    Text("Lng:")
+                                        .foregroundColor(.secondary)
                                     Text(String(format: "%.6f", alertLoc.lng))
-                                        .font(.system(size: 13, weight: .medium))
+                                        .fontWeight(.medium)
+                                        .textSelection(.enabled)
                                 }
                             }
                         }
+                        
+                        InfoRow(label: "Area", value: event.areaDisplay ?? event.area ?? "Unknown", icon: "map.fill")
                     }
                     
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Time")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        VStack(alignment: .leading, spacing: 2) {
+                    Divider()
+                    
+                    // Time Info
+                    VStack(alignment: .leading, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Image(systemName: "clock.fill")
+                                    .foregroundColor(.blue)
+                                Text("Time")
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                            }
                             Text(formatTime(event.date))
-                                .font(.system(size: 13, weight: .medium))
+                                .font(.title3)
+                                .fontWeight(.medium)
                             Text(formatDate(event.date))
-                                .font(.system(size: 13, weight: .medium))
                                 .foregroundColor(.secondary)
                         }
                     }
-                }
-                
-                // Area Info
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Area")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(event.areaDisplay ?? event.area ?? "Unknown")
-                        .font(.subheadline)
-                        .font(.system(size: 15, weight: .medium))
-                }
-                
-                // Alert Subtype (for tamper)
-                if let subType = event.alertSubType {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Alert Type")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Text(subType)
-                            .font(.subheadline)
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundColor(.orange)
+                    
+                    // Alert Subtype (for tamper)
+                    if let subType = event.alertSubType {
+                        Divider()
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Alert Type")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .textCase(.uppercase)
+                            Text(subType)
+                                .font(.headline)
+                                .foregroundColor(.orange)
+                                .padding(.vertical, 8)
+                                .padding(.horizontal, 12)
+                                .background(Color.orange.opacity(0.15))
+                                .cornerRadius(8)
+                        }
                     }
                 }
+                .padding()
             }
-            .padding()
-            .background(Color(.systemBackground))
-            .shadow(color: .black.opacity(0.1), radius: 5, x: 0, y: 2)
+            .navigationTitle("Event Details")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        showInfoSheet = false
+                    }
+                    .fontWeight(.semibold)
+                }
+            }
         }
     }
     
@@ -171,6 +208,7 @@ struct GPSEventMapView: View {
                     .frame(width: 12, height: 12)
                 Text(legendText)
                     .font(.caption)
+                    .fontWeight(.medium)
             }
             
             if event.geofenceInfo != nil {
@@ -180,13 +218,14 @@ struct GPSEventMapView: View {
                         .frame(width: 12, height: 3)
                     Text("Geofence")
                         .font(.caption)
+                        .fontWeight(.medium)
                 }
             }
         }
         .padding(12)
         .background(Color(.systemBackground).opacity(0.95))
-        .cornerRadius(8)
-        .shadow(color: .black.opacity(0.1), radius: 5)
+        .cornerRadius(10)
+        .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 2)
     }
     
     private var legendText: String {
@@ -315,6 +354,29 @@ struct GPSEventMapView: View {
         formatter.dateFormat = "MMM dd, yyyy"
         formatter.timeZone = TimeZone.current
         return formatter.string(from: date)
+    }
+}
+
+// MARK: - Info Row Component
+
+struct InfoRow: View {
+    let label: String
+    let value: String
+    let icon: String
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: icon)
+                    .foregroundColor(.blue)
+                Text(label)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+            }
+            Text(value)
+                .font(.body)
+                .fontWeight(.medium)
+        }
     }
 }
 
