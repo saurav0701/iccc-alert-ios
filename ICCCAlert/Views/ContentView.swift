@@ -1,12 +1,6 @@
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var subscriptionManager = SubscriptionManager.shared
-    
-    var savedCount: Int {
-        subscriptionManager.getSavedEvents().count
-    }
-    
     var body: some View {
         TabView {
             AlertsView()
@@ -20,7 +14,6 @@ struct ContentView: View {
                     Image(systemName: "bookmark.fill")
                     Text("Saved")
                 }
-                .badge(savedCount > 0 ? savedCount : nil)
             
             ChannelsView()
                 .tabItem {
