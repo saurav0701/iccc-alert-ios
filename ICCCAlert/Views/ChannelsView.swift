@@ -7,21 +7,21 @@ struct ChannelsView: View {
     
     var availableAreas: [(area: String, display: String)] {
         let areas = [
-            ("barkasayal", "Barka Sayal"),
-            ("argada", "Argada"),
-            ("northkaranpura", "North Karanpura"),
-            ("bokarokargali", "Bokaro & Kargali"),
-            ("kathara", "Kathara"),
-            ("giridih", "Giridih"),
-            ("amrapali", "Amrapali & Chandragupta"),
-            ("magadh", "Magadh & Sanghmitra"),
-            ("rajhara", "Rajhara"),
-            ("kuju", "Kuju"),
-            ("hazaribagh", "Hazaribagh"),
-            ("rajrappa", "Rajrappa"),
-            ("dhori", "Dhori"),
-            ("piparwar", "Piparwar")
-        ]
+    ("barora", "Barora Area"),
+    ("block2", "Block II Area"),
+    ("govindpur", "Govindpur Area"),
+    ("katras", "Katras Area"),
+    ("sijua", "Sijua Area"),
+    ("kusunda", "Kusunda Area"),
+    ("pbarea", "PB Area"),
+    ("bastacolla", "Bastacolla Area"),
+    ("lodna", "Lodna Area"),
+    ("ej", "EJ Area"),
+    ("cvarea", "CV Area"),
+    ("ccwo", "CCWO"),
+    ("wjarea", "WJ Area")
+]
+
         
         if searchText.isEmpty {
             return areas

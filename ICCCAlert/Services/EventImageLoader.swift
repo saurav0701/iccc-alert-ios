@@ -20,24 +20,51 @@ class EventImageLoader {
             .replacingOccurrences(of: "_", with: "")
         
         switch normalizedArea {
-        case "barkasayal": return "https://barkasayal.cclai.in/api"
-        case "argada": return "https://argada.cclai.in/api"
-        case "northkaranpura": return "https://nk.cclai.in/api"
-        case "bokarokargali": return "https://bk.cclai.in/api"
-        case "kathara": return "https://kathara.cclai.in/api"
-        case "giridih": return "https://giridih.cclai.in/api"
-        case "amrapali": return "https://amrapali.cclai.in/api"
-        case "magadh": return "https://magadh.cclai.in/api"
-        case "rajhara": return "https://rajhara.cclai.in/api"
-        case "kuju": return "https://kuju.cclai.in/api"
-        case "hazaribagh": return "https://hazaribagh.cclai.in/api"
-        case "rajrappa": return "https://rajrappa.cclai.in/api"
-        case "dhori": return "https://dhori.cclai.in/api"
-        case "piparwar": return "https://piparwar.cclai.in/api"
-        default:
-            print("⚠️ Unknown area: \(area), using default URL")
-            return "https://barkasayal.cclai.in/api"
-        }
+
+case "barora":
+    return "ws://103.208.173.131:5050/"
+
+case "block2":
+    return "ws://103.208.173.147:5050/"
+
+case "govindpur":
+    return "ws://103.208.173.163:5050/"
+
+case "katras":
+    return "ws://a5va.bccliccc.in:10050/"
+
+case "sijua":
+    return "ws://a5va.bccliccc.in:10050/"
+
+case "kusunda":
+    return "ws://a6va.bccliccc.in:5050/"
+
+case "pbarea":
+    return "ws://103.208.173.195:5050/"
+
+case "bastacolla":
+    return "ws://a9va.bccliccc.in:5050/"
+
+case "lodna":
+    return "ws://a10va.bccliccc.in:5050/"
+
+case "ej":
+    return "ws://103.210.88.194:5050/"
+
+case "cvarea":
+    return "ws://103.210.88.211:5050/"
+
+case "ccwo":
+    return "ws://103.208.173.179:5050/"
+
+case "wjarea":
+    return "ws://103.208.173.211:5050/"
+
+default:
+    print("⚠️ Unknown area: \(area), using default BCCL URL")
+    return "ws://103.208.173.131:5050/" // Barora as safe default
+}
+
     }
     
     /// Build the full image URL for an event
