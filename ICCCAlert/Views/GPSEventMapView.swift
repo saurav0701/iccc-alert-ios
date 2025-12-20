@@ -8,8 +8,7 @@ struct GPSEventMapView: View {
     @Environment(\.presentationMode) var presentationMode
     
     @State private var region: MKCoordinateRegion
-    @State private var annotations: [MapAnnotation] = []
-    @State private var overlays: [MapOverlay] = []
+    @State private var annotations: [IdentifiableAnnotation] = []
     
     init(event: Event) {
         self.event = event
@@ -30,30 +29,12 @@ struct GPSEventMapView: View {
     
     var body: some View {
         ZStack {
-            // Map
-            Map(coordinateRegion: $region,
-                interactionModes: .all,
-                showsUserLocation: false,
-                annotationItems: annotations) { annotation in
-                MapAnnotation(coordinate: annotation.coordinate) {
-                    VStack(spacing: 0) {
-                        Image(systemName: "mappin.circle.fill")
-                            .font(.system(size: 40))
-                            .foregroundColor(annotation.color)
-                            .shadow(color: .black.opacity(0.3), radius: 3, x: 0, y: 2)
-                        
-                        Text(annotation.label)
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(annotation.color)
-                            .cornerRadius(8)
-                            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 1)
-                    }
-                }
-            }
+            // Map using iOS 14 compatible API
+            MapViewRepresentable(
+                region: $region,
+                annotations: annotations,
+                event: event
+            )
             .edgesIgnoringSafeArea(.all)
             
             // Header Overlay
@@ -63,7 +44,7 @@ struct GPSEventMapView: View {
                 bottomInfoView
             }
             
-            // Legend
+            // Legend and Coordinates
             VStack {
                 Spacer()
                 HStack {
@@ -82,7 +63,6 @@ struct GPSEventMapView: View {
     
     private var headerView: some View {
         VStack(spacing: 0) {
-            // Header Card
             VStack(alignment: .leading, spacing: 12) {
                 // Back Button
                 Button(action: { presentationMode.wrappedValue.dismiss() }) {
@@ -196,7 +176,7 @@ struct GPSEventMapView: View {
                     .foregroundColor(.secondary)
                 Text(event.areaDisplay ?? event.area ?? "Unknown")
                     .font(.subheadline)
-                    .fontWeight(.medium)
+                    .font(.system(size: 15, weight: .medium))
             }
             
             Spacer()
@@ -211,7 +191,7 @@ struct GPSEventMapView: View {
                     Text(formatDate(event.date))
                 }
                 .font(.subheadline)
-                .fontWeight(.medium)
+                .font(.system(size: 15, weight: .medium))
             }
         }
         .padding()
@@ -220,16 +200,16 @@ struct GPSEventMapView: View {
     }
     
     private func setupMapData() {
-        var tempAnnotations: [MapAnnotation] = []
-        var tempOverlays: [MapOverlay] = []
+        var tempAnnotations: [IdentifiableAnnotation] = []
         var coordinates: [CLLocationCoordinate2D] = []
         
         // Add alert location marker
         if let alertLoc = event.gpsAlertLocation {
             let coord = CLLocationCoordinate2D(latitude: alertLoc.lat, longitude: alertLoc.lng)
-            tempAnnotations.append(MapAnnotation(
+            tempAnnotations.append(IdentifiableAnnotation(
                 coordinate: coord,
-                label: "Alert",
+                title: "Alert Location",
+                subtitle: event.typeDisplay ?? "GPS Alert",
                 color: .red
             ))
             coordinates.append(coord)
@@ -240,39 +220,22 @@ struct GPSEventMapView: View {
            let geojson = geofence.geojson,
            let coords = geojson.coordinatesArray {
             
-            let color = Color(hex: geofence.attributes?.polylineColor ?? geofence.attributes?.color ?? "#3388ff")
-            
             switch geojson.type {
             case "Point":
                 if let first = coords.first, first.count >= 2 {
                     let coord = CLLocationCoordinate2D(latitude: first[1], longitude: first[0])
-                    tempAnnotations.append(MapAnnotation(
+                    tempAnnotations.append(IdentifiableAnnotation(
                         coordinate: coord,
-                        label: geofence.name ?? "Geofence",
-                        color: color
+                        title: geofence.name ?? "Geofence",
+                        subtitle: "Geofence Point",
+                        color: .blue
                     ))
                     coordinates.append(coord)
                 }
                 
-            case "LineString":
+            case "LineString", "Polygon":
                 let lineCoords = coords.map { CLLocationCoordinate2D(latitude: $0[1], longitude: $0[0]) }
-                tempOverlays.append(MapOverlay(
-                    type: .polyline,
-                    coordinates: lineCoords,
-                    color: color,
-                    label: geofence.name
-                ))
                 coordinates.append(contentsOf: lineCoords)
-                
-            case "Polygon":
-                let polygonCoords = coords.map { CLLocationCoordinate2D(latitude: $0[1], longitude: $0[0]) }
-                tempOverlays.append(MapOverlay(
-                    type: .polygon,
-                    coordinates: polygonCoords,
-                    color: color,
-                    label: geofence.name
-                ))
-                coordinates.append(contentsOf: polygonCoords)
                 
             default:
                 break
@@ -280,7 +243,6 @@ struct GPSEventMapView: View {
         }
         
         annotations = tempAnnotations
-        overlays = tempOverlays
         
         // Adjust region to fit all coordinates
         if !coordinates.isEmpty {
@@ -318,55 +280,138 @@ struct GPSEventMapView: View {
     }
 }
 
-// MARK: - Map Annotation Model
+// MARK: - Identifiable Annotation (iOS 14 Compatible)
 
-struct MapAnnotation: Identifiable {
+struct IdentifiableAnnotation: Identifiable {
     let id = UUID()
     let coordinate: CLLocationCoordinate2D
-    let label: String
+    let title: String
+    let subtitle: String
     let color: Color
 }
 
-// MARK: - Map Overlay Model
+// MARK: - MapView Representable (UIKit Wrapper)
 
-struct MapOverlay: Identifiable {
-    let id = UUID()
-    let type: OverlayType
-    let coordinates: [CLLocationCoordinate2D]
-    let color: Color
-    let label: String?
+struct MapViewRepresentable: UIViewRepresentable {
+    @Binding var region: MKCoordinateRegion
+    let annotations: [IdentifiableAnnotation]
+    let event: Event
     
-    enum OverlayType {
-        case polyline
-        case polygon
+    func makeUIView(context: Context) -> MKMapView {
+        let mapView = MKMapView()
+        mapView.delegate = context.coordinator
+        return mapView
+    }
+    
+    func updateUIView(_ mapView: MKMapView, context: Context) {
+        // Update region
+        mapView.setRegion(region, animated: true)
+        
+        // Remove old annotations
+        mapView.removeAnnotations(mapView.annotations)
+        
+        // Remove old overlays
+        mapView.removeOverlays(mapView.overlays)
+        
+        // Add new annotations
+        for annotation in annotations {
+            let mkAnnotation = CustomMapAnnotation(
+                coordinate: annotation.coordinate,
+                title: annotation.title,
+                subtitle: annotation.subtitle,
+                color: annotation.color
+            )
+            mapView.addAnnotation(mkAnnotation)
+        }
+        
+        // Add geofence overlay if available
+        if let geofence = event.geofenceInfo,
+           let geojson = geofence.geojson,
+           let coords = geojson.coordinatesArray {
+            
+            let color = UIColor(Color(hex: geofence.attributes?.polylineColor ?? geofence.attributes?.color ?? "#3388ff"))
+            
+            switch geojson.type {
+            case "LineString":
+                let coordinates = coords.map { CLLocationCoordinate2D(latitude: $0[1], longitude: $0[0]) }
+                let polyline = MKPolyline(coordinates: coordinates, count: coordinates.count)
+                mapView.addOverlay(polyline)
+                context.coordinator.overlayColor = color
+                
+            case "Polygon":
+                let coordinates = coords.map { CLLocationCoordinate2D(latitude: $0[1], longitude: $0[0]) }
+                let polygon = MKPolygon(coordinates: coordinates, count: coordinates.count)
+                mapView.addOverlay(polygon)
+                context.coordinator.overlayColor = color
+                
+            default:
+                break
+            }
+        }
+    }
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    class Coordinator: NSObject, MKMapViewDelegate {
+        var parent: MapViewRepresentable
+        var overlayColor: UIColor = .blue
+        
+        init(_ parent: MapViewRepresentable) {
+            self.parent = parent
+        }
+        
+        func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            guard let customAnnotation = annotation as? CustomMapAnnotation else { return nil }
+            
+            let identifier = "CustomPin"
+            var annotationView = mapView.dequeueReusableAnnotationView(withIdentifier: identifier)
+            
+            if annotationView == nil {
+                annotationView = MKPinAnnotationView(annotation: annotation, reuseIdentifier: identifier)
+                annotationView?.canShowCallout = true
+            } else {
+                annotationView?.annotation = annotation
+            }
+            
+            if let pinView = annotationView as? MKPinAnnotationView {
+                pinView.pinTintColor = UIColor(customAnnotation.color)
+            }
+            
+            return annotationView
+        }
+        
+        func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let polyline = overlay as? MKPolyline {
+                let renderer = MKPolylineRenderer(polyline: polyline)
+                renderer.strokeColor = overlayColor
+                renderer.lineWidth = 3
+                return renderer
+            } else if let polygon = overlay as? MKPolygon {
+                let renderer = MKPolygonRenderer(polygon: polygon)
+                renderer.strokeColor = overlayColor
+                renderer.fillColor = overlayColor.withAlphaComponent(0.2)
+                renderer.lineWidth = 2
+                return renderer
+            }
+            return MKOverlayRenderer(overlay: overlay)
+        }
     }
 }
 
-// MARK: - Color Extension
+// MARK: - Custom Map Annotation
 
-extension Color {
-    init(hex: String) {
-        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var int: UInt64 = 0
-        Scanner(string: hex).scanHexInt64(&int)
-        let a, r, g, b: UInt64
-        switch hex.count {
-        case 3: // RGB (12-bit)
-            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
-        case 6: // RGB (24-bit)
-            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
-        case 8: // ARGB (32-bit)
-            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
-        default:
-            (a, r, g, b) = (255, 0, 0, 0)
-        }
-        
-        self.init(
-            .sRGB,
-            red: Double(r) / 255,
-            green: Double(g) / 255,
-            blue:  Double(b) / 255,
-            opacity: Double(a) / 255
-        )
+class CustomMapAnnotation: NSObject, MKAnnotation {
+    let coordinate: CLLocationCoordinate2D
+    let title: String?
+    let subtitle: String?
+    let color: Color
+    
+    init(coordinate: CLLocationCoordinate2D, title: String, subtitle: String, color: Color) {
+        self.coordinate = coordinate
+        self.title = title
+        self.subtitle = subtitle
+        self.color = color
     }
 }
