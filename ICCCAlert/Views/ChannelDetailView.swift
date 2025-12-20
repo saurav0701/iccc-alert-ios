@@ -10,6 +10,7 @@ struct ChannelDetailView: View {
     @State private var showNewEventsBanner = false
     @State private var selectedEvent: Event? = nil
     @State private var showingImageDetail = false
+    @State private var showingMapView = false
     @State private var refreshTrigger = UUID()
     
     @State private var eventObserver: NSObjectProtocol?
@@ -30,6 +31,13 @@ struct ChannelDetailView: View {
     
     var unreadCount: Int {
         subscriptionManager.getUnreadCount(channelId: channel.id)
+    }
+    
+    // Check if this is a GPS channel
+    var isGpsChannel: Bool {
+        return channel.eventType == "off-route" || 
+               channel.eventType == "tamper" || 
+               channel.eventType == "overspeed"
     }
     
     var body: some View {
@@ -96,10 +104,13 @@ struct ChannelDetailView: View {
             )
         }
         .fullScreenCover(item: $selectedEvent) { event in
-            ImageDetailView(event: event)
+            if event.isGpsEvent {
+                GPSEventMapView(event: event)
+            } else {
+                ImageDetailView(event: event)
+            }
         }
         .onAppear {
-            // ✅ FIXED: Always mark as read when view appears
             if isSubscribed {
                 subscriptionManager.markAsRead(channelId: channel.id)
             }
@@ -107,7 +118,6 @@ struct ChannelDetailView: View {
         }
         .onDisappear {
             removeNotificationObserver()
-            // ✅ FIXED: Mark as read again when leaving
             if isSubscribed {
                 subscriptionManager.markAsRead(channelId: channel.id)
             }
@@ -128,21 +138,37 @@ struct ChannelDetailView: View {
                 ScrollView {
                     LazyVStack(spacing: 12) {
                         ForEach(events) { event in
-                            ModernEventCard(
-                                event: event,
-                                channel: channel,
-                                onTap: {
-                                    selectedEvent = event
-                                    showingImageDetail = true
-                                },
-                                onSaveToggle: {
-                                    // ✅ NEW: Save/unsave toggle
-                                    if let eventId = event.id {
-                                        subscriptionManager.toggleSaved(eventId: eventId, channelId: channel.id)
-                                        refreshTrigger = UUID()
+                            if event.isGpsEvent {
+                                GPSEventCard(
+                                    event: event,
+                                    channel: channel,
+                                    onTap: {
+                                        selectedEvent = event
+                                        showingMapView = true
+                                    },
+                                    onSaveToggle: {
+                                        if let eventId = event.id {
+                                            subscriptionManager.toggleSaved(eventId: eventId, channelId: channel.id)
+                                            refreshTrigger = UUID()
+                                        }
                                     }
-                                }
-                            )
+                                )
+                            } else {
+                                ModernEventCard(
+                                    event: event,
+                                    channel: channel,
+                                    onTap: {
+                                        selectedEvent = event
+                                        showingImageDetail = true
+                                    },
+                                    onSaveToggle: {
+                                        if let eventId = event.id {
+                                            subscriptionManager.toggleSaved(eventId: eventId, channelId: channel.id)
+                                            refreshTrigger = UUID()
+                                        }
+                                    }
+                                )
+                            }
                         }
                     }
                     .padding(.horizontal)
@@ -168,7 +194,7 @@ struct ChannelDetailView: View {
                     )
                     .frame(width: 100, height: 100)
                 
-                Image(systemName: "tray")
+                Image(systemName: isGpsChannel ? "location.slash" : "tray")
                     .font(.system(size: 40))
                     .foregroundColor(.blue)
             }
@@ -177,7 +203,9 @@ struct ChannelDetailView: View {
                 .font(.title2)
                 .fontWeight(.bold)
             
-            Text("New events will appear here automatically when they occur")
+            Text(isGpsChannel ? 
+                 "GPS alerts will appear here when vehicles trigger geofence violations" :
+                 "New events will appear here automatically when they occur")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -205,7 +233,7 @@ struct ChannelDetailView: View {
                     .frame(width: 120, height: 120)
                     .shadow(color: iconColor.opacity(0.2), radius: 20, x: 0, y: 10)
                 
-                Text(iconText)
+                Image(systemName: isGpsChannel ? "location.fill" : "bell.fill")
                     .font(.system(size: 48, weight: .bold))
                     .foregroundColor(iconColor)
             }
@@ -220,7 +248,9 @@ struct ChannelDetailView: View {
                     .foregroundColor(.secondary)
             }
             
-            Text("Get real-time alerts for this channel")
+            Text(isGpsChannel ? 
+                 "Get real-time GPS alerts for this vehicle tracking channel" :
+                 "Get real-time alerts for this channel")
                 .font(.body)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -258,10 +288,10 @@ struct ChannelDetailView: View {
     private var newEventsBanner: some View {
         VStack {
             HStack(spacing: 12) {
-                Image(systemName: "bell.badge.fill")
+                Image(systemName: isGpsChannel ? "location.fill.viewfinder" : "bell.badge.fill")
                     .font(.system(size: 16))
                 
-                Text("\(pendingEventsCount) new event\(pendingEventsCount == 1 ? "" : "s")")
+                Text("\(pendingEventsCount) new \(isGpsChannel ? "alert" : "event")\(pendingEventsCount == 1 ? "" : "s")")
                     .font(.system(size: 15, weight: .semibold))
                 
                 Spacer()
@@ -293,14 +323,6 @@ struct ChannelDetailView: View {
         .transition(.move(edge: .top).combined(with: .opacity))
     }
 
-    private var iconText: String {
-        let type = channel.eventType.uppercased()
-        if type.count <= 2 {
-            return type
-        }
-        return String(type.prefix(2))
-    }
-    
     private var iconColor: Color {
         switch channel.eventType.lowercased() {
         case "cd": return Color(hex: "FF5722")
@@ -314,6 +336,7 @@ struct ChannelDetailView: View {
         case "ls": return Color(hex: "00BCD4")
         case "off-route": return Color(hex: "FF5722")
         case "tamper": return Color(hex: "F44336")
+        case "overspeed": return Color(hex: "FF9800")
         default: return Color(hex: "9E9E9E")
         }
     }
@@ -401,14 +424,14 @@ struct ChannelDetailView: View {
     }
 }
 
-// ✅ UPDATED: ModernEventCard with Save Button
-struct ModernEventCard: View {
+// MARK: - GPS Event Card
+
+struct GPSEventCard: View {
     let event: Event
     let channel: Channel
     let onTap: () -> Void
-    let onSaveToggle: () -> Void  // ✅ NEW
+    let onSaveToggle: () -> Void
     
-    // ✅ FIXED: Use user's timezone
     private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
@@ -425,7 +448,156 @@ struct ModernEventCard: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // ✅ NEW: Header with Save Button
+            // Header with Save Button
+            HStack {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(eventColor)
+                        .frame(width: 8, height: 8)
+                    
+                    Text(event.typeDisplay ?? event.type ?? "GPS Alert")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(eventColor)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(eventColor.opacity(0.15))
+                .cornerRadius(8)
+                
+                Spacer()
+                
+                Button(action: onSaveToggle) {
+                    Image(systemName: event.isSaved ? "bookmark.fill" : "bookmark")
+                        .font(.system(size: 18))
+                        .foregroundColor(event.isSaved ? .yellow : .gray)
+                }
+                .padding(.trailing, 8)
+                
+                Text(dateFormatter.string(from: event.date))
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(.secondary)
+            }
+
+            // Vehicle Info
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "car.fill")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(event.vehicleNumber ?? "Unknown Vehicle")
+                        .font(.body)
+                        .fontWeight(.medium)
+                }
+                
+                HStack(spacing: 8) {
+                    Image(systemName: "building.2.fill")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(event.vehicleTransporter ?? "Unknown Transporter")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                
+                if let subType = event.alertSubType {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                        Text(subType)
+                            .font(.subheadline)
+                            .foregroundColor(.orange)
+                            .fontWeight(.medium)
+                    }
+                }
+                
+                if let geofence = event.geofenceInfo {
+                    HStack(spacing: 8) {
+                        Image(systemName: "map.fill")
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                        Text(geofence.name ?? "Geofence Area")
+                            .font(.subheadline)
+                            .foregroundColor(.blue)
+                    }
+                }
+            }
+
+            // Map Preview Placeholder - tappable
+            Button(action: onTap) {
+                ZStack {
+                    LinearGradient(
+                        gradient: Gradient(colors: [Color.blue.opacity(0.6), Color.purple.opacity(0.6)]),
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    
+                    VStack(spacing: 12) {
+                        Image(systemName: "map.fill")
+                            .font(.system(size: 40))
+                            .foregroundColor(.white)
+                        
+                        if let alertLoc = event.gpsAlertLocation {
+                            Text(String(format: "%.6f, %.6f", alertLoc.lat, alertLoc.lng))
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.white)
+                        }
+                        
+                        Text("Tap to view on map")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.9))
+                    }
+                }
+                .frame(height: 150)
+                .cornerRadius(12)
+            }
+            .buttonStyle(PlainButtonStyle())
+
+            Text(fullDateFormatter.string(from: event.date))
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding()
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
+    }
+    
+    private var eventColor: Color {
+        switch (event.type ?? "").lowercased() {
+        case "off-route": return Color(hex: "FF5722")
+        case "tamper": return Color(hex: "F44336")
+        case "overspeed": return Color(hex: "FF9800")
+        default: return Color(hex: "2196F3")
+        }
+    }
+}
+
+// MARK: - Updated ModernEventCard (unchanged for camera events)
+
+struct ModernEventCard: View {
+    let event: Event
+    let channel: Channel
+    let onTap: () -> Void
+    let onSaveToggle: () -> Void
+    
+    private let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        formatter.timeZone = TimeZone.current
+        return formatter
+    }()
+    
+    private let fullDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM dd, yyyy"
+        formatter.timeZone = TimeZone.current
+        return formatter
+    }()
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 HStack(spacing: 6) {
                     Circle()
@@ -443,7 +615,6 @@ struct ModernEventCard: View {
                 
                 Spacer()
                 
-                // ✅ NEW: Save/Unsave Button
                 Button(action: onSaveToggle) {
                     Image(systemName: event.isSaved ? "bookmark.fill" : "bookmark")
                         .font(.system(size: 18))
@@ -463,7 +634,6 @@ struct ModernEventCard: View {
                 .foregroundColor(.primary)
                 .lineLimit(2)
 
-            // Image (tappable)
             Button(action: onTap) {
                 CachedEventImage(event: event)
                     .frame(height: 200)
@@ -494,8 +664,6 @@ struct ModernEventCard: View {
         case "vc": return Color(hex: "FFC107")
         case "ii": return Color(hex: "9C27B0")
         case "ls": return Color(hex: "00BCD4")
-        case "off-route": return Color(hex: "FF5722")
-        case "tamper": return Color(hex: "F44336")
         default: return Color(hex: "9E9E9E")
         }
     }

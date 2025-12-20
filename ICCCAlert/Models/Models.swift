@@ -17,39 +17,54 @@ struct Event: Codable, Identifiable {
     
     var isRead: Bool = false
     var priority: String?
-    var isSaved: Bool = false  // ✅ NEW: Track saved status
+    var isSaved: Bool = false
     
-    // Ignore extra fields from backend
     private enum CodingKeys: String, CodingKey {
         case id, timestamp, source, area, areaDisplay, type, typeDisplay
         case groupId, vehicleNumber, vehicleTransporter, data
-        // Don't include isRead, priority, isSaved, or any backend fields we don't care about
     }
     
+    // ✅ FIXED: Correct date conversion
     var date: Date {
-        // ✅ FIXED: Backend sends timestamp in milliseconds (UTC)
-        // Simply convert milliseconds to seconds
-        let timestampInSeconds = TimeInterval(timestamp) / 1000.0
-        return Date(timeIntervalSince1970: timestampInSeconds)
+        // ✅ CRITICAL FIX: Backend sends Unix timestamp in SECONDS
+        // JavaScript Date() expects milliseconds, but Swift Date() expects seconds
+        // Since we're receiving seconds from backend, use it directly
+        return Date(timeIntervalSince1970: TimeInterval(timestamp))
+    }
+    
+    // Helper to check if this is a GPS event
+    var isGpsEvent: Bool {
+        return type == "off-route" || type == "tamper" || type == "overspeed"
     }
     
     var message: String {
+        // For GPS events: try different location formats
+        if isGpsEvent {
+            // Try geofence name first
+            if let geofence = data?["geofence"]?.dictionaryValue,
+               let name = geofence["name"]?.stringValue {
+                return name
+            }
+            
+            // Try alertLocation coordinates
+            if let alertLoc = data?["alertLocation"]?.dictionaryValue,
+               let lat = alertLoc["lat"]?.doubleValue,
+               let lng = alertLoc["lng"]?.doubleValue {
+                return String(format: "%.6f, %.6f", lat, lng)
+            }
+            
+            // Try allocatedGeofence
+            if let allocated = data?["allocatedGeofence"]?.arrayValue,
+               let first = allocated.first?.stringValue {
+                return first
+            }
+            
+            return "GPS Alert Location"
+        }
+        
         // For camera events: use location field
         if let location = data?["location"]?.stringValue {
             return location
-        }
-        
-        // For GPS events: check geofence name
-        if let geofence = data?["geofence"]?.dictionaryValue,
-           let name = geofence["name"]?.stringValue {
-            return name
-        }
-        
-        // For GPS events: try alertLocation
-        if let alertLoc = data?["alertLocation"]?.dictionaryValue,
-           let lat = alertLoc["lat"]?.doubleValue,
-           let lng = alertLoc["lng"]?.doubleValue {
-            return String(format: "%.4f, %.4f", lat, lng)
         }
         
         return "Unknown location"
@@ -118,6 +133,75 @@ struct ApiResponse<T: Codable>: Codable {
     let data: T?
 }
 
+// MARK: - GPS Event Data Structures
+
+struct GpsLocation: Codable {
+    let lat: Double
+    let lng: Double
+}
+
+struct GeofenceInfo: Codable {
+    let id: Int
+    let name: String?
+    let description: String?
+    let type: String?
+    let attributes: GeofenceAttributes?
+    let geojson: GeoJsonGeometry?
+}
+
+struct GeofenceAttributes: Codable {
+    let color: String?
+    let polylineColor: String?
+    let speed: Int?
+}
+
+struct GeoJsonGeometry: Codable {
+    let type: String
+    let coordinates: AnyCodableValue
+    
+    // Helper to get coordinates as array
+    var coordinatesArray: [[Double]]? {
+        switch type {
+        case "Point":
+            if case .array(let arr) = coordinates,
+               arr.count >= 2,
+               case .double(let lng) = arr[0],
+               case .double(let lat) = arr[1] {
+                return [[lng, lat]]
+            }
+        case "LineString":
+            if case .array(let arr) = coordinates {
+                return arr.compactMap { coord -> [Double]? in
+                    if case .array(let point) = coord,
+                       point.count >= 2,
+                       case .double(let lng) = point[0],
+                       case .double(let lat) = point[1] {
+                        return [lng, lat]
+                    }
+                    return nil
+                }
+            }
+        case "Polygon":
+            if case .array(let rings) = coordinates,
+               let firstRing = rings.first,
+               case .array(let ring) = firstRing {
+                return ring.compactMap { coord -> [Double]? in
+                    if case .array(let point) = coord,
+                       point.count >= 2,
+                       case .double(let lng) = point[0],
+                       case .double(let lat) = point[1] {
+                        return [lng, lat]
+                    }
+                    return nil
+                }
+            }
+        default:
+            break
+        }
+        return nil
+    }
+}
+
 // MARK: - AnyCodableValue
 
 enum AnyCodableValue: Codable {
@@ -161,11 +245,24 @@ enum AnyCodableValue: Codable {
         if case .double(let value) = self {
             return value
         }
+        if case .int(let value) = self {
+            return Double(value)
+        }
+        if case .int64(let value) = self {
+            return Double(value)
+        }
         return nil
     }
     
     var boolValue: Bool? {
         if case .bool(let value) = self {
+            return value
+        }
+        return nil
+    }
+    
+    var arrayValue: [AnyCodableValue]? {
+        if case .array(let value) = self {
             return value
         }
         return nil
@@ -226,5 +323,66 @@ enum AnyCodableValue: Codable {
         case .null:
             try container.encodeNil()
         }
+    }
+}
+
+// MARK: - Helper Extensions
+
+extension Event {
+    // Extract GPS location data
+    var gpsAlertLocation: GpsLocation? {
+        guard let alertLoc = data?["alertLocation"]?.dictionaryValue else { return nil }
+        guard let lat = alertLoc["lat"]?.doubleValue,
+              let lng = alertLoc["lng"]?.doubleValue else { return nil }
+        return GpsLocation(lat: lat, lng: lng)
+    }
+    
+    var gpsCurrentLocation: GpsLocation? {
+        guard let currentLoc = data?["currentLocation"]?.dictionaryValue else { return nil }
+        guard let lat = currentLoc["lat"]?.doubleValue,
+              let lng = currentLoc["lng"]?.doubleValue else { return nil }
+        return GpsLocation(lat: lat, lng: lng)
+    }
+    
+    var geofenceInfo: GeofenceInfo? {
+        guard let geofenceDict = data?["geofence"]?.dictionaryValue else { return nil }
+        
+        let id = geofenceDict["id"]?.intValue ?? 0
+        let name = geofenceDict["name"]?.stringValue
+        let description = geofenceDict["description"]?.stringValue
+        let type = geofenceDict["type"]?.stringValue
+        
+        var attributes: GeofenceAttributes?
+        if let attrsDict = geofenceDict["attributes"]?.dictionaryValue {
+            attributes = GeofenceAttributes(
+                color: attrsDict["color"]?.stringValue,
+                polylineColor: attrsDict["polylineColor"]?.stringValue,
+                speed: attrsDict["speed"]?.intValue
+            )
+        }
+        
+        var geojson: GeoJsonGeometry?
+        if let geojsonDict = geofenceDict["geojson"]?.dictionaryValue,
+           let geoType = geojsonDict["type"]?.stringValue,
+           let coords = geojsonDict["coordinates"] {
+            geojson = GeoJsonGeometry(type: geoType, coordinates: coords)
+        }
+        
+        return GeofenceInfo(
+            id: id,
+            name: name,
+            description: description,
+            type: type,
+            attributes: attributes,
+            geojson: geojson
+        )
+    }
+    
+    var alertSubType: String? {
+        return data?["alertSubType"]?.stringValue
+    }
+    
+    var allocatedGeofence: [String]? {
+        return data?["allocatedGeofence"]?.arrayValue?.compactMap { $0.stringValue }
     }
 }

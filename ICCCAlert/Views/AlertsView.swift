@@ -130,9 +130,7 @@ struct AlertsView: View {
             channelsList
         }
     }
-    
-    // MARK: - Loading View
-    
+
     private var loadingView: some View {
         VStack(spacing: 16) {
             ProgressView()
@@ -143,9 +141,7 @@ struct AlertsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    
-    // MARK: - Connection Status Banner
-    
+
     private var connectionStatusBanner: some View {
         Group {
             if !webSocketService.isConnected {
