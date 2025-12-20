@@ -354,13 +354,14 @@ struct AlertsView: View {
     updateChannelGroups()
     setupNotificationObservers()
     
-    // ✅ NEW: Clear notifications and update badge
+    // ✅ Clear notifications and update badge
     NotificationManager.shared.updateBadgeCount()
     
     DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
         isInitialLoad = false
     }
 }
+    
     
     private func setupNotificationObservers() {
         removeNotificationObservers()
