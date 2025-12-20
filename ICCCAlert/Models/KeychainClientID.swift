@@ -139,7 +139,7 @@ class ServerManagedClientID {
     private static func requestClientIDFromServer(phoneNumber: String, completion: @escaping (String?) -> Void) {
         
         
-        guard let url = URL(string: "http://192.168.29.69:19998/api/client-id") else {
+        guard let url = URL(string: "http://192.168.29.69:8890/api/client-id") else {
             completion(nil)
             return
         }
