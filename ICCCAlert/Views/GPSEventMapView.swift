@@ -1,7 +1,7 @@
 import SwiftUI
 import MapKit
 
-// MARK: - GPS Event Map View
+// MARK: - GPS Event Map View (Google Hybrid Tiles - FREE, No API Key)
 
 struct GPSEventMapView: View {
     let event: Event
@@ -13,24 +13,25 @@ struct GPSEventMapView: View {
     init(event: Event) {
         self.event = event
         
-        // Initialize region with alert location or default
+        // Initialize region with alert location or Jharkhand default
         if let alertLoc = event.gpsAlertLocation {
             _region = State(initialValue: MKCoordinateRegion(
                 center: CLLocationCoordinate2D(latitude: alertLoc.lat, longitude: alertLoc.lng),
                 span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
             ))
         } else {
+            // Jharkhand state center (same as Android)
             _region = State(initialValue: MKCoordinateRegion(
-                center: CLLocationCoordinate2D(latitude: 23.7645, longitude: 86.1423),
-                span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+                center: CLLocationCoordinate2D(latitude: 23.6102, longitude: 85.2799),
+                span: MKCoordinateSpan(latitudeDelta: 0.5, longitudeDelta: 0.5)
             ))
         }
     }
     
     var body: some View {
         ZStack {
-            // Map using iOS 14 compatible API
-            MapViewRepresentable(
+            // Map using Google Hybrid tiles (FREE - same as Android)
+            GoogleHybridMapView(
                 region: $region,
                 annotations: annotations,
                 event: event
@@ -125,14 +126,14 @@ struct GPSEventMapView: View {
                 Circle()
                     .fill(Color.red)
                     .frame(width: 12, height: 12)
-                Text("Alert Location")
+                Text(legendText)
                     .font(.caption)
             }
             
             if event.geofenceInfo != nil {
                 HStack(spacing: 8) {
                     Rectangle()
-                        .fill(Color.blue)
+                        .fill(geofenceColor)
                         .frame(width: 12, height: 3)
                     Text("Geofence")
                         .font(.caption)
@@ -143,6 +144,27 @@ struct GPSEventMapView: View {
         .background(Color(.systemBackground).opacity(0.95))
         .cornerRadius(8)
         .shadow(color: .black.opacity(0.1), radius: 5)
+    }
+    
+    private var legendText: String {
+        switch event.type {
+        case "off-route": return "Off-Route Point"
+        case "tamper": return "Tamper Location"
+        case "overspeed": return "Overspeed Point"
+        default: return "Alert Location"
+        }
+    }
+    
+    private var geofenceColor: Color {
+        // Get color from attributes (same priority as Android)
+        if let colorStr = event.geofenceInfo?.attributes?.polylineColor ?? event.geofenceInfo?.attributes?.color {
+            return Color(hex: colorStr)
+        }
+        // Default based on type
+        if event.geofenceInfo?.type == "P" {
+            return Color(hex: "#FFC107") // Yellow for paths
+        }
+        return Color(hex: "#3388ff") // Blue default
     }
     
     private var coordinatesView: some View {
@@ -176,7 +198,7 @@ struct GPSEventMapView: View {
                     .foregroundColor(.secondary)
                 Text(event.areaDisplay ?? event.area ?? "Unknown")
                     .font(.subheadline)
-                    .font(.system(size: 15, weight: .medium))
+                    .fontWeight(.medium)
             }
             
             Spacer()
@@ -191,7 +213,7 @@ struct GPSEventMapView: View {
                     Text(formatDate(event.date))
                 }
                 .font(.subheadline)
-                .font(.system(size: 15, weight: .medium))
+                .fontWeight(.medium)
             }
         }
         .padding()
@@ -203,19 +225,48 @@ struct GPSEventMapView: View {
         var tempAnnotations: [IdentifiableAnnotation] = []
         var coordinates: [CLLocationCoordinate2D] = []
         
-        // Add alert location marker
+        // Add alert location marker (PRIMARY - same as Android)
         if let alertLoc = event.gpsAlertLocation {
             let coord = CLLocationCoordinate2D(latitude: alertLoc.lat, longitude: alertLoc.lng)
+            let title = legendText
+            
             tempAnnotations.append(IdentifiableAnnotation(
                 coordinate: coord,
-                title: "Alert Location",
-                subtitle: event.typeDisplay ?? "GPS Alert",
+                title: title,
+                subtitle: "Vehicle: \(event.vehicleNumber ?? "Unknown")",
                 color: .red
             ))
             coordinates.append(coord)
+            
+            // For tamper events without geofence, add padding points
+            if event.type == "tamper" && event.geofenceInfo == nil {
+                let padding = 0.002 // ~200 meters
+                coordinates.append(CLLocationCoordinate2D(latitude: alertLoc.lat + padding, longitude: alertLoc.lng))
+                coordinates.append(CLLocationCoordinate2D(latitude: alertLoc.lat - padding, longitude: alertLoc.lng))
+                coordinates.append(CLLocationCoordinate2D(latitude: alertLoc.lat, longitude: alertLoc.lng + padding))
+                coordinates.append(CLLocationCoordinate2D(latitude: alertLoc.lat, longitude: alertLoc.lng - padding))
+            }
         }
         
-        // Process geofence if available
+        // Show current location only if different (>11 meters)
+        if let currentLoc = event.gpsCurrentLocation,
+           let alertLoc = event.gpsAlertLocation {
+            let latDiff = abs(currentLoc.lat - alertLoc.lat)
+            let lngDiff = abs(currentLoc.lng - alertLoc.lng)
+            
+            if latDiff > 0.0001 || lngDiff > 0.0001 { // ~11 meters
+                let coord = CLLocationCoordinate2D(latitude: currentLoc.lat, longitude: currentLoc.lng)
+                tempAnnotations.append(IdentifiableAnnotation(
+                    coordinate: coord,
+                    title: "Current Location",
+                    subtitle: "Latest position",
+                    color: .orange
+                ))
+                coordinates.append(coord)
+            }
+        }
+        
+        // Process geofence if available (for context)
         if let geofence = event.geofenceInfo,
            let geojson = geofence.geojson,
            let coords = geojson.coordinatesArray {
@@ -224,13 +275,11 @@ struct GPSEventMapView: View {
             case "Point":
                 if let first = coords.first, first.count >= 2 {
                     let coord = CLLocationCoordinate2D(latitude: first[1], longitude: first[0])
-                    tempAnnotations.append(IdentifiableAnnotation(
-                        coordinate: coord,
-                        title: geofence.name ?? "Geofence",
-                        subtitle: "Geofence Point",
-                        color: .blue
-                    ))
                     coordinates.append(coord)
+                    // Add padding for point geofences
+                    let padding = 0.002
+                    coordinates.append(CLLocationCoordinate2D(latitude: first[1] + padding, longitude: first[0]))
+                    coordinates.append(CLLocationCoordinate2D(latitude: first[1] - padding, longitude: first[0]))
                 }
                 
             case "LineString", "Polygon":
@@ -244,7 +293,7 @@ struct GPSEventMapView: View {
         
         annotations = tempAnnotations
         
-        // Adjust region to fit all coordinates
+        // Adjust region to fit all coordinates (same as Android zoomToBoundingBox)
         if !coordinates.isEmpty {
             let minLat = coordinates.map { $0.latitude }.min() ?? 0
             let maxLat = coordinates.map { $0.latitude }.max() ?? 0
@@ -280,7 +329,7 @@ struct GPSEventMapView: View {
     }
 }
 
-// MARK: - Identifiable Annotation (iOS 14 Compatible)
+// MARK: - Identifiable Annotation
 
 struct IdentifiableAnnotation: Identifiable {
     let id = UUID()
@@ -290,9 +339,9 @@ struct IdentifiableAnnotation: Identifiable {
     let color: Color
 }
 
-// MARK: - MapView Representable (UIKit Wrapper)
+// MARK: - Google Hybrid Map View (FREE Tiles - No API Key Required)
 
-struct MapViewRepresentable: UIViewRepresentable {
+struct GoogleHybridMapView: UIViewRepresentable {
     @Binding var region: MKCoordinateRegion
     let annotations: [IdentifiableAnnotation]
     let event: Event
@@ -300,6 +349,12 @@ struct MapViewRepresentable: UIViewRepresentable {
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
+        
+        // Use Google Hybrid tile overlay (FREE - same as Android)
+        let overlay = GoogleHybridTileOverlay()
+        overlay.canReplaceMapContent = true
+        mapView.addOverlay(overlay, level: .aboveLabels)
+        
         return mapView
     }
     
@@ -310,8 +365,9 @@ struct MapViewRepresentable: UIViewRepresentable {
         // Remove old annotations
         mapView.removeAnnotations(mapView.annotations)
         
-        // Remove old overlays
-        mapView.removeOverlays(mapView.overlays)
+        // Remove old overlays (except tile overlay)
+        let tileOverlay = mapView.overlays.first { $0 is GoogleHybridTileOverlay }
+        mapView.removeOverlays(mapView.overlays.filter { !($0 is GoogleHybridTileOverlay) })
         
         // Add new annotations
         for annotation in annotations {
@@ -329,20 +385,47 @@ struct MapViewRepresentable: UIViewRepresentable {
            let geojson = geofence.geojson,
            let coords = geojson.coordinatesArray {
             
-            let color = UIColor(Color(hex: geofence.attributes?.polylineColor ?? geofence.attributes?.color ?? "#3388ff"))
+            // Get color from attributes (same priority as Android)
+            let colorStr: String
+            if let polylineColor = geofence.attributes?.polylineColor {
+                colorStr = polylineColor
+            } else if let color = geofence.attributes?.color {
+                colorStr = color
+            } else if geofence.type == "P" {
+                colorStr = "#FFC107" // Yellow for paths
+            } else {
+                colorStr = "#3388ff" // Blue default
+            }
+            
+            let color = UIColor(Color(hex: colorStr))
+            
+            // Determine stroke width based on geofence type (same as Android)
+            let strokeWidth: CGFloat = (geofence.type == "P") ? 8.0 : 5.0
             
             switch geojson.type {
+            case "Point":
+                // Draw circle for point geofences
+                if let first = coords.first, first.count >= 2 {
+                    let center = CLLocationCoordinate2D(latitude: first[1], longitude: first[0])
+                    let circle = MKCircle(center: center, radius: 100) // 100m radius
+                    mapView.addOverlay(circle)
+                    context.coordinator.overlayColor = color
+                    context.coordinator.overlayStrokeWidth = 3.0
+                }
+                
             case "LineString":
                 let coordinates = coords.map { CLLocationCoordinate2D(latitude: $0[1], longitude: $0[0]) }
                 let polyline = MKPolyline(coordinates: coordinates, count: coordinates.count)
                 mapView.addOverlay(polyline)
                 context.coordinator.overlayColor = color
+                context.coordinator.overlayStrokeWidth = strokeWidth
                 
             case "Polygon":
                 let coordinates = coords.map { CLLocationCoordinate2D(latitude: $0[1], longitude: $0[0]) }
                 let polygon = MKPolygon(coordinates: coordinates, count: coordinates.count)
                 mapView.addOverlay(polygon)
                 context.coordinator.overlayColor = color
+                context.coordinator.overlayStrokeWidth = 4.0
                 
             default:
                 break
@@ -355,10 +438,11 @@ struct MapViewRepresentable: UIViewRepresentable {
     }
     
     class Coordinator: NSObject, MKMapViewDelegate {
-        var parent: MapViewRepresentable
+        var parent: GoogleHybridMapView
         var overlayColor: UIColor = .blue
+        var overlayStrokeWidth: CGFloat = 3.0
         
-        init(_ parent: MapViewRepresentable) {
+        init(_ parent: GoogleHybridMapView) {
             self.parent = parent
         }
         
@@ -383,20 +467,72 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
         
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            // Google Hybrid tile overlay
+            if let tileOverlay = overlay as? MKTileOverlay {
+                return MKTileOverlayRenderer(tileOverlay: tileOverlay)
+            }
+            
+            // Circle overlay (for Point geofences)
+            if let circle = overlay as? MKCircle {
+                let renderer = MKCircleRenderer(circle: circle)
+                renderer.fillColor = overlayColor.withAlphaComponent(0.2)
+                renderer.strokeColor = overlayColor
+                renderer.lineWidth = overlayStrokeWidth
+                return renderer
+            }
+            
+            // Polyline overlay (for LineString geofences)
             if let polyline = overlay as? MKPolyline {
                 let renderer = MKPolylineRenderer(polyline: polyline)
                 renderer.strokeColor = overlayColor
-                renderer.lineWidth = 3
-                return renderer
-            } else if let polygon = overlay as? MKPolygon {
-                let renderer = MKPolygonRenderer(polygon: polygon)
-                renderer.strokeColor = overlayColor
-                renderer.fillColor = overlayColor.withAlphaComponent(0.2)
-                renderer.lineWidth = 2
+                renderer.lineWidth = overlayStrokeWidth
                 return renderer
             }
+            
+            // Polygon overlay (for Polygon geofences)
+            if let polygon = overlay as? MKPolygon {
+                let renderer = MKPolygonRenderer(polygon: polygon)
+                renderer.strokeColor = overlayColor
+                renderer.fillColor = overlayColor.withAlphaComponent(0.3)
+                renderer.lineWidth = overlayStrokeWidth
+                return renderer
+            }
+            
             return MKOverlayRenderer(overlay: overlay)
         }
+    }
+}
+
+// MARK: - Google Hybrid Tile Overlay (FREE - No API Key)
+
+class GoogleHybridTileOverlay: MKTileOverlay {
+    private let tileServers = [
+        "https://mt0.google.com/vt/lyrs=y&hl=en",
+        "https://mt1.google.com/vt/lyrs=y&hl=en",
+        "https://mt2.google.com/vt/lyrs=y&hl=en",
+        "https://mt3.google.com/vt/lyrs=y&hl=en"
+    ]
+    
+    override init(urlTemplate URLTemplate: String?) {
+        super.init(urlTemplate: URLTemplate)
+        self.minimumZ = 0
+        self.maximumZ = 22
+        self.tileSize = CGSize(width: 256, height: 256)
+    }
+    
+    override func url(forTilePath path: MKTileOverlayPath) -> URL {
+        let zoom = path.z
+        let x = path.x
+        let y = path.y
+        
+        // Load balance across servers (same as Android)
+        let serverIndex = (x + y) % tileServers.count
+        let baseUrl = tileServers[serverIndex]
+        
+        // Same URL format as Android MapActivity
+        let urlString = "\(baseUrl)&x=\(x)&y=\(y)&z=\(zoom)&s=Ga"
+        
+        return URL(string: urlString)!
     }
 }
 
@@ -413,5 +549,34 @@ class CustomMapAnnotation: NSObject, MKAnnotation {
         self.title = title
         self.subtitle = subtitle
         self.color = color
+    }
+}
+
+// MARK: - Color Extension (Hex Support)
+
+extension Color {
+    init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&int)
+        let a, r, g, b: UInt64
+        switch hex.count {
+        case 3: // RGB (12-bit)
+            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
+        case 6: // RGB (24-bit)
+            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
+        case 8: // ARGB (32-bit)
+            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+        default:
+            (a, r, g, b) = (255, 0, 0, 0)
+        }
+
+        self.init(
+            .sRGB,
+            red: Double(r) / 255,
+            green: Double(g) / 255,
+            blue: Double(b) / 255,
+            opacity: Double(a) / 255
+        )
     }
 }
