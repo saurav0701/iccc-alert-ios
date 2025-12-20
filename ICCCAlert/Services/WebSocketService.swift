@@ -243,7 +243,7 @@ class WebSocketService: ObservableObject {
         areaDisplay: event.areaDisplay ?? area,
         eventType: type,
         eventTypeDisplay: event.typeDisplay ?? type,
-        description: nil,
+        description: "",  // ✅ FIXED: Use empty string instead of nil
         isSubscribed: true,
         isMuted: false,
         isPinned: false
