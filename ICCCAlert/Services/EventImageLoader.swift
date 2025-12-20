@@ -21,48 +21,45 @@ class EventImageLoader {
         
         switch normalizedArea {
 
-case "barora":
-    return "ws://103.208.173.131:5050/"
-
-case "block2":
-    return "ws://103.208.173.147:5050/"
-
-case "govindpur":
-    return "ws://103.208.173.163:5050/"
-
-case "katras":
-    return "ws://a5va.bccliccc.in:10050/"
-
-case "sijua":
-    return "ws://a5va.bccliccc.in:10050/"
+case "sijua", "katras":
+    return "http://a5va.bccliccc.in:10050"
 
 case "kusunda":
-    return "ws://a6va.bccliccc.in:5050/"
-
-case "pbarea":
-    return "ws://103.208.173.195:5050/"
+    return "http://a6va.bccliccc.in:5050"
 
 case "bastacolla":
-    return "ws://a9va.bccliccc.in:5050/"
+    return "http://a9va.bccliccc.in:5050"
 
 case "lodna":
-    return "ws://a10va.bccliccc.in:5050/"
+    return "http://a10va.bccliccc.in:5050"
 
-case "ej":
-    return "ws://103.210.88.194:5050/"
+case "govindpur":
+    return "http://103.208.173.163:5050"
 
-case "cvarea":
-    return "ws://103.210.88.211:5050/"
+case "barora":
+    return "http://103.208.173.131:5050"
 
-case "ccwo":
-    return "ws://103.208.173.179:5050/"
+case "block2":
+    return "http://103.208.173.147:5050"
+
+case "pbarea":
+    return "http://103.208.173.195:5050"
 
 case "wjarea":
-    return "ws://103.208.173.211:5050/"
+    return "http://103.208.173.211:5050"
+
+case "ccwo":
+    return "http://103.208.173.179:5050"
+
+case "cvarea":
+    return "http://103.210.88.211:5050"
+
+case "ej":
+    return "http://103.210.88.194:5050"
 
 default:
-    print("⚠️ Unknown area: \(area), using default BCCL URL")
-    return "ws://103.208.173.131:5050/" // Barora as safe default
+    print("⚠️ Unknown area: \(area), using Barora as default")
+    return "http://103.208.173.131:5050"
 }
 
     }
