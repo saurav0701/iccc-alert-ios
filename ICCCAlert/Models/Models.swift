@@ -24,21 +24,34 @@ struct Event: Codable, Identifiable {
         case groupId, vehicleNumber, vehicleTransporter, data
     }
     
-    // ✅ FIXED: Correct date conversion
+    // ✅ FIXED: Correct date conversion with VA timezone adjustment
     var date: Date {
-        // ✅ CRITICAL FIX: Backend sends Unix timestamp in SECONDS
-        // JavaScript Date() expects milliseconds, but Swift Date() expects seconds
-        // Since we're receiving seconds from backend, use it directly
-        return Date(timeIntervalSince1970: TimeInterval(timestamp))
+        // Backend sends Unix timestamp in SECONDS (not milliseconds)
+        // Swift Date() expects seconds since 1970, so use directly
+        
+        // ✅ CRITICAL: VA events have IST times parsed as UTC by backend
+        // This means they're 5:30 hours ahead. We need to subtract that offset.
+        // VTS events don't have this issue (they use correct UTC timestamps)
+        
+        let baseDate = Date(timeIntervalSince1970: TimeInterval(timestamp))
+        
+        // Check if this is a VA event (camera events) vs VTS event (GPS)
+        // VTS events have these types: off-route, tamper, overspeed
+        let isVTSEvent = type == "off-route" || type == "tamper" || type == "overspeed"
+        
+        if isVTSEvent {
+            // VTS events are correct, use as-is
+            return baseDate
+        } else {
+            return baseDate.addingTimeInterval(-19800) // -5.5 hours in seconds
+        }
     }
     
-    // Helper to check if this is a GPS event
     var isGpsEvent: Bool {
         return type == "off-route" || type == "tamper" || type == "overspeed"
     }
     
     var message: String {
-        // For GPS events: try different location formats
         if isGpsEvent {
             // Try geofence name first
             if let geofence = data?["geofence"]?.dictionaryValue,
