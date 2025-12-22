@@ -264,17 +264,14 @@ class WebSocketService: ObservableObject {
     DebugLogger.shared.log("Event rejected (duplicate)", emoji: "⏭️", color: .orange)
 }
         
-        // ✅ CRITICAL: Always ACK after processing decision
         sendAck(eventId: eventId)
-        
-        // Log stats periodically
+
         if processedCount % 100 == 0 {
             let stats = "received=\(receivedCount), processed=\(processedCount), dropped=\(droppedCount), acked=\(ackedCount)"
             DebugLogger.shared.log("STATS: \(stats)", emoji: "📊", color: .blue)
         }
     }
-    
-    // ✅ NEW: Queue ACK for batching (like Android)
+
     private func sendAck(eventId: String) {
         ackLock.lock()
         pendingAcks.append(eventId)

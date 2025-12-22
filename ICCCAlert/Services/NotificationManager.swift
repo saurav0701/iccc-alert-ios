@@ -2,8 +2,7 @@ import Foundation
 import UserNotifications
 import UIKit
 
-/// ✅ Local Notification Manager (WhatsApp/Telegram style)
-/// Sends notifications for new events even when app is in background/foreground
+/// ✅ Local Notification Manager with Settings Support
 class NotificationManager: NSObject {
     static let shared = NotificationManager()
     
@@ -12,11 +11,25 @@ class NotificationManager: NSObject {
     
     // Track last notification time per channel to avoid spam
     private var lastNotificationTime: [String: TimeInterval] = [:]
-    private let minNotificationInterval: TimeInterval = 3.0 // 3 seconds between notifications per channel
+    private let minNotificationInterval: TimeInterval = 3.0
     
     private override init() {
         super.init()
         notificationCenter.delegate = self
+    }
+    
+    // MARK: - Settings Helpers
+    
+    private func areNotificationsEnabled() -> Bool {
+        return UserDefaults.standard.bool(forKey: "notifications_enabled")
+    }
+    
+    private func isSoundEnabled() -> Bool {
+        return UserDefaults.standard.bool(forKey: "sound_enabled")
+    }
+    
+    private func isVibrationEnabled() -> Bool {
+        return UserDefaults.standard.bool(forKey: "vibration_enabled")
     }
     
     // MARK: - Request Permission
@@ -29,6 +42,17 @@ class NotificationManager: NSObject {
                 if granted {
                     print("✅ Notification permission granted")
                     UIApplication.shared.registerForRemoteNotifications()
+                    
+                    // Set default to enabled
+                    if UserDefaults.standard.object(forKey: "notifications_enabled") == nil {
+                        UserDefaults.standard.set(true, forKey: "notifications_enabled")
+                    }
+                    if UserDefaults.standard.object(forKey: "sound_enabled") == nil {
+                        UserDefaults.standard.set(true, forKey: "sound_enabled")
+                    }
+                    if UserDefaults.standard.object(forKey: "vibration_enabled") == nil {
+                        UserDefaults.standard.set(true, forKey: "vibration_enabled")
+                    }
                 } else {
                     print("❌ Notification permission denied")
                 }
@@ -55,9 +79,15 @@ class NotificationManager: NSObject {
     // MARK: - Send Event Notification
     
     func sendEventNotification(event: Event, channel: Channel) {
+        // ✅ Check if notifications are enabled in app settings
+        guard areNotificationsEnabled() else {
+            print("🔕 Notifications disabled in app settings")
+            return
+        }
+        
         // Check if authorized
         guard isAuthorized else {
-            print("⚠️ Notifications not authorized")
+            print("⚠️ Notifications not authorized in system")
             return
         }
         
@@ -110,8 +140,15 @@ class NotificationManager: NSObject {
             content.subtitle = area
         }
         
-        // Sound
-        content.sound = .default
+        // ✅ Sound (respect settings)
+        if isSoundEnabled() {
+            content.sound = .default
+        } else {
+            content.sound = nil
+        }
+        
+        // ✅ Vibration is handled by iOS automatically if sound is enabled
+        // We can't directly control vibration, but iOS vibrates with sound by default
         
         // Badge (increment)
         let unreadCount = SubscriptionManager.shared.subscribedChannels
@@ -146,15 +183,15 @@ class NotificationManager: NSObject {
             if let error = error {
                 print("❌ Failed to send notification: \(error.localizedDescription)")
             } else {
-                print("✅ Notification sent: \(content.title)")
+                print("✅ Notification sent: \(content.title) [Sound: \(self.isSoundEnabled())]")
             }
         }
     }
     
-    // MARK: - Send Summary Notification (for bulk events)
+    // MARK: - Send Summary Notification
     
     func sendSummaryNotification(count: Int, channels: [Channel]) {
-        guard isAuthorized, count > 0 else { return }
+        guard isAuthorized, count > 0, areNotificationsEnabled() else { return }
         
         let content = UNMutableNotificationContent()
         content.title = "🔔 New Events"
@@ -165,7 +202,9 @@ class NotificationManager: NSObject {
             content.body = "\(count) new events across \(channels.count) channels"
         }
         
-        content.sound = .default
+        if isSoundEnabled() {
+            content.sound = .default
+        }
         
         let unreadCount = SubscriptionManager.shared.subscribedChannels
             .map { SubscriptionManager.shared.getUnreadCount(channelId: $0.id) }
@@ -192,7 +231,6 @@ class NotificationManager: NSObject {
     
     func clearNotifications(for channelId: String? = nil) {
         if let channelId = channelId {
-            // Clear notifications for specific channel
             notificationCenter.getDeliveredNotifications { notifications in
                 let identifiersToRemove = notifications
                     .filter { notification in
@@ -207,7 +245,6 @@ class NotificationManager: NSObject {
                 self.notificationCenter.removeDeliveredNotifications(withIdentifiers: identifiersToRemove)
             }
         } else {
-            // Clear all notifications
             notificationCenter.removeAllDeliveredNotifications()
         }
     }
@@ -227,7 +264,6 @@ class NotificationManager: NSObject {
     // MARK: - Setup Notification Categories
     
     func setupNotificationCategories() {
-        // GPS Event Actions
         let viewMapAction = UNNotificationAction(
             identifier: "VIEW_MAP",
             title: "View on Map",
@@ -241,7 +277,6 @@ class NotificationManager: NSObject {
             options: .customDismissAction
         )
         
-        // Camera Event Actions
         let viewImageAction = UNNotificationAction(
             identifier: "VIEW_IMAGE",
             title: "View Image",
@@ -271,11 +306,25 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
     ) {
         print("📲 Notification received in FOREGROUND")
         
-        // Show banner, sound, and badge even in foreground (like WhatsApp)
+        // ✅ Check if notifications are enabled
+        guard UserDefaults.standard.bool(forKey: "notifications_enabled") else {
+            completionHandler([])
+            return
+        }
+        
+        // Show banner and badge, sound only if enabled
         if #available(iOS 14.0, *) {
-            completionHandler([.banner, .sound, .badge])
+            if UserDefaults.standard.bool(forKey: "sound_enabled") {
+                completionHandler([.banner, .sound, .badge])
+            } else {
+                completionHandler([.banner, .badge])
+            }
         } else {
-            completionHandler([.alert, .sound, .badge])
+            if UserDefaults.standard.bool(forKey: "sound_enabled") {
+                completionHandler([.alert, .sound, .badge])
+            } else {
+                completionHandler([.alert, .badge])
+            }
         }
     }
     
@@ -299,8 +348,6 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
         completionHandler()
     }
 }
-
-// MARK: - Notification Name Extension
 
 extension Notification.Name {
     static let userTappedNotification = Notification.Name("userTappedNotification")

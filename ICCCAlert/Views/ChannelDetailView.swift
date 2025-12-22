@@ -15,6 +15,10 @@ struct ChannelDetailView: View {
     
     @State private var eventObserver: NSObjectProtocol?
     
+    // ✅ Access settings
+    @AppStorage("auto_mark_read") private var autoMarkRead = true
+    @AppStorage("show_timestamps") private var showTimestamps = true
+    
     @Environment(\.presentationMode) var presentationMode
     
     var isSubscribed: Bool {
@@ -33,7 +37,6 @@ struct ChannelDetailView: View {
         subscriptionManager.getUnreadCount(channelId: channel.id)
     }
     
-    // Check if this is a GPS channel
     var isGpsChannel: Bool {
         return channel.eventType == "off-route" || 
                channel.eventType == "tamper" || 
@@ -111,17 +114,23 @@ struct ChannelDetailView: View {
             }
         }
         .onAppear {
-    if isSubscribed {
-        subscriptionManager.markAsRead(channelId: channel.id)
-        // ✅ Clear notifications for this channel
-        NotificationManager.shared.clearNotifications(for: channel.id)
-        NotificationManager.shared.updateBadgeCount()
-    }
-    setupNotificationObserver()
-}
+            if isSubscribed {
+                // ✅ Respect auto mark as read setting
+                if autoMarkRead {
+                    subscriptionManager.markAsRead(channelId: channel.id)
+                }
+                
+                // Clear notifications for this channel
+                NotificationManager.shared.clearNotifications(for: channel.id)
+                NotificationManager.shared.updateBadgeCount()
+            }
+            setupNotificationObserver()
+        }
         .onDisappear {
             removeNotificationObserver()
-            if isSubscribed {
+            
+            // ✅ Always mark as read when leaving (if setting is on)
+            if isSubscribed && autoMarkRead {
                 subscriptionManager.markAsRead(channelId: channel.id)
             }
         }
@@ -145,6 +154,7 @@ struct ChannelDetailView: View {
                                 GPSEventCard(
                                     event: event,
                                     channel: channel,
+                                    showTimestamp: showTimestamps,
                                     onTap: {
                                         selectedEvent = event
                                         showingMapView = true
@@ -160,6 +170,7 @@ struct ChannelDetailView: View {
                                 ModernEventCard(
                                     event: event,
                                     channel: channel,
+                                    showTimestamp: showTimestamps,
                                     onTap: {
                                         selectedEvent = event
                                         showingImageDetail = true
@@ -432,6 +443,7 @@ struct ChannelDetailView: View {
 struct GPSEventCard: View {
     let event: Event
     let channel: Channel
+    let showTimestamp: Bool
     let onTap: () -> Void
     let onSaveToggle: () -> Void
     
@@ -476,10 +488,13 @@ struct GPSEventCard: View {
                 }
                 .padding(.trailing, 8)
                 
-                Text(dateFormatter.string(from: event.date))
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundColor(.secondary)
+                // ✅ Show timestamp based on setting
+                if showTimestamp {
+                    Text(dateFormatter.string(from: event.date))
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(.secondary)
+                }
             }
 
             // Vehicle Info
@@ -557,9 +572,12 @@ struct GPSEventCard: View {
             }
             .buttonStyle(PlainButtonStyle())
 
-            Text(fullDateFormatter.string(from: event.date))
-                .font(.caption)
-                .foregroundColor(.secondary)
+            // ✅ Show full date based on setting
+            if showTimestamp {
+                Text(fullDateFormatter.string(from: event.date))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
         }
         .padding()
         .background(Color(.systemBackground))
@@ -577,11 +595,12 @@ struct GPSEventCard: View {
     }
 }
 
-// MARK: - Updated ModernEventCard (unchanged for camera events)
+// MARK: - Modern Event Card
 
 struct ModernEventCard: View {
     let event: Event
     let channel: Channel
+    let showTimestamp: Bool
     let onTap: () -> Void
     let onSaveToggle: () -> Void
     
@@ -625,10 +644,13 @@ struct ModernEventCard: View {
                 }
                 .padding(.trailing, 8)
                 
-                Text(dateFormatter.string(from: event.date))
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundColor(.secondary)
+                // ✅ Show timestamp based on setting
+                if showTimestamp {
+                    Text(dateFormatter.string(from: event.date))
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(.secondary)
+                }
             }
 
             Text(event.location)
@@ -646,9 +668,12 @@ struct ModernEventCard: View {
             }
             .buttonStyle(PlainButtonStyle())
 
-            Text(fullDateFormatter.string(from: event.date))
-                .font(.caption)
-                .foregroundColor(.secondary)
+            // ✅ Show full date based on setting
+            if showTimestamp {
+                Text(fullDateFormatter.string(from: event.date))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
         }
         .padding()
         .background(Color(.systemBackground))

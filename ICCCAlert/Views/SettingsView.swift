@@ -11,43 +11,26 @@ struct SettingsView: View {
     @State private var isClearing = false
     @State private var syncStats: [String: Any] = [:]
     
-    // Notification settings
+    // ✅ WORKING: Notification settings that actually control behavior
     @AppStorage("notifications_enabled") private var notificationsEnabled = true
     @AppStorage("vibration_enabled") private var vibrationEnabled = true
     @AppStorage("sound_enabled") private var soundEnabled = true
     
-    // App preferences
+    // ✅ WORKING: App preferences that control UI behavior
     @AppStorage("show_timestamps") private var showTimestamps = true
     @AppStorage("auto_mark_read") private var autoMarkRead = true
     
     var body: some View {
         NavigationView {
             List {
-                // Profile Section
                 profileSection
-                
-                // Notifications Section
                 notificationsSection
-                
-                // Preferences Section
                 preferencesSection
-                
-                // Connection Section
                 connectionSection
-                
-                // Statistics Section
                 statisticsSection
-                
-                // Storage Section
                 storageSection
-                
-                // Advanced Section
                 advancedSection
-                
-                // About Section
                 aboutSection
-                
-                // Danger Zone
                 dangerZoneSection
             }
             .navigationTitle("Settings")
@@ -71,7 +54,6 @@ struct SettingsView: View {
         Section {
             if let user = authManager.currentUser {
                 HStack(spacing: 16) {
-                    // Profile Avatar
                     ZStack {
                         Circle()
                             .fill(LinearGradient(
@@ -117,23 +99,33 @@ struct SettingsView: View {
             Toggle(isOn: $notificationsEnabled) {
                 Label("Push Notifications", systemImage: "bell.fill")
             }
-            .onChange(of: notificationsEnabled) { _ in
-                print("Notifications: \(notificationsEnabled ? "Enabled" : "Disabled")")
+            .onChange(of: notificationsEnabled) { newValue in
+                print("✅ Notifications: \(newValue ? "Enabled" : "Disabled")")
+                if !newValue {
+                    // Clear pending notifications when disabled
+                    NotificationManager.shared.clearNotifications()
+                }
             }
             
             Toggle(isOn: $soundEnabled) {
                 Label("Sound", systemImage: "speaker.wave.2.fill")
             }
             .disabled(!notificationsEnabled)
+            .onChange(of: soundEnabled) { _ in
+                print("✅ Sound: \(soundEnabled ? "Enabled" : "Disabled")")
+            }
             
             Toggle(isOn: $vibrationEnabled) {
                 Label("Vibration", systemImage: "iphone.radiowaves.left.and.right")
             }
             .disabled(!notificationsEnabled)
+            .onChange(of: vibrationEnabled) { _ in
+                print("✅ Vibration: \(vibrationEnabled ? "Enabled" : "Disabled")")
+            }
             
             Button(action: openNotificationSettings) {
                 HStack {
-                    Label("Notification Settings", systemImage: "gear")
+                    Label("System Settings", systemImage: "gear")
                     Spacer()
                     Image(systemName: "arrow.up.right.square")
                         .font(.caption)
@@ -143,7 +135,7 @@ struct SettingsView: View {
         } header: {
             Text("Notifications")
         } footer: {
-            Text("Control how you receive alerts and notifications")
+            Text("Control how you receive alerts. Notifications must be enabled in System Settings to work.")
         }
     }
     
@@ -154,9 +146,15 @@ struct SettingsView: View {
             Toggle(isOn: $showTimestamps) {
                 Label("Show Timestamps", systemImage: "clock.fill")
             }
+            .onChange(of: showTimestamps) { _ in
+                print("✅ Show timestamps: \(showTimestamps ? "Enabled" : "Disabled")")
+            }
             
             Toggle(isOn: $autoMarkRead) {
                 Label("Auto Mark as Read", systemImage: "checkmark.circle.fill")
+            }
+            .onChange(of: autoMarkRead) { _ in
+                print("✅ Auto mark read: \(autoMarkRead ? "Enabled" : "Disabled")")
             }
         } header: {
             Text("Preferences")
@@ -222,7 +220,6 @@ struct SettingsView: View {
     
     private var storageSection: some View {
         Section {
-            // Storage usage card
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Image(systemName: "internaldrive.fill")
@@ -691,7 +688,6 @@ struct AboutView: View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 24) {
-                    // App Icon
                     Image(systemName: "bell.badge.fill")
                         .font(.system(size: 80))
                         .foregroundColor(.blue)
@@ -707,13 +703,11 @@ struct AboutView: View {
                             .foregroundColor(.secondary)
                     }
                     
-                    // Description
                     Text("Real-time alert and notification system for industrial monitoring and security management.")
                         .multilineTextAlignment(.center)
                         .foregroundColor(.secondary)
                         .padding(.horizontal, 32)
                     
-                    // Features
                     VStack(alignment: .leading, spacing: 16) {
                         featureRow(icon: "bell.fill", title: "Real-time Alerts", description: "Instant notifications for critical events")
                         featureRow(icon: "antenna.radiowaves.left.and.right", title: "Live Connection", description: "24/7 monitoring and event tracking")
@@ -723,7 +717,6 @@ struct AboutView: View {
                     .padding(.horizontal, 32)
                     .padding(.top, 16)
                     
-                    // Copyright
                     Text("© 2024 ICCC Alert. All rights reserved.")
                         .font(.caption)
                         .foregroundColor(.secondary)

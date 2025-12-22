@@ -121,20 +121,3 @@ class BackgroundWebSocketManager {
         task.setTaskCompleted(success: true)
     }
 }
-
-// MARK: - Info.plist Configuration Required
-/*
- Add the following to Info.plist:
- 
- <key>BGTaskSchedulerPermittedIdentifiers</key>
- <array>
-     <string>com.icccalert.websocket.refresh</string>
- </array>
- 
- <key>UIBackgroundModes</key>
- <array>
-     <string>fetch</string>
-     <string>remote-notification</string>
-     <string>processing</string>
- </array>
- */
