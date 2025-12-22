@@ -89,6 +89,7 @@ struct AlertsView: View {
                 )
             }
         }
+        .navigationViewStyle(StackNavigationViewStyle())
         .onAppear {
             print("📱 AlertsView: Appeared")
             handleViewAppear()
@@ -107,22 +108,19 @@ struct AlertsView: View {
     private var filterBar: some View {
         VStack(spacing: 8) {
             HStack(spacing: 12) {
-                // VA/VTS System Filter
+                // VA/VTS System Filter - Stretched to fill available space
                 Picker("", selection: $selectedSystemFilter) {
                     Text("All").tag(SystemFilter.all)
                     Text("VA").tag(SystemFilter.va)
                     Text("VTS").tag(SystemFilter.vts)
                 }
                 .pickerStyle(SegmentedPickerStyle())
-                .frame(maxWidth: 200)
-                
-                Spacer()
                 
                 // Advanced Filters Button
                 Button(action: { showFilterSheet = true }) {
                     HStack(spacing: 6) {
                         Image(systemName: "line.3.horizontal.decrease.circle")
-                            .font(.system(size: 16))
+                            .font(.system(size: 18))
                         
                         if activeFilterCount > 0 {
                             Text("\(activeFilterCount)")
@@ -134,7 +132,7 @@ struct AlertsView: View {
                                 .clipShape(Circle())
                         }
                     }
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                     .background(Color.blue.opacity(0.1))
                     .foregroundColor(.blue)

@@ -61,6 +61,7 @@ struct SavedEventsView: View {
             .navigationTitle("Saved Events")
             .navigationBarTitleDisplayMode(.large)
         }
+        .navigationViewStyle(StackNavigationViewStyle())
         .fullScreenCover(item: $selectedEvent) { event in
             if event.isGpsEvent {
                 GPSEventMapView(event: event)
@@ -76,24 +77,21 @@ struct SavedEventsView: View {
     private var filterBar: some View {
         VStack(spacing: 8) {
             HStack(spacing: 12) {
-                // VA/VTS System Filter
+                // VA/VTS System Filter - Stretched to fill available space
                 Picker("", selection: $selectedSystemFilter) {
                     Text("All").tag(SystemFilter.all)
                     Text("VA").tag(SystemFilter.va)
                     Text("VTS").tag(SystemFilter.vts)
                 }
                 .pickerStyle(SegmentedPickerStyle())
-                .frame(maxWidth: 200)
-                
-                Spacer()
                 
                 if selectedSystemFilter != .all {
                     Button(action: { selectedSystemFilter = .all }) {
                         Text("Clear")
-                            .font(.caption)
+                            .font(.subheadline)
                             .foregroundColor(.blue)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
                             .background(Color.blue.opacity(0.1))
                             .cornerRadius(8)
                     }
@@ -245,6 +243,7 @@ struct SavedEventsView: View {
     }
 }
 
+// MARK: - Preview
 
 struct SavedEventsView_Previews: PreviewProvider {
     static var previews: some View {

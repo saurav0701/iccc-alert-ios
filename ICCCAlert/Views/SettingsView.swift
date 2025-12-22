@@ -62,6 +62,7 @@ struct SettingsView: View {
                 loadSyncStats()
             }
         }
+        .navigationViewStyle(StackNavigationViewStyle())
     }
     
     // MARK: - Profile Section
