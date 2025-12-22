@@ -1,5 +1,15 @@
 import SwiftUI
 
+// MARK: - System Filter Enum (shared across views)
+
+enum SystemFilter {
+    case all
+    case va   // Video Analytics
+    case vts  // Vehicle Tracking System
+}
+
+// MARK: - Saved Events View
+
 struct SavedEventsView: View {
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @State private var selectedEvent: Event? = nil
@@ -7,13 +17,18 @@ struct SavedEventsView: View {
     @State private var showingMapView = false
     @State private var refreshTrigger = UUID()
     
+    // Filter state
     @State private var selectedSystemFilter: SystemFilter = .all
     
+
+    
+    // VTS event types
     private let vtsEventTypes = ["off-route", "tamper", "overspeed"]
     
     var savedEvents: [Event] {
         let allSaved = subscriptionManager.getSavedEvents()
-
+        
+        // Apply VA/VTS filter
         switch selectedSystemFilter {
         case .all:
             return allSaved
@@ -37,6 +52,8 @@ struct SavedEventsView: View {
                 if !savedEvents.isEmpty || selectedSystemFilter != .all {
                     filterBar
                 }
+                
+                // Content
                 if savedEvents.isEmpty {
                     emptyView
                 } else {
@@ -56,10 +73,13 @@ struct SavedEventsView: View {
         }
         .id(refreshTrigger)
     }
-
+    
+    // MARK: - Filter Bar
+    
     private var filterBar: some View {
         VStack(spacing: 8) {
             HStack(spacing: 12) {
+                // VA/VTS System Filter - Stretched to fill available space
                 Picker("", selection: $selectedSystemFilter) {
                     Text("All").tag(SystemFilter.all)
                     Text("VA").tag(SystemFilter.va)
@@ -85,7 +105,9 @@ struct SavedEventsView: View {
         .background(Color(.systemBackground))
         .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 2)
     }
- 
+    
+    // MARK: - Empty View
+    
     private var emptyView: some View {
         VStack(spacing: 20) {
             Spacer()
@@ -130,7 +152,9 @@ struct SavedEventsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemGroupedBackground))
     }
-
+    
+    // MARK: - Events List
+    
     private var eventsList: some View {
         ScrollView {
             LazyVStack(spacing: 12) {
@@ -139,7 +163,7 @@ struct SavedEventsView: View {
                         GPSEventCard(
                             event: event,
                             channel: getChannelForEvent(event),
-                            showTimestamp: true,
+                            showTimestamp: true,  // ✅ Always show timestamps
                             onTap: {
                                 selectedEvent = event
                                 showingMapView = true
@@ -156,7 +180,7 @@ struct SavedEventsView: View {
                         ModernEventCard(
                             event: event,
                             channel: getChannelForEvent(event),
-                            showTimestamp: true,
+                            showTimestamp: true,  // ✅ Always show timestamps
                             onTap: {
                                 selectedEvent = event
                                 showingImageDetail = true
@@ -178,7 +202,9 @@ struct SavedEventsView: View {
         }
         .background(Color(.systemGroupedBackground))
     }
-
+    
+    // MARK: - Helper Methods
+    
     private func getChannelId(for event: Event) -> String? {
         guard let area = event.area, let type = event.type else { return nil }
         return "\(area)_\(type)"
@@ -200,11 +226,13 @@ struct SavedEventsView: View {
         }
         
         let channelId = "\(area)_\(type)"
-
+        
+        // Try to find existing channel
         if let existingChannel = subscriptionManager.subscribedChannels.first(where: { $0.id == channelId }) {
             return existingChannel
         }
-  
+        
+        // Create temporary channel
         return Channel(
             id: channelId,
             area: area,
@@ -218,6 +246,8 @@ struct SavedEventsView: View {
         )
     }
 }
+
+// MARK: - Preview
 
 struct SavedEventsView_Previews: PreviewProvider {
     static var previews: some View {
