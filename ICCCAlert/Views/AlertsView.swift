@@ -408,6 +408,7 @@ struct AlertsView: View {
         .listStyle(PlainListStyle())
     }
     
+    // ✅ UPDATED: Filter logic with VA/VTS support
     private func updateChannelGroups() {
         var groups: [(Channel, [Event])] = []
 
@@ -424,16 +425,19 @@ struct AlertsView: View {
                 break
             }
             
+            // Apply area filter
             if !selectedAreas.isEmpty, !selectedAreas.contains(channel.area) {
                 continue
             }
 
+            // Apply event type filter
             if !selectedEventTypes.isEmpty, !selectedEventTypes.contains(channel.eventTypeDisplay) {
                 continue
             }
 
             let allEvents = subscriptionManager.getEvents(channelId: channel.id)
 
+            // Apply saved filter
             let filteredEvents = showOnlySaved ? 
                 allEvents.filter { $0.isSaved } : 
                 allEvents
@@ -514,7 +518,9 @@ struct AlertsView: View {
         
         updateChannelGroups()
     }
+}
 
+// MARK: - Filter chip component
 struct FilterChip: View {
     let title: String
     let icon: String
@@ -543,6 +549,7 @@ struct FilterChip: View {
     }
 }
 
+// ✅ IMPROVED: Alert channel row
 struct ImprovedAlertChannelRow: View {
     let channel: Channel
     let lastEvent: Event?
@@ -569,6 +576,7 @@ struct ImprovedAlertChannelRow: View {
             }
             
             VStack(alignment: .leading, spacing: 6) {
+                // Event Type (Main Title)
                 HStack {
                     Text(channel.eventTypeDisplay)
                         .font(.system(size: 17, weight: unreadCount > 0 ? .bold : .semibold))
@@ -583,7 +591,8 @@ struct ImprovedAlertChannelRow: View {
                             .foregroundColor(.secondary)
                     }
                 }
-
+                
+                // Area Display
                 if let area = lastEvent?.areaDisplay ?? lastEvent?.area {
                     HStack(spacing: 4) {
                         Image(systemName: "mappin.circle.fill")
@@ -604,7 +613,8 @@ struct ImprovedAlertChannelRow: View {
                         .lineLimit(2)
                 }
             }
-
+            
+            // Unread Badge
             if unreadCount > 0 {
                 Text("\(unreadCount)")
                     .font(.caption)
@@ -651,6 +661,7 @@ struct ImprovedAlertChannelRow: View {
     }
 }
 
+// ✅ IMPROVED: Filter sheet
 struct FilterSheetView: View {
     @Binding var selectedAreas: Set<String>
     @Binding var selectedEventTypes: Set<String>
