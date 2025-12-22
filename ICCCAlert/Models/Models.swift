@@ -43,7 +43,7 @@ struct Event: Codable, Identifiable {
             // VTS events are correct, use as-is
             return baseDate
         } else {
-            return baseDate.addingTimeInterval(-19800) // -5.5 hours in seconds
+            return baseDate.addingTimeInterval(-19800) 
         }
     }
     
