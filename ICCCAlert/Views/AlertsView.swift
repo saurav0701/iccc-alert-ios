@@ -3,8 +3,13 @@ import SwiftUI
 struct AlertsView: View {
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @StateObject private var webSocketService = WebSocketService.shared
-    @StateObject private var filterState = FilterState()
     
+    // ✅ NEW: VA/VTS filter instead of read/unread
+    @State private var selectedSystemFilter: SystemFilter = .all
+    @State private var selectedAreas: Set<String> = []
+    @State private var selectedEventTypes: Set<String> = []
+    @State private var showOnlySaved = false  // ✅ Separate saved toggle
+
     @State private var isInitialLoad = true
     @State private var showFilterSheet = false
     
@@ -27,28 +32,44 @@ struct AlertsView: View {
         Array(Set(subscriptionManager.subscribedChannels.map { $0.eventTypeDisplay })).sorted()
     }
     
+    private var activeFilterCount: Int {
+        var count = 0
+        if selectedSystemFilter != .all { count += 1 }
+        if showOnlySaved { count += 1 }
+        if !selectedAreas.isEmpty { count += 1 }
+        if !selectedEventTypes.isEmpty { count += 1 }
+        return count
+    }
+    
+    // ✅ VTS event types (GPS/Vehicle tracking)
     private let vtsEventTypes = ["off-route", "tamper", "overspeed"]
     
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
+                // ✅ IMPROVED: Compact filter bar
                 if totalEventCount > 0 {
                     filterBar
                 }
                 
+                // Connection Status
                 connectionStatusBanner
+                
+                // Content
                 contentView
             }
             .navigationTitle("Alerts")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 16) {
-                        Button(action: { filterState.showOnlySaved.toggle() }) {
-                            Image(systemName: filterState.showOnlySaved ? "bookmark.fill" : "bookmark")
-                                .foregroundColor(filterState.showOnlySaved ? .yellow : .gray)
+                        // ✅ Saved filter toggle (quick access)
+                        Button(action: { showOnlySaved.toggle() }) {
+                            Image(systemName: showOnlySaved ? "bookmark.fill" : "bookmark")
+                                .foregroundColor(showOnlySaved ? .yellow : .gray)
                                 .font(.system(size: 18))
                         }
                         
+                        // Mark all read (only show if unread exists)
                         if !hasNoUnread {
                             Button(action: markAllAsRead) {
                                 Image(systemName: "checkmark.circle.fill")
@@ -61,7 +82,8 @@ struct AlertsView: View {
             }
             .sheet(isPresented: $showFilterSheet) {
                 FilterSheetView(
-                    filterState: filterState,
+                    selectedAreas: $selectedAreas,
+                    selectedEventTypes: $selectedEventTypes,
                     availableAreas: availableAreas,
                     availableEventTypes: availableEventTypes
                 )
@@ -76,30 +98,32 @@ struct AlertsView: View {
             print("📱 AlertsView: Disappeared")
             removeNotificationObservers()
         }
-        .onChange(of: filterState.systemFilter) { _ in updateChannelGroups() }
-        .onChange(of: filterState.timeFilter) { _ in updateChannelGroups() }
-        .onChange(of: filterState.showOnlySaved) { _ in updateChannelGroups() }
-        .onChange(of: filterState.selectedAreas) { _ in updateChannelGroups() }
-        .onChange(of: filterState.selectedEventTypes) { _ in updateChannelGroups() }
+        .onChange(of: selectedSystemFilter) { _ in updateChannelGroups() }
+        .onChange(of: showOnlySaved) { _ in updateChannelGroups() }
+        .onChange(of: selectedAreas) { _ in updateChannelGroups() }
+        .onChange(of: selectedEventTypes) { _ in updateChannelGroups() }
     }
     
+    // ✅ NEW: Improved filter bar with VA/VTS
     private var filterBar: some View {
         VStack(spacing: 8) {
             HStack(spacing: 12) {
-                Picker("", selection: $filterState.systemFilter) {
+                // VA/VTS System Filter - Stretched to fill available space
+                Picker("", selection: $selectedSystemFilter) {
                     Text("All").tag(SystemFilter.all)
                     Text("VA").tag(SystemFilter.va)
                     Text("VTS").tag(SystemFilter.vts)
                 }
                 .pickerStyle(SegmentedPickerStyle())
                 
+                // Advanced Filters Button
                 Button(action: { showFilterSheet = true }) {
                     HStack(spacing: 6) {
                         Image(systemName: "line.3.horizontal.decrease.circle")
                             .font(.system(size: 18))
                         
-                        if filterState.activeFilterCount > 0 {
-                            Text("\(filterState.activeFilterCount)")
+                        if activeFilterCount > 0 {
+                            Text("\(activeFilterCount)")
                                 .font(.caption2)
                                 .fontWeight(.bold)
                                 .foregroundColor(.white)
@@ -118,60 +142,52 @@ struct AlertsView: View {
             .padding(.horizontal)
             .padding(.top, 8)
             
-            if filterState.activeFilterCount > 0 {
+            // ✅ Active filter chips
+            if activeFilterCount > 0 {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        if filterState.systemFilter != .all {
+                        if selectedSystemFilter != .all {
                             FilterChip(
-                                title: filterState.systemFilter == .va ? "VA Only" : "VTS Only",
-                                icon: filterState.systemFilter == .va ? "camera.fill" : "location.fill",
-                                color: filterState.systemFilter == .va ? .purple : .orange
+                                title: selectedSystemFilter == .va ? "VA Only" : "VTS Only",
+                                icon: selectedSystemFilter == .va ? "camera.fill" : "location.fill",
+                                color: selectedSystemFilter == .va ? .purple : .orange
                             ) {
-                                filterState.systemFilter = .all
+                                selectedSystemFilter = .all
                             }
                         }
                         
-                        if filterState.timeFilter != .all {
-                            FilterChip(
-                                title: filterState.timeFilter.displayText,
-                                icon: "clock.fill",
-                                color: .blue
-                            ) {
-                                filterState.timeFilter = .all
-                            }
-                        }
-                        
-                        if filterState.showOnlySaved {
+                        if showOnlySaved {
                             FilterChip(
                                 title: "Saved",
                                 icon: "bookmark.fill",
                                 color: .yellow
                             ) {
-                                filterState.showOnlySaved = false
+                                showOnlySaved = false
                             }
                         }
                         
-                        if !filterState.selectedAreas.isEmpty {
+                        if !selectedAreas.isEmpty {
                             FilterChip(
-                                title: "\(filterState.selectedAreas.count) Area\(filterState.selectedAreas.count > 1 ? "s" : "")",
+                                title: "\(selectedAreas.count) Area\(selectedAreas.count > 1 ? "s" : "")",
                                 icon: "map.fill",
                                 color: .green
                             ) {
-                                filterState.selectedAreas.removeAll()
+                                selectedAreas.removeAll()
                             }
                         }
                         
-                        if !filterState.selectedEventTypes.isEmpty {
+                        if !selectedEventTypes.isEmpty {
                             FilterChip(
-                                title: "\(filterState.selectedEventTypes.count) Type\(filterState.selectedEventTypes.count > 1 ? "s" : "")",
+                                title: "\(selectedEventTypes.count) Type\(selectedEventTypes.count > 1 ? "s" : "")",
                                 icon: "tag.fill",
                                 color: .blue
                             ) {
-                                filterState.selectedEventTypes.removeAll()
+                                selectedEventTypes.removeAll()
                             }
                         }
                         
-                        Button(action: { filterState.clearAll() }) {
+                        // Clear all button
+                        Button(action: clearAllFilters) {
                             Text("Clear All")
                                 .font(.caption)
                                 .foregroundColor(.red)
@@ -344,7 +360,7 @@ struct AlertsView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
             
-            Button(action: { filterState.clearAll() }) {
+            Button(action: clearAllFilters) {
                 HStack {
                     Image(systemName: "xmark.circle.fill")
                     Text("Clear All Filters")
@@ -396,11 +412,31 @@ struct AlertsView: View {
         var groups: [(Channel, [Event])] = []
 
         for channel in subscriptionManager.subscribedChannels {
-            let allEvents = subscriptionManager.getEvents(channelId: channel.id)
+            // Apply VA/VTS filter
+            let isVtsChannel = vtsEventTypes.contains(channel.eventType)
             
-            let filteredEvents = allEvents.filter { event in
-                filterState.matchesEvent(event, channel: channel, vtsEventTypes: vtsEventTypes)
+            switch selectedSystemFilter {
+            case .va:
+                if isVtsChannel { continue }
+            case .vts:
+                if !isVtsChannel { continue }
+            case .all:
+                break
             }
+            
+            if !selectedAreas.isEmpty, !selectedAreas.contains(channel.area) {
+                continue
+            }
+
+            if !selectedEventTypes.isEmpty, !selectedEventTypes.contains(channel.eventTypeDisplay) {
+                continue
+            }
+
+            let allEvents = subscriptionManager.getEvents(channelId: channel.id)
+
+            let filteredEvents = showOnlySaved ? 
+                allEvents.filter { $0.isSaved } : 
+                allEvents
 
             if filteredEvents.isEmpty {
                 continue
@@ -418,6 +454,13 @@ struct AlertsView: View {
         channelGroups.allSatisfy { group in
             subscriptionManager.getUnreadCount(channelId: group.channel.id) == 0
         }
+    }
+    
+    private func clearAllFilters() {
+        selectedSystemFilter = .all
+        showOnlySaved = false
+        selectedAreas.removeAll()
+        selectedEventTypes.removeAll()
     }
     
     private func handleViewAppear() {
@@ -471,6 +514,33 @@ struct AlertsView: View {
         
         updateChannelGroups()
     }
+
+struct FilterChip: View {
+    let title: String
+    let icon: String
+    let color: Color
+    let onRemove: () -> Void
+    
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.caption)
+            
+            Text(title)
+                .font(.caption)
+                .fontWeight(.medium)
+            
+            Button(action: onRemove) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.caption)
+            }
+        }
+        .foregroundColor(.white)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(color)
+        .cornerRadius(8)
+    }
 }
 
 struct ImprovedAlertChannelRow: View {
@@ -487,6 +557,7 @@ struct ImprovedAlertChannelRow: View {
     
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
+            // Channel Icon
             ZStack {
                 Circle()
                     .fill(iconColor.opacity(0.2))
@@ -525,6 +596,7 @@ struct ImprovedAlertChannelRow: View {
                     }
                 }
                 
+                // Last Event Message
                 if let event = lastEvent {
                     Text(event.message)
                         .font(.system(size: 14, weight: unreadCount > 0 ? .medium : .regular))
@@ -575,6 +647,144 @@ struct ImprovedAlertChannelRow: View {
         case "off-route": return Color(hex: "FF5722")
         case "tamper": return Color(hex: "F44336")
         default: return Color(hex: "9E9E9E")
+        }
+    }
+}
+
+struct FilterSheetView: View {
+    @Binding var selectedAreas: Set<String>
+    @Binding var selectedEventTypes: Set<String>
+
+    let availableAreas: [String]
+    let availableEventTypes: [String]
+
+    @Environment(\.presentationMode) var presentationMode
+    
+    @State private var isAreaExpanded = false
+    @State private var isEventTypeExpanded = false
+
+    var body: some View {
+        NavigationView {
+            List {
+                Section {
+                    DisclosureGroup(
+                        isExpanded: $isAreaExpanded,
+                        content: {
+                            ForEach(availableAreas, id: \.self) { area in
+                                MultipleSelectionRow(
+                                    title: area,
+                                    isSelected: selectedAreas.contains(area)
+                                ) {
+                                    toggle(&selectedAreas, value: area)
+                                }
+                            }
+                        },
+                        label: {
+                            HStack {
+                                Image(systemName: "map.fill")
+                                    .foregroundColor(.green)
+                                Text("Filter by Area")
+                                    .font(.headline)
+                                Spacer()
+                                if !selectedAreas.isEmpty {
+                                    Text("\(selectedAreas.count)")
+                                        .font(.caption)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(.white)
+                                        .frame(width: 24, height: 24)
+                                        .background(Color.green)
+                                        .clipShape(Circle())
+                                }
+                            }
+                        }
+                    )
+                }
+
+                Section {
+                    DisclosureGroup(
+                        isExpanded: $isEventTypeExpanded,
+                        content: {
+                            ForEach(availableEventTypes, id: \.self) { type in
+                                MultipleSelectionRow(
+                                    title: type,
+                                    isSelected: selectedEventTypes.contains(type)
+                                ) {
+                                    toggle(&selectedEventTypes, value: type)
+                                }
+                            }
+                        },
+                        label: {
+                            HStack {
+                                Image(systemName: "tag.fill")
+                                    .foregroundColor(.blue)
+                                Text("Filter by Event Type")
+                                    .font(.headline)
+                                Spacer()
+                                if !selectedEventTypes.isEmpty {
+                                    Text("\(selectedEventTypes.count)")
+                                        .font(.caption)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(.white)
+                                        .frame(width: 24, height: 24)
+                                        .background(Color.blue)
+                                        .clipShape(Circle())
+                                }
+                            }
+                        }
+                    )
+                }
+
+                Section {
+                    Button(action: {
+                        selectedAreas.removeAll()
+                        selectedEventTypes.removeAll()
+                    }) {
+                        HStack {
+                            Image(systemName: "xmark.circle.fill")
+                            Text("Clear All Filters")
+                        }
+                        .foregroundColor(.red)
+                    }
+                }
+            }
+            .navigationTitle("Advanced Filters")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        presentationMode.wrappedValue.dismiss()
+                    }
+                    .font(.system(size: 17, weight: .semibold))
+                }
+            }
+        }
+    }
+
+    private func toggle(_ set: inout Set<String>, value: String) {
+        if set.contains(value) {
+            set.remove(value)
+        } else {
+            set.insert(value)
+        }
+    }
+}
+
+struct MultipleSelectionRow: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Text(title)
+                    .foregroundColor(.primary)
+                Spacer()
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.blue)
+                }
+            }
         }
     }
 }
