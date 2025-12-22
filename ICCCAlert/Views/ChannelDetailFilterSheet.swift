@@ -241,21 +241,22 @@ struct ChannelDetailFilterSheet: View {
             }
             .navigationTitle("Timeline & Filters")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Reset") {
-                        resetFilters()
-                    }
-                    .foregroundColor(.red)
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        presentationMode.wrappedValue.dismiss()
-                    }
-                    .font(.system(size: 17, weight: .semibold))
-                }
-            }
+            .toolbar(content: {
+    ToolbarItem(placement: .navigationBarLeading) {
+        Button("Reset") {
+            resetFilters()
+        }
+        .foregroundColor(.red)
+    }
+
+    ToolbarItem(placement: .navigationBarTrailing) {
+        Button("Done") {
+            presentationMode.wrappedValue.dismiss()
+        }
+        .font(.system(size: 17, weight: .semibold))
+    }
+})
+
             .sheet(isPresented: $showCustomDatePicker) {
                 CustomDateRangePicker(
                     startDate: $customStartDate,
@@ -427,23 +428,24 @@ struct CustomDateRangePicker: View {
             }
             .navigationTitle("Custom Date Range")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        presentationMode.wrappedValue.dismiss()
-                    }
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Apply") {
-                        if endDate >= startDate {
-                            onApply()
-                        }
-                    }
-                    .font(.system(size: 17, weight: .semibold))
-                    .disabled(endDate < startDate)
-                }
+            .toolbar(content: {
+    ToolbarItem(placement: .navigationBarLeading) {
+        Button("Cancel") {
+            presentationMode.wrappedValue.dismiss()
+        }
+    }
+
+    ToolbarItem(placement: .navigationBarTrailing) {
+        Button("Apply") {
+            if endDate >= startDate {
+                onApply()
             }
+        }
+        .font(.system(size: 17, weight: .semibold))
+        .disabled(endDate < startDate)
+    }
+})
+
         }
     }
     
