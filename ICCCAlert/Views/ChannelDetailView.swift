@@ -4,6 +4,8 @@ struct ChannelDetailView: View {
     let channel: Channel
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @StateObject private var webSocketService = WebSocketService.shared
+    @StateObject private var filterState = FilterState()
+    
     @State private var showingAlert = false
     @State private var alertMessage = ""
     @State private var pendingEventsCount = 0
@@ -12,10 +14,18 @@ struct ChannelDetailView: View {
     @State private var showingImageDetail = false
     @State private var showingMapView = false
     @State private var refreshTrigger = UUID()
+    @State private var showFilterSheet = false
+    @State private var showHeaderMenu = false
+    @State private var viewMode: ViewMode = .grid
     
     @State private var eventObserver: NSObjectProtocol?
     
     @Environment(\.presentationMode) var presentationMode
+    
+    enum ViewMode {
+        case grid
+        case timeline
+    }
     
     var isSubscribed: Bool {
         subscriptionManager.isSubscribed(channelId: channel.id)
@@ -26,7 +36,10 @@ struct ChannelDetailView: View {
     }
     
     var events: [Event] {
-        subscriptionManager.getEvents(channelId: channel.id)
+        let allEvents = subscriptionManager.getEvents(channelId: channel.id)
+        return allEvents.filter { event in
+            filterState.matchesEvent(event, channel: channel, vtsEventTypes: vtsEventTypes)
+        }
     }
     
     var unreadCount: Int {
@@ -38,6 +51,8 @@ struct ChannelDetailView: View {
                channel.eventType == "tamper" || 
                channel.eventType == "overspeed"
     }
+    
+    private let vtsEventTypes = ["off-route", "tamper", "overspeed"]
     
     var body: some View {
         ZStack(alignment: .top) {
@@ -54,25 +69,32 @@ struct ChannelDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                VStack(spacing: 2) {
-                    Text(channel.eventTypeDisplay)
-                        .font(.headline)
-                    
-                    HStack(spacing: 8) {
-                        if let area = headerAreaText {
-                            Text(area)
+                Button(action: { showHeaderMenu = true }) {
+                    VStack(spacing: 2) {
+                        HStack(spacing: 4) {
+                            Text(channel.eventTypeDisplay)
+                                .font(.headline)
+                            Image(systemName: "chevron.down")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
                         
-                        if isSubscribed && events.count > 0 {
-                            Text("•")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                        HStack(spacing: 8) {
+                            if let area = headerAreaText {
+                                Text(area)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
                             
-                            Text("\(events.count) events")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                            if isSubscribed && events.count > 0 {
+                                Text("•")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                
+                                Text("\(events.count) events")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
                         }
                     }
                 }
@@ -109,12 +131,24 @@ struct ChannelDetailView: View {
                 ImageDetailView(event: event)
             }
         }
+        .sheet(isPresented: $showHeaderMenu) {
+            ChannelHeaderMenuView(
+                viewMode: $viewMode,
+                filterState: filterState,
+                showFilterSheet: $showFilterSheet,
+                channel: channel
+            )
+        }
+        .sheet(isPresented: $showFilterSheet) {
+            FilterSheetView(
+                filterState: filterState,
+                availableAreas: [channel.area],
+                availableEventTypes: [channel.eventTypeDisplay]
+            )
+        }
         .onAppear {
             if isSubscribed {
-                // ✅ Always auto mark as read when viewing
                 subscriptionManager.markAsRead(channelId: channel.id)
-                
-                // Clear notifications for this channel
                 NotificationManager.shared.clearNotifications(for: channel.id)
                 NotificationManager.shared.updateBadgeCount()
             }
@@ -123,11 +157,12 @@ struct ChannelDetailView: View {
         .onDisappear {
             removeNotificationObserver()
             
-            // ✅ Always mark as read when leaving
             if isSubscribed {
                 subscriptionManager.markAsRead(channelId: channel.id)
             }
         }
+        .onChange(of: filterState.timeFilter) { _ in refreshTrigger = UUID() }
+        .onChange(of: filterState.showOnlySaved) { _ in refreshTrigger = UUID() }
         .id(refreshTrigger)
     }
     
@@ -138,53 +173,176 @@ struct ChannelDetailView: View {
     
     private var eventsListView: some View {
         VStack(spacing: 0) {
+            if filterState.activeFilterCount > 0 {
+                activeFiltersBar
+            }
+            
             if events.isEmpty {
                 emptyEventsView
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 12) {
-                        ForEach(events) { event in
-                            if event.isGpsEvent {
-                                GPSEventCard(
-                                    event: event,
-                                    channel: channel,
-                                    showTimestamp: true,  // ✅ Always show timestamps
-                                    onTap: {
-                                        selectedEvent = event
-                                        showingMapView = true
-                                    },
-                                    onSaveToggle: {
-                                        if let eventId = event.id {
-                                            subscriptionManager.toggleSaved(eventId: eventId, channelId: channel.id)
-                                            refreshTrigger = UUID()
-                                        }
-                                    }
-                                )
-                            } else {
-                                ModernEventCard(
-                                    event: event,
-                                    channel: channel,
-                                    showTimestamp: true,  // ✅ Always show timestamps
-                                    onTap: {
-                                        selectedEvent = event
-                                        showingImageDetail = true
-                                    },
-                                    onSaveToggle: {
-                                        if let eventId = event.id {
-                                            subscriptionManager.toggleSaved(eventId: eventId, channelId: channel.id)
-                                            refreshTrigger = UUID()
-                                        }
-                                    }
-                                )
-                            }
-                        }
-                    }
-                    .padding(.horizontal)
-                    .padding(.top, 12)
+                if viewMode == .timeline {
+                    timelineView
+                } else {
+                    gridView
                 }
             }
         }
         .background(Color(.systemGroupedBackground))
+    }
+    
+    private var activeFiltersBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                if filterState.timeFilter != .all {
+                    FilterChip(
+                        title: filterState.timeFilter.displayText,
+                        icon: "clock.fill",
+                        color: .blue
+                    ) {
+                        filterState.timeFilter = .all
+                    }
+                }
+                
+                if filterState.showOnlySaved {
+                    FilterChip(
+                        title: "Saved",
+                        icon: "bookmark.fill",
+                        color: .yellow
+                    ) {
+                        filterState.showOnlySaved = false
+                    }
+                }
+                
+                Button(action: { filterState.clearAll() }) {
+                    Text("Clear")
+                        .font(.caption)
+                        .foregroundColor(.red)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.red.opacity(0.1))
+                        .cornerRadius(8)
+                }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+        }
+        .background(Color(.systemBackground))
+    }
+    
+    private var gridView: some View {
+        ScrollView {
+            LazyVStack(spacing: 12) {
+                ForEach(events) { event in
+                    if event.isGpsEvent {
+                        GPSEventCard(
+                            event: event,
+                            channel: channel,
+                            showTimestamp: true,
+                            onTap: {
+                                selectedEvent = event
+                                showingMapView = true
+                            },
+                            onSaveToggle: {
+                                if let eventId = event.id {
+                                    subscriptionManager.toggleSaved(eventId: eventId, channelId: channel.id)
+                                    refreshTrigger = UUID()
+                                }
+                            }
+                        )
+                    } else {
+                        ModernEventCard(
+                            event: event,
+                            channel: channel,
+                            showTimestamp: true,
+                            onTap: {
+                                selectedEvent = event
+                                showingImageDetail = true
+                            },
+                            onSaveToggle: {
+                                if let eventId = event.id {
+                                    subscriptionManager.toggleSaved(eventId: eventId, channelId: channel.id)
+                                    refreshTrigger = UUID()
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+            .padding(.horizontal)
+            .padding(.top, 12)
+        }
+    }
+    
+    private var timelineView: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(groupedEventsByDate, id: \.key) { dateGroup in
+                    // Date Header
+                    HStack {
+                        Text(dateGroup.key)
+                            .font(.headline)
+                            .foregroundColor(.primary)
+                        
+                        Spacer()
+                        
+                        Text("\(dateGroup.value.count) events")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 12)
+                    .background(Color(.systemGroupedBackground))
+                    
+                    // Events for this date
+                    ForEach(dateGroup.value) { event in
+                        TimelineEventRow(
+                            event: event,
+                            channel: channel,
+                            isLast: event.id == dateGroup.value.last?.id,
+                            onTap: {
+                                selectedEvent = event
+                                if event.isGpsEvent {
+                                    showingMapView = true
+                                } else {
+                                    showingImageDetail = true
+                                }
+                            },
+                            onSaveToggle: {
+                                if let eventId = event.id {
+                                    subscriptionManager.toggleSaved(eventId: eventId, channelId: channel.id)
+                                    refreshTrigger = UUID()
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+            .padding(.top, 8)
+        }
+    }
+    
+    private var groupedEventsByDate: [(key: String, value: [Event])] {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE, MMMM d, yyyy"
+        
+        let calendar = Calendar.current
+        let grouped = Dictionary(grouping: events) { event -> String in
+            if calendar.isDateInToday(event.date) {
+                return "Today"
+            } else if calendar.isDateInYesterday(event.date) {
+                return "Yesterday"
+            } else {
+                return formatter.string(from: event.date)
+            }
+        }
+        
+        return grouped.sorted { first, second in
+            guard let firstEvent = first.value.first,
+                  let secondEvent = second.value.first else {
+                return false
+            }
+            return firstEvent.date > secondEvent.date
+        }
     }
 
     private var emptyEventsView: some View {
@@ -207,17 +365,31 @@ struct ChannelDetailView: View {
                     .foregroundColor(.blue)
             }
             
-            Text("No Events Yet")
+            Text(filterState.activeFilterCount > 0 ? "No Matching Events" : "No Events Yet")
                 .font(.title2)
                 .fontWeight(.bold)
             
-            Text(isGpsChannel ? 
-                 "GPS alerts will appear here when vehicles trigger geofence violations" :
-                 "New events will appear here automatically when they occur")
+            Text(filterState.activeFilterCount > 0 ? 
+                 "Try adjusting your filters" :
+                 (isGpsChannel ? 
+                  "GPS alerts will appear here when vehicles trigger geofence violations" :
+                  "New events will appear here automatically when they occur"))
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
+            
+            if filterState.activeFilterCount > 0 {
+                Button(action: { filterState.clearAll() }) {
+                    Text("Clear Filters")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 12)
+                        .background(Color.blue)
+                        .cornerRadius(10)
+                }
+            }
             
             Spacer()
         }
@@ -400,7 +572,7 @@ struct ChannelDetailView: View {
         eventObserver = NotificationCenter.default.addObserver(
             forName: .newEventReceived,
             object: nil,
-            queue: OperationQueue()
+            queue: OperationQueue.main
         ) { notification in
             guard let userInfo = notification.userInfo,
                   let eventChannelId = userInfo["channelId"] as? String,
@@ -432,247 +604,198 @@ struct ChannelDetailView: View {
     }
 }
 
-// MARK: - GPS Event Card
+// MARK: - Channel Header Menu
 
-struct GPSEventCard: View {
-    let event: Event
+struct ChannelHeaderMenuView: View {
+    @Binding var viewMode: ChannelDetailView.ViewMode
+    @ObservedObject var filterState: FilterState
+    @Binding var showFilterSheet: Bool
     let channel: Channel
-    let showTimestamp: Bool
-    let onTap: () -> Void
-    let onSaveToggle: () -> Void
     
-    private let dateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm"
-        formatter.timeZone = TimeZone.current
-        return formatter
-    }()
-    
-    private let fullDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM dd, yyyy"
-        formatter.timeZone = TimeZone.current
-        return formatter
-    }()
+    @Environment(\.presentationMode) var presentationMode
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Header with Save Button
-            HStack {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(eventColor)
-                        .frame(width: 8, height: 8)
-                    
-                    Text(event.typeDisplay ?? event.type ?? "GPS Alert")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(eventColor)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(eventColor.opacity(0.15))
-                .cornerRadius(8)
-                
-                Spacer()
-                
-                Button(action: onSaveToggle) {
-                    Image(systemName: event.isSaved ? "bookmark.fill" : "bookmark")
-                        .font(.system(size: 18))
-                        .foregroundColor(event.isSaved ? .yellow : .gray)
-                }
-                .padding(.trailing, 8)
-                
-                if showTimestamp {
-                    Text(dateFormatter.string(from: event.date))
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .foregroundColor(.secondary)
-                }
-            }
-
-            // Vehicle Info
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Image(systemName: "car.fill")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(event.vehicleNumber ?? "Unknown Vehicle")
-                        .font(.body)
-                        .fontWeight(.medium)
-                }
-                
-                HStack(spacing: 8) {
-                    Image(systemName: "building.2.fill")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(event.vehicleTransporter ?? "Unknown Transporter")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-                
-                if let subType = event.alertSubType {
-                    HStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.caption)
-                            .foregroundColor(.orange)
-                        Text(subType)
-                            .font(.subheadline)
-                            .foregroundColor(.orange)
-                            .fontWeight(.medium)
-                    }
-                }
-                
-                if let geofence = event.geofenceInfo {
-                    HStack(spacing: 8) {
-                        Image(systemName: "map.fill")
-                            .font(.caption)
-                            .foregroundColor(.blue)
-                        Text(geofence.name ?? "Geofence Area")
-                            .font(.subheadline)
-                            .foregroundColor(.blue)
-                    }
-                }
-            }
-
-            // Map Preview Placeholder - tappable
-            Button(action: onTap) {
-                ZStack {
-                    LinearGradient(
-                        gradient: Gradient(colors: [Color.blue.opacity(0.6), Color.purple.opacity(0.6)]),
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                    
-                    VStack(spacing: 12) {
-                        Image(systemName: "map.fill")
-                            .font(.system(size: 40))
-                            .foregroundColor(.white)
-                        
-                        if let alertLoc = event.gpsAlertLocation {
-                            Text(String(format: "%.6f, %.6f", alertLoc.lat, alertLoc.lng))
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.white)
+        NavigationView {
+            List {
+                Section(header: Text("View Options")) {
+                    Button(action: {
+                        viewMode = .grid
+                        presentationMode.wrappedValue.dismiss()
+                    }) {
+                        HStack {
+                            Image(systemName: "square.grid.2x2")
+                                .foregroundColor(.blue)
+                            Text("Grid View")
+                            Spacer()
+                            if viewMode == .grid {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.blue)
+                            }
                         }
-                        
-                        Text("Tap to view on map")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.9))
+                    }
+                    
+                    Button(action: {
+                        viewMode = .timeline
+                        presentationMode.wrappedValue.dismiss()
+                    }) {
+                        HStack {
+                            Image(systemName: "clock.arrow.circlepath")
+                                .foregroundColor(.purple)
+                            Text("Timeline View")
+                            Spacer()
+                            if viewMode == .timeline {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.blue)
+                            }
+                        }
                     }
                 }
-                .frame(height: 150)
-                .cornerRadius(12)
+                
+                Section(header: Text("Quick Filters")) {
+                    Button(action: {
+                        filterState.showOnlySaved.toggle()
+                        presentationMode.wrappedValue.dismiss()
+                    }) {
+                        HStack {
+                            Image(systemName: filterState.showOnlySaved ? "bookmark.fill" : "bookmark")
+                                .foregroundColor(.yellow)
+                            Text("Saved Only")
+                            Spacer()
+                            if filterState.showOnlySaved {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                    }
+                    
+                    Button(action: {
+                        showFilterSheet = true
+                        presentationMode.wrappedValue.dismiss()
+                    }) {
+                        HStack {
+                            Image(systemName: "line.3.horizontal.decrease.circle")
+                                .foregroundColor(.blue)
+                            Text("Advanced Filters")
+                            Spacer()
+                            if filterState.activeFilterCount > 0 {
+                                Text("\(filterState.activeFilterCount)")
+                                    .font(.caption)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.white)
+                                    .frame(width: 22, height: 22)
+                                    .background(Color.blue)
+                                    .clipShape(Circle())
+                            }
+                        }
+                    }
+                }
+                
+                Section(header: Text("Channel Info")) {
+                    HStack {
+                        Text("Event Type")
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text(channel.eventTypeDisplay)
+                    }
+                    
+                    HStack {
+                        Text("Area")
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text(channel.areaDisplay)
+                    }
+                }
             }
-            .buttonStyle(PlainButtonStyle())
-
-            if showTimestamp {
-                Text(fullDateFormatter.string(from: event.date))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+            .navigationTitle("Options")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        presentationMode.wrappedValue.dismiss()
+                    }
+                }
             }
-        }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
-    }
-    
-    private var eventColor: Color {
-        switch (event.type ?? "").lowercased() {
-        case "off-route": return Color(hex: "FF5722")
-        case "tamper": return Color(hex: "F44336")
-        case "overspeed": return Color(hex: "FF9800")
-        default: return Color(hex: "2196F3")
         }
     }
 }
 
-// MARK: - Modern Event Card
+// MARK: - Timeline Event Row
 
-struct ModernEventCard: View {
+struct TimelineEventRow: View {
     let event: Event
     let channel: Channel
-    let showTimestamp: Bool
+    let isLast: Bool
     let onTap: () -> Void
     let onSaveToggle: () -> Void
     
-    private let dateFormatter: DateFormatter = {
+    private let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
-        formatter.timeZone = TimeZone.current
-        return formatter
-    }()
-    
-    private let fullDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM dd, yyyy"
-        formatter.timeZone = TimeZone.current
         return formatter
     }()
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(eventColor)
-                        .frame(width: 8, height: 8)
-                    
-                    Text(event.typeDisplay ?? event.type ?? "Event")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(eventColor)
+        HStack(alignment: .top, spacing: 12) {
+            // Timeline indicator
+            VStack(spacing: 0) {
+                Circle()
+                    .fill(eventColor)
+                    .frame(width: 12, height: 12)
+                
+                if !isLast {
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.3))
+                        .frame(width: 2)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(eventColor.opacity(0.15))
-                .cornerRadius(8)
-                
-                Spacer()
-                
-                Button(action: onSaveToggle) {
-                    Image(systemName: event.isSaved ? "bookmark.fill" : "bookmark")
-                        .font(.system(size: 18))
-                        .foregroundColor(event.isSaved ? .yellow : .gray)
-                }
-                .padding(.trailing, 8)
-                
-                if showTimestamp {
-                    Text(dateFormatter.string(from: event.date))
+            }
+            
+            // Event content
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text(timeFormatter.string(from: event.date))
                         .font(.caption)
-                        .fontWeight(.medium)
-                        .foregroundColor(.secondary)
+                        .fontWeight(.semibold)
+                        .foregroundColor(eventColor)
+                    
+                    Spacer()
+                    
+                    Button(action: onSaveToggle) {
+                        Image(systemName: event.isSaved ? "bookmark.fill" : "bookmark")
+                            .font(.caption)
+                            .foregroundColor(event.isSaved ? .yellow : .gray)
+                    }
                 }
+                
+                Button(action: onTap) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(event.location)
+                            .font(.body)
+                            .foregroundColor(.primary)
+                            .lineLimit(2)
+                        
+                        if event.isGpsEvent {
+                            HStack(spacing: 8) {
+                                Image(systemName: "location.fill")
+                                    .font(.caption)
+                                if let alertLoc = event.gpsAlertLocation {
+                                    Text(String(format: "%.6f, %.6f", alertLoc.lat, alertLoc.lng))
+                                        .font(.caption)
+                                }
+                            }
+                            .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                .buttonStyle(PlainButtonStyle())
             }
-
-            Text(event.location)
-                .font(.body)
-                .fontWeight(.medium)
-                .foregroundColor(.primary)
-                .lineLimit(2)
-
-            Button(action: onTap) {
-                CachedEventImage(event: event)
-                    .frame(height: 200)
-                    .clipped()
-                    .cornerRadius(12)
-                    .shadow(color: Color.black.opacity(0.1), radius: 5, x: 0, y: 2)
-            }
-            .buttonStyle(PlainButtonStyle())
-
-            if showTimestamp {
-                Text(fullDateFormatter.string(from: event.date))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
+            .padding(.vertical, 8)
         }
-        .padding()
+        .padding(.horizontal)
         .background(Color(.systemBackground))
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
     }
     
     private var eventColor: Color {
-        switch (event.type ?? "").lowercased() {
+        switch (event.type ?? channel.eventType).lowercased() {
         case "cd": return Color(hex: "FF5722")
         case "id": return Color(hex: "F44336")
         case "ct": return Color(hex: "E91E63")
@@ -682,6 +805,9 @@ struct ModernEventCard: View {
         case "vc": return Color(hex: "FFC107")
         case "ii": return Color(hex: "9C27B0")
         case "ls": return Color(hex: "00BCD4")
+        case "off-route": return Color(hex: "FF5722")
+        case "tamper": return Color(hex: "F44336")
+        case "overspeed": return Color(hex: "FF9800")
         default: return Color(hex: "9E9E9E")
         }
     }
