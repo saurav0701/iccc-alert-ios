@@ -26,7 +26,7 @@ struct ICCCAlertApp: App {
         }
     }
     
-    var body: some Scene {
+   var body: some Scene {
         WindowGroup {
             if authManager.isAuthenticated {
                 ContentView()
@@ -34,18 +34,42 @@ struct ICCCAlertApp: App {
                     .environmentObject(webSocketService)
                     .environmentObject(subscriptionManager)
                     .onAppear {
-                        print("🚀 ContentView appeared, starting WebSocket")
+                        print("🚀 ContentView appeared - User is authenticated")
                         connectWebSocket()
                     }
             } else {
                 LoginView()
                     .environmentObject(authManager)
+                    .onAppear {
+                        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                        print("🔐 LOGIN VIEW APPEARED")
+                        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                        print("   - User not authenticated")
+                        print("   - WebSocket NOT connected (waiting for login)")
+                        print("   - WebSocket will connect after OTP verification")
+                        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                    }
                     .onChange(of: authManager.isAuthenticated) { isAuth in
                         if isAuth {
-                            print("✅ User authenticated, connecting WebSocket")
+                            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                            print("✅ OTP VERIFIED - USER AUTHENTICATED")
+                            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                            print("   - isAuthenticated: true")
+                            print("   - Same clientId will be used: \(self.clientId)")
+                            print("   - Backend will send pending events")
+                            print("   - Connecting WebSocket in 0.5s...")
+                            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                            
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                connectWebSocket()
+                                self.connectWebSocket()
                             }
+                        } else {
+                            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                            print("🔐 USER LOGGED OUT")
+                            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                            print("   - isAuthenticated: false")
+                            print("   - WebSocket should be disconnected")
+                            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                         }
                     }
             }
@@ -54,8 +78,6 @@ struct ICCCAlertApp: App {
             handleScenePhaseChange(newPhase)
         }
     }
-    
-    // MARK: - WebSocket Lifecycle
     
     private func connectWebSocket() {
         guard authManager.isAuthenticated else {

@@ -470,7 +470,7 @@ struct SettingsView: View {
         presentAlert(alert)
     }
     
-    // ✅ FIXED: Actually clear the data from UserDefaults AND memory
+    // ✅ FIXED: Actually clear ALL event data from UserDefaults AND memory
     private func performClearData() {
         isClearing = true
         
@@ -478,54 +478,41 @@ struct SettingsView: View {
         let currentSubscriptions = subscriptionManager.subscribedChannels
         
         print("🗑️ Starting data clear...")
-        print("   - Preserved \(currentSubscriptions.count) subscriptions")
+        print("   - Current events: \(subscriptionManager.getTotalEventCount())")
+        print("   - Current saved: \(subscriptionManager.getSavedEvents().count)")
+        print("   - Preserving \(currentSubscriptions.count) subscriptions")
         
         // Disconnect WebSocket
         webSocketService.disconnect()
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            // ✅ STEP 1: Clear from UserDefaults
-            let userDefaults = UserDefaults.standard
+            // ✅ CRITICAL: Use the clearAllEventData method that clears EVERYTHING
+            self.subscriptionManager.clearAllEventData()
             
-            userDefaults.removeObject(forKey: "events_cache")
-            userDefaults.removeObject(forKey: "unread_cache")
-            userDefaults.removeObject(forKey: "saved_events")
-            userDefaults.synchronize()
-            
-            print("✅ Cleared UserDefaults: events_cache, unread_cache, saved_events")
-            
-            // ✅ STEP 2: Clear from SubscriptionManager memory
-            // This forces a reload from UserDefaults (which we just cleared)
-            let manager = SubscriptionManager.shared
-            
-            // Clear events cache in memory
-            for channelId in currentSubscriptions.map({ $0.id }) {
-                manager.markAsRead(channelId: channelId)
-            }
-            
-            // Clear saved events from memory
-            manager.clearSavedEvents()
-            
-            print("✅ Cleared SubscriptionManager memory")
-            
-            // ✅ STEP 3: Clear sync state
+            // ✅ Clear sync state
             ChannelSyncState.shared.clearAll()
-            print("✅ Cleared sync state")
             
-            // ✅ STEP 4: Force reload SubscriptionManager
-            // This will read from UserDefaults (which is now empty)
+            // ✅ Restore subscriptions (but NO events)
             for channel in currentSubscriptions {
-                manager.subscribe(channel: channel)
+                self.subscriptionManager.subscribe(channel: channel)
             }
             
-            // Force save subscriptions only
-            manager.forceSave()
+            // Force save (only subscriptions, events are cleared)
+            self.subscriptionManager.forceSave()
             ChannelSyncState.shared.forceSave()
             
-            print("✅ Data cleared and subscriptions restored")
-            print("   - Events cache: 0 (cleared)")
-            print("   - Saved events: 0 (cleared)")
-            print("   - Subscriptions: \(currentSubscriptions.count) (preserved)")
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            print("✅ DATA CLEAR COMPLETE")
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            print("CLEARED:")
+            print("  ✓ Events cache: \(self.subscriptionManager.getTotalEventCount()) (should be 0)")
+            print("  ✓ Saved events: \(self.subscriptionManager.getSavedEvents().count) (should be 0)")
+            print("  ✓ Sync state: RESET")
+            print("")
+            print("PRESERVED:")
+            print("  ✓ Subscriptions: \(currentSubscriptions.count)")
+            print("  ✓ Login session: INTACT")
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
             
             // Reconnect
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {

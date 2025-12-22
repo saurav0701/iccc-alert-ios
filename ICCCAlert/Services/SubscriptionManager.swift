@@ -142,21 +142,43 @@ class SubscriptionManager: ObservableObject {
         userDefaults.set(savedArray, forKey: savedEventsKey)
     }
     
-    // ✅ NEW: Clear saved events (for Clear Data functionality)
-    func clearSavedEvents() {
+    // ✅ FIXED: Clear ALL event data (for Clear Data functionality)
+    func clearAllEventData() {
+        print("🗑️ Clearing ALL event data...")
+        
+        // Clear from memory
+        eventsCache.removeAll()
+        unreadCountCache.removeAll()
         savedEventIds.removeAll()
+        recentEventIds.removeAll()
+        eventTimestamps.removeAll()
+        
+        // Clear from UserDefaults
+        userDefaults.removeObject(forKey: eventsKey)
+        userDefaults.removeObject(forKey: unreadKey)
         userDefaults.removeObject(forKey: savedEventsKey)
         userDefaults.synchronize()
         
-        // Update all events in cache to reflect unsaved status
-        for (channelId, var events) in eventsCache {
-            for i in 0..<events.count {
-                events[i].isSaved = false
-            }
-            eventsCache[channelId] = events
-        }
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print("✅ ALL EVENT DATA CLEARED")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print("CLEARED FROM MEMORY:")
+        print("  ✓ eventsCache: \(eventsCache.count) (should be 0)")
+        print("  ✓ unreadCountCache: \(unreadCountCache.count) (should be 0)")
+        print("  ✓ savedEventIds: \(savedEventIds.count) (should be 0)")
+        print("  ✓ recentEventIds: \(recentEventIds.count) (should be 0)")
+        print("  ✓ eventTimestamps: \(eventTimestamps.count) (should be 0)")
+        print("")
+        print("CLEARED FROM USERDEFAULTS:")
+        print("  ✓ events_cache: REMOVED")
+        print("  ✓ unread_cache: REMOVED")
+        print("  ✓ saved_events: REMOVED")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         
-        print("✅ Cleared all saved events from memory and UserDefaults")
+        // Force UI update
+        DispatchQueue.main.async {
+            self.objectWillChange.send()
+        }
     }
     
     // MARK: - Recent Event IDs Management
