@@ -221,7 +221,7 @@ struct ChannelDetailFilterSheet: View {
                             Text("Show Only Saved")
                         }
                     }
-                    .tint(.yellow)
+                    .toggleStyle(SwitchToggleStyle(tint: .yellow))
                 }
                 
                 // Reset Section
