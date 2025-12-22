@@ -51,11 +51,18 @@ struct ICCCAlertApp: App {
                     }
                     .onChange(of: authManager.isAuthenticated) { isAuth in
                         if isAuth {
+                            let deviceClientId: String = {
+                                if let uuid = UIDevice.current.identifierForVendor?.uuidString {
+                                    return "ios-\(uuid.prefix(8))"
+                                }
+                                return "ios-unknown"
+                            }()
+                            
                             print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                             print("✅ OTP VERIFIED - USER AUTHENTICATED")
                             print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                             print("   - isAuthenticated: true")
-                            print("   - Same clientId will be used: \(self.clientId)")
+                            print("   - Same clientId will be used: \(deviceClientId)")
                             print("   - Backend will send pending events")
                             print("   - Connecting WebSocket in 0.5s...")
                             print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
