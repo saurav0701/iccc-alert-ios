@@ -293,9 +293,7 @@ class AuthManager: ObservableObject {
             }
         }.resume()
     }
-    
-    // MARK: - Token Management
-    
+
     private func saveAuthData(_ response: AuthResponse) {
         print("💾 Saving auth data...")
         print("   Token: \(response.token.prefix(10))...")
@@ -369,18 +367,8 @@ class AuthManager: ObservableObject {
             completion?(true)
         }
     }
-    
-    // ✅ FIXED: Only set isAuthenticated to false, keep everything else
+
     private func performLogout() {
-        // ✅ DO NOT clear:
-        // - auth_token (keeps for same clientId on re-login)
-        // - token_expiry
-        // - user_data
-        // - subscriptions
-        // - events
-        // - saved messages
-        
-        // Just set the flag to false so user sees login screen
         isAuthenticated = false
         
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -403,9 +391,7 @@ class AuthManager: ObservableObject {
         print("    • Events will be ACKed as processed")
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     }
-    
-    // MARK: - Token Validation
-    
+
     func validateToken(completion: @escaping (Bool) -> Void) {
         guard let token = token else {
             completion(false)
@@ -427,15 +413,13 @@ class AuthManager: ObservableObject {
                    httpResponse.statusCode == 200 {
                     completion(true)
                 } else {
-                    // Token expired or invalid - clear everything
                     self.performFullLogout()
                     completion(false)
                 }
             }
         }.resume()
     }
-    
-    // ✅ NEW: Full logout (for expired tokens) - clears everything
+
     private func performFullLogout() {
         UserDefaults.standard.removeObject(forKey: "auth_token")
         UserDefaults.standard.removeObject(forKey: "token_expiry")

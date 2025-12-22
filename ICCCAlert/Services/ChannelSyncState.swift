@@ -7,8 +7,7 @@ class ChannelSyncState {
     private let syncStateKey = "channel_sync_states"
     
     private var syncStates: [String: ChannelSyncInfo] = [:]
-    
-    // Catch-up mode tracking
+
     private var catchUpMode: [String: Bool] = [:]
     private var receivedSequences: [String: Set<Int64>] = [:]
     
@@ -35,9 +34,7 @@ class ChannelSyncState {
     private init() {
         loadStates()
     }
-    
-    // MARK: - Data Persistence
-    
+
     private func loadStates() {
         if let data = userDefaults.data(forKey: syncStateKey),
            let states = try? JSONDecoder().decode([String: ChannelSyncInfo].self, from: data) {
@@ -64,9 +61,7 @@ class ChannelSyncState {
             }
         }
     }
-    
-    // MARK: - Catch-up Mode Management
-    
+
     func enableCatchUpMode(channelId: String) {
         catchUpMode[channelId] = true
         receivedSequences[channelId] = Set<Int64>()
@@ -86,9 +81,7 @@ class ChannelSyncState {
     func getCatchUpProgress(channelId: String) -> Int {
         return receivedSequences[channelId]?.count ?? 0
     }
-    
-    // MARK: - Event Recording
-    
+
     func recordEventReceived(channelId: String, eventId: String, timestamp: Int64, seq: Int64 = 0) -> Bool {
         if syncStates[channelId] == nil {
             syncStates[channelId] = ChannelSyncInfo(channelId: channelId)
@@ -100,7 +93,6 @@ class ChannelSyncState {
         
         if seq > 0 {
             if inCatchUpMode {
-                // ✅ CATCH-UP MODE: Use Set for out-of-order handling
                 if receivedSequences[channelId]?.contains(seq) == true {
                     print("⏭️ Duplicate seq \(seq) for \(channelId) (catch-up mode)")
                     return false
@@ -111,7 +103,6 @@ class ChannelSyncState {
                 print("✅ Recorded \(channelId): seq=\(seq) (CATCH-UP, total=\(setSize))")
                 
             } else {
-                // ✅ LIVE MODE: Simple comparison (efficient)
                 if seq <= state.highestSeq {
                     print("⏭️ Duplicate seq \(seq) for \(channelId) (live mode, highest=\(state.highestSeq))")
                     return false
@@ -120,8 +111,7 @@ class ChannelSyncState {
                 print("✅ Recorded \(channelId): seq=\(seq) (LIVE)")
             }
         }
-        
-        // Update state with highest sequence
+
         state.totalReceived += 1
         state.lastSyncTime = Int64(Date().timeIntervalSince1970)
         
@@ -131,7 +121,6 @@ class ChannelSyncState {
             state.lastEventTimestamp = timestamp
             state.lastEventSeq = seq
         } else if seq == 0 && timestamp > state.lastEventTimestamp {
-            // No sequence, use timestamp
             state.lastEventTimestamp = timestamp
             state.lastEventId = eventId
         }
@@ -141,9 +130,7 @@ class ChannelSyncState {
         
         return true
     }
-    
-    // MARK: - Query Methods
-    
+
     func getSyncInfo(channelId: String) -> ChannelSyncInfo? {
         return syncStates[channelId]
     }
@@ -163,9 +150,7 @@ class ChannelSyncState {
     func getTotalEventsReceived() -> Int64 {
         return syncStates.values.reduce(0) { $0 + $1.totalReceived }
     }
-    
-    // MARK: - Channel Management
-    
+
     func clearChannel(channelId: String) {
         syncStates.removeValue(forKey: channelId)
         receivedSequences.removeValue(forKey: channelId)
@@ -181,9 +166,7 @@ class ChannelSyncState {
         userDefaults.removeObject(forKey: syncStateKey)
         print("✅ Cleared all sync state")
     }
-    
-    // MARK: - Statistics
-    
+ 
     func getStats() -> [String: Any] {
         let channelStats = syncStates.map { (channelId, state) -> [String: Any] in
             return [

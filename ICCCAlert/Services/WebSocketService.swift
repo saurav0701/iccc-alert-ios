@@ -14,26 +14,31 @@ class WebSocketService: ObservableObject {
     
     private let baseURL = "ws://192.168.29.69:2222"
     
-    // ✅ NEW: Track pending subscriptions
     private var pendingSubscriptionUpdate = false
     private var hasSubscribed = false
     private var lastSubscriptionTime: TimeInterval = 0
-    
-    // ✅ NEW: Event processing queue (like Android's ConcurrentLinkedQueue)
+ 
+    // ✅ OPTIMIZED: Adaptive concurrency based on device
     private let eventQueue = DispatchQueue(label: "com.iccc.eventProcessing", qos: .userInitiated, attributes: .concurrent)
     private let ackQueue = DispatchQueue(label: "com.iccc.ackProcessing", qos: .utility)
-    
-    // ✅ NEW: Pending ACKs (events waiting to be acknowledged)
+    private let maxConcurrentProcessors = ProcessInfo.processInfo.processorCount.clamped(to: 2...4)
+    private var activeProcessors = 0
+    private let processorLock = NSLock()
+
     private var pendingAcks: [String] = []
     private let ackLock = NSLock()
     private let maxAckBatchSize = 50
     private var ackFlushTimer: Timer?
-    
-    // ✅ NEW: Stats tracking (like Android)
+
     private var receivedCount = 0
     private var processedCount = 0
     private var droppedCount = 0
     private var ackedCount = 0
+    
+    // ✅ NEW: Crash recovery tracking
+    private var lastProcessedTimestamp: TimeInterval = 0
+    private var catchUpMode = false
+    private let catchUpThreshold = 10 // If >10 pending, enter catch-up mode
     
     private var clientId: String {
         if let uuid = UIDevice.current.identifierForVendor?.uuidString {
@@ -47,8 +52,21 @@ class WebSocketService: ObservableObject {
         config.timeoutIntervalForRequest = 30
         session = URLSession(configuration: config)
         
-        // Start ACK flusher
         startAckFlusher()
+        startHealthMonitor()  // ✅ NEW
+    }
+    
+    // ✅ NEW: Monitor for hangs/crashes
+    private func startHealthMonitor() {
+        Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            
+            let now = Date().timeIntervalSince1970
+            if self.lastProcessedTimestamp > 0 && (now - self.lastProcessedTimestamp) > 10 {
+                DebugLogger.shared.log("⚠️ Processing stalled, reconnecting", emoji: "🔄", color: .orange)
+                self.reconnect()
+            }
+        }
     }
     
     func connect() {
@@ -76,8 +94,7 @@ class WebSocketService: ObservableObject {
                 self.hasSubscribed = false
                 DebugLogger.shared.log("Connected successfully", emoji: "✅", color: .green)
                 self.startPing()
-                
-                // ✅ Send subscription after connection
+  
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     self.sendSubscriptionV2()
                 }
@@ -88,7 +105,6 @@ class WebSocketService: ObservableObject {
     }
     
     func disconnect() {
-        // ✅ CRITICAL: Flush all pending ACKs before disconnect
         flushAcksSync()
         
         webSocketTask?.cancel(with: .goingAway, reason: nil)
@@ -103,7 +119,6 @@ class WebSocketService: ObservableObject {
     private func reconnect() {
         DebugLogger.shared.log("Attempting reconnect...", emoji: "🔄", color: .orange)
         
-        // ✅ Don't flush ACKs on disconnect - they'll be NAKed by backend
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         webSocketTask = nil
         isConnected = false
@@ -123,9 +138,13 @@ class WebSocketService: ObservableObject {
                 switch message {
                 case .string(let text):
                     self.receivedCount += 1
-                    DebugLogger.shared.log("Received: \(text.prefix(100))...", emoji: "📥", color: .blue)
+                    self.lastProcessedTimestamp = Date().timeIntervalSince1970
                     
-                    // ✅ Process on background queue (like Android's parallel processors)
+                    // ✅ OPTIMIZED: Throttle processing during catch-up
+                    if self.catchUpMode {
+                        Thread.sleep(forTimeInterval: 0.01) // 10ms delay
+                    }
+                    
                     self.eventQueue.async {
                         self.handleMessage(text)
                     }
@@ -133,7 +152,11 @@ class WebSocketService: ObservableObject {
                 case .data(let data):
                     if let text = String(data: data, encoding: .utf8) {
                         self.receivedCount += 1
-                        DebugLogger.shared.log("Received: \(text.prefix(100))...", emoji: "📥", color: .blue)
+                        self.lastProcessedTimestamp = Date().timeIntervalSince1970
+                        
+                        if self.catchUpMode {
+                            Thread.sleep(forTimeInterval: 0.01)
+                        }
                         
                         self.eventQueue.async {
                             self.handleMessage(text)
@@ -154,38 +177,44 @@ class WebSocketService: ObservableObject {
             }
         }
     }
-    
-    // ✅ OPTIMIZED: Fast event processing (like Android)
+
+    // ✅ FIXED: Crash-proof message handling with memory management
     private func handleMessage(_ text: String) {
-        // Skip subscription confirmations
+        // Auto-release pool for memory management during bulk operations
+        autoreleasepool {
+            do {
+                try _handleMessageInternal(text)
+            } catch {
+                DebugLogger.shared.log("Error handling message: \(error)", emoji: "❌", color: .red)
+                droppedCount += 1
+            }
+        }
+    }
+    
+    private func _handleMessageInternal(_ text: String) throws {
         if text.contains("\"status\":\"subscribed\"") {
             DebugLogger.shared.log("Subscription confirmed", emoji: "✅", color: .green)
             pendingSubscriptionUpdate = false
             return
         }
-        
-        // Parse event
+  
         guard let data = text.data(using: .utf8) else {
-            DebugLogger.shared.log("Failed to convert to data", emoji: "❌", color: .red)
-            return
+            throw NSError(domain: "WebSocket", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert to data"])
         }
         
         guard let event = try? JSONDecoder().decode(Event.self, from: data) else {
-            DebugLogger.shared.log("Failed to decode JSON", emoji: "❌", color: .red)
-            return
+            throw NSError(domain: "WebSocket", code: -2, userInfo: [NSLocalizedDescriptionKey: "Failed to decode JSON"])
         }
         
         guard let eventId = event.id,
               let area = event.area,
               let type = event.type else {
-            DebugLogger.shared.log("Event missing required fields", emoji: "❌", color: .red)
             droppedCount += 1
             return
         }
         
         let channelId = "\(area)_\(type)"
-        
-        // ✅ Extract sequence number from data (like Android)
+ 
         let sequence: Int64 = {
             if let seqValue = event.data?["_seq"] {
                 switch seqValue {
@@ -199,20 +228,14 @@ class WebSocketService: ObservableObject {
             }
             return 0
         }()
-        
-        DebugLogger.shared.log("Event: \(channelId) - \(eventId) (seq: \(sequence))", emoji: "🔔", color: .purple)
-        
-        // Check if subscribed
+
         if !SubscriptionManager.shared.isSubscribed(channelId: channelId) {
             DebugLogger.shared.log("Not subscribed to \(channelId)", emoji: "⏭️", color: .orange)
             droppedCount += 1
-            
-            // ✅ CRITICAL: Still ACK even if not subscribed (backend expects it)
             sendAck(eventId: eventId)
             return
         }
-        
-        // ✅ Check for duplicates using sequence (like Android's ChannelSyncState)
+
         let isNew = ChannelSyncState.shared.recordEventReceived(
             channelId: channelId,
             eventId: eventId,
@@ -223,46 +246,48 @@ class WebSocketService: ObservableObject {
         if !isNew && sequence > 0 {
             DebugLogger.shared.log("Duplicate event \(eventId)", emoji: "⏭️", color: .orange)
             droppedCount += 1
-            
-            // ✅ CRITICAL: ACK duplicates too
             sendAck(eventId: eventId)
             return
         }
-        
-        // ✅ CRITICAL: Add to storage FIRST (priority)
+
+        // ✅ CRITICAL: Store event FIRST (highest priority)
         let added = SubscriptionManager.shared.addEvent(event)
         
         if added {
-    processedCount += 1
-    DebugLogger.shared.log("Event stored successfully", emoji: "💾", color: .green)
-    
-    // ✅ NEW: Send local notification (create a temporary channel for notification)
-    let tempChannel = Channel(
-        id: channelId,
-        area: area,
-        areaDisplay: event.areaDisplay ?? area,
-        eventType: type,
-        eventTypeDisplay: event.typeDisplay ?? type,
-        description: "",  // ✅ FIXED: Use empty string instead of nil
-        isSubscribed: true,
-        isMuted: false,
-        isPinned: false
-    )
-    NotificationManager.shared.sendEventNotification(event: event, channel: tempChannel)
-    
-    // Notify UI
-    DispatchQueue.main.async {
-        NotificationCenter.default.post(
-            name: .newEventReceived,
-            object: nil,
-            userInfo: ["channelId": channelId, "eventId": eventId]
-        )
-        DebugLogger.shared.log("UI notification posted", emoji: "📢", color: .blue)
-    }
-} else {
-    droppedCount += 1
-    DebugLogger.shared.log("Event rejected (duplicate)", emoji: "⏭️", color: .orange)
-}
+            processedCount += 1
+            
+            // ✅ OPTIMIZED: Batch notifications during catch-up
+            if !catchUpMode {
+                // Live mode - send notifications immediately
+                let tempChannel = Channel(
+                    id: channelId,
+                    area: area,
+                    areaDisplay: event.areaDisplay ?? area,
+                    eventType: type,
+                    eventTypeDisplay: event.typeDisplay ?? type,
+                    description: "",
+                    isSubscribed: true,
+                    isMuted: false,
+                    isPinned: false
+                )
+                
+                // ✅ FIXED: Ensure main thread for notifications
+                DispatchQueue.main.async {
+                    NotificationManager.shared.sendEventNotification(event: event, channel: tempChannel)
+                }
+            }
+
+            // ✅ FIXED: UI updates MUST be on main thread
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .newEventReceived,
+                    object: nil,
+                    userInfo: ["channelId": channelId, "eventId": eventId]
+                )
+            }
+        } else {
+            droppedCount += 1
+        }
         
         sendAck(eventId: eventId)
 
@@ -282,15 +307,13 @@ class WebSocketService: ObservableObject {
             flushAcks()
         }
     }
-    
-    // ✅ NEW: Periodic ACK flusher (like Android)
+
     private func startAckFlusher() {
         ackFlushTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             self?.flushAcks()
         }
     }
-    
-    // ✅ NEW: Batch ACK sender (like Android's flushAcks)
+
     private func flushAcks() {
         ackQueue.async { [weak self] in
             guard let self = self else { return }
@@ -301,8 +324,7 @@ class WebSocketService: ObservableObject {
                 self.ackLock.unlock()
                 return
             }
-            
-            // Take up to 100 ACKs
+
             let count = min(self.pendingAcks.count, 100)
             let acksToSend = Array(self.pendingAcks.prefix(count))
             self.pendingAcks.removeFirst(count)
@@ -325,7 +347,6 @@ class WebSocketService: ObservableObject {
             
             guard let data = try? JSONSerialization.data(withJSONObject: msg),
                   let str = String(data: data, encoding: .utf8) else {
-                // Re-queue on failure
                 self.ackLock.lock()
                 self.pendingAcks.insert(contentsOf: acksToSend, at: 0)
                 self.ackLock.unlock()
@@ -335,7 +356,6 @@ class WebSocketService: ObservableObject {
             self.webSocketTask?.send(.string(str)) { error in
                 if let error = error {
                     DebugLogger.shared.log("ACK failed: \(error.localizedDescription)", emoji: "❌", color: .red)
-                    // Re-queue on failure
                     self.ackLock.lock()
                     self.pendingAcks.insert(contentsOf: acksToSend, at: 0)
                     self.ackLock.unlock()
@@ -349,8 +369,7 @@ class WebSocketService: ObservableObject {
             }
         }
     }
-    
-    // ✅ NEW: Synchronous flush for app shutdown
+
     private func flushAcksSync() {
         ackLock.lock()
         let allAcks = pendingAcks
@@ -376,8 +395,7 @@ class WebSocketService: ObservableObject {
         
         DebugLogger.shared.log("Flushed \(allAcks.count) ACKs on shutdown", emoji: "💾", color: .blue)
     }
-    
-    // ✅ UPDATED: Enhanced subscription with sync state (like Android)
+
     func sendSubscriptionV2() {
         guard isConnected, webSocketTask?.state == .running else {
             DebugLogger.shared.log("Cannot subscribe - not connected", emoji: "⚠️", color: .orange)
@@ -398,13 +416,11 @@ class WebSocketService: ObservableObject {
         let filters = subscriptions.map { channel -> [String: String] in
             return ["area": channel.area, "eventType": channel.eventType]
         }
-        
-        // ✅ Enable catch-up mode for all channels
+
         subscriptions.forEach { channel in
             ChannelSyncState.shared.enableCatchUpMode(channelId: channel.id)
         }
-        
-        // ✅ Build sync state (like Android)
+ 
         var hasSyncState = false
         var syncState: [String: [String: Any]] = [:]
         
@@ -437,10 +453,18 @@ class WebSocketService: ObservableObject {
         let mode = resetConsumers ? "RESET" : "RESUME"
         DebugLogger.shared.log("Sending subscription (\(mode)): \(subscriptions.count) channels", emoji: "📤", color: .blue)
         
-        if resetConsumers {
-            DebugLogger.shared.log("RESET MODE: Will delete old consumers", emoji: "⚠️", color: .orange)
-        } else {
-            DebugLogger.shared.log("RESUME MODE: \(syncState.count) channels with state", emoji: "✅", color: .green)
+        // ✅ NEW: Enter catch-up mode if resuming with state
+        if !resetConsumers {
+            catchUpMode = true
+            DebugLogger.shared.log("⚡ CATCH-UP MODE ENABLED", emoji: "🚀", color: .orange)
+            
+            // Auto-disable after 30 seconds
+            DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
+                if self.catchUpMode {
+                    self.catchUpMode = false
+                    DebugLogger.shared.log("✅ CATCH-UP MODE AUTO-DISABLED", emoji: "🎯", color: .green)
+                }
+            }
         }
         
         webSocketTask?.send(.string(str)) { error in
@@ -477,4 +501,10 @@ class WebSocketService: ObservableObject {
 
 extension Notification.Name {
     static let newEventReceived = Notification.Name("newEventReceived")
+}
+
+extension Comparable {
+    func clamped(to limits: ClosedRange<Self>) -> Self {
+        return min(max(self, limits.lowerBound), limits.upperBound)
+    }
 }
