@@ -7,13 +7,13 @@ class SubscriptionManager: ObservableObject {
     @Published var subscribedChannels: [Channel] = []
     private var eventsCache: [String: [Event]] = [:]
     private var unreadCountCache: [String: Int] = [:]
-    private var savedEventIds: Set<String> = []  // ✅ NEW: Track saved events
+    private var savedEventIds: Set<String> = []
     
     private let userDefaults = UserDefaults.standard
     private let channelsKey = "subscribed_channels"
     private let eventsKey = "events_cache"
     private let unreadKey = "unread_cache"
-    private let savedEventsKey = "saved_events"  // ✅ NEW
+    private let savedEventsKey = "saved_events"
     
     // Deduplication
     private var recentEventIds: Set<String> = []
@@ -98,7 +98,7 @@ class SubscriptionManager: ObservableObject {
             unreadCountCache = unread
         }
         
-        // ✅ NEW: Load saved event IDs
+        // Load saved event IDs
         if let savedIds = userDefaults.array(forKey: savedEventsKey) as? [String] {
             savedEventIds = Set(savedIds)
             print("📦 Loaded \(savedIds.count) saved events")
@@ -109,7 +109,7 @@ class SubscriptionManager: ObservableObject {
         saveChannels()
         saveEvents()
         saveUnreadCounts()
-        saveSavedEvents()  // ✅ NEW
+        saveSavedEvents()
         
         let now = Int64(Date().timeIntervalSince1970)
         userDefaults.set(now, forKey: lastRuntimeCheckKey)
@@ -137,10 +137,26 @@ class SubscriptionManager: ObservableObject {
         }
     }
     
-    // ✅ NEW: Save saved events
     private func saveSavedEvents() {
         let savedArray = Array(savedEventIds)
         userDefaults.set(savedArray, forKey: savedEventsKey)
+    }
+    
+    // ✅ NEW: Clear saved events (for Clear Data functionality)
+    func clearSavedEvents() {
+        savedEventIds.removeAll()
+        userDefaults.removeObject(forKey: savedEventsKey)
+        userDefaults.synchronize()
+        
+        // Update all events in cache to reflect unsaved status
+        for (channelId, var events) in eventsCache {
+            for i in 0..<events.count {
+                events[i].isSaved = false
+            }
+            eventsCache[channelId] = events
+        }
+        
+        print("✅ Cleared all saved events from memory and UserDefaults")
     }
     
     // MARK: - Recent Event IDs Management
@@ -279,7 +295,7 @@ class SubscriptionManager: ObservableObject {
             }
         }
         
-        // ✅ Set saved status if event was saved before
+        // Set saved status if event was saved before
         var eventToAdd = event
         if savedEventIds.contains(eventId) {
             eventToAdd.isSaved = true
@@ -309,7 +325,7 @@ class SubscriptionManager: ObservableObject {
     func getEvents(channelId: String) -> [Event] {
         guard var events = eventsCache[channelId] else { return [] }
         
-        // ✅ Update saved status for all events
+        // Update saved status for all events
         for i in 0..<events.count {
             if let eventId = events[i].id {
                 events[i].isSaved = savedEventIds.contains(eventId)
@@ -322,7 +338,7 @@ class SubscriptionManager: ObservableObject {
     func getLastEvent(channelId: String) -> Event? {
         guard var event = eventsCache[channelId]?.first else { return nil }
         
-        // ✅ Update saved status
+        // Update saved status
         if let eventId = event.id {
             event.isSaved = savedEventIds.contains(eventId)
         }
@@ -334,7 +350,6 @@ class SubscriptionManager: ObservableObject {
         return unreadCountCache[channelId] ?? 0
     }
     
-    // ✅ FIXED: Mark as read and force save
     func markAsRead(channelId: String) {
         unreadCountCache[channelId] = 0
         saveUnreadCounts()
@@ -351,7 +366,7 @@ class SubscriptionManager: ObservableObject {
         return eventsCache.values.reduce(0) { $0 + $1.count }
     }
     
-    // ✅ NEW: Saved Events Management
+    // MARK: - Saved Events Management
     
     func toggleSaved(eventId: String, channelId: String) {
         if savedEventIds.contains(eventId) {
@@ -399,41 +414,39 @@ class SubscriptionManager: ObservableObject {
     
     static func getAllAvailableChannels() -> [Channel] {
         let areas = [
-    ("barora", "Barora Area"),
-    ("block2", "Block II Area"),
-    ("govindpur", "Govindpur Area"),
-    ("katras", "Katras Area"),
-    ("sijua", "Sijua Area"),
-    ("kusunda", "Kusunda Area"),
-    ("pbarea", "PB Area"),
-    ("bastacolla", "Bastacolla Area"),
-    ("lodna", "Lodna Area"),
-    ("ej", "EJ Area"),
-    ("cvarea", "CV Area"),
-    ("ccwo", "CCWO"),
-    ("wjarea", "WJ Area")
-]
-
+            ("barora", "Barora Area"),
+            ("block2", "Block II Area"),
+            ("govindpur", "Govindpur Area"),
+            ("katras", "Katras Area"),
+            ("sijua", "Sijua Area"),
+            ("kusunda", "Kusunda Area"),
+            ("pbarea", "PB Area"),
+            ("bastacolla", "Bastacolla Area"),
+            ("lodna", "Lodna Area"),
+            ("ej", "EJ Area"),
+            ("cvarea", "CV Area"),
+            ("ccwo", "CCWO"),
+            ("wjarea", "WJ Area")
+        ]
         
         let eventTypes = [
-            ("cd", "Crowd Detection"),
-            ("vd", "Vehicle Detection"),
-            ("pd", "Person Detection"),
-            ("id", "Intrusion Detection"),
-            ("vc", "Vehicle Congestion"),
-            ("ls", "Loading Status"),
-            ("us", "Unloading Status"),
-            ("ct", "Camera Tampering"),
-            ("sh", "Safety Hazard"),
-            ("ii", "Insufficient Illumination"),
-            ("off-route", "Off-Route Alert"),
-            ("tamper", "Tamper Alert")
+            ("cd", "Crowd Detection", "FF5722"),
+            ("vd", "Vehicle Detection", "2196F3"),
+            ("pd", "Person Detection", "4CAF50"),
+            ("id", "Intrusion Detection", "F44336"),
+            ("vc", "Vehicle Congestion", "FFC107"),
+            ("ls", "Loading Status", "00BCD4"),
+            ("ct", "Camera Tampering", "E91E63"),
+            ("sh", "Safety Hazard", "FF9800"),
+            ("ii", "Insufficient Illumination", "9C27B0"),
+            ("off-route", "Off-Route Alert", "FF5722"),
+            ("tamper", "Tamper Alert", "F44336")
         ]
         
         var channels: [Channel] = []
         
         for (area, areaDisplay) in areas {
-            for (eventType, eventTypeDisplay) in eventTypes {
+            for (eventType, eventTypeDisplay, _) in eventTypes {
                 channels.append(Channel(
                     id: "\(area)_\(eventType)",
                     area: area,

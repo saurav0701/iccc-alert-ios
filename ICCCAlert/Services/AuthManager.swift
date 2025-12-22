@@ -327,11 +327,32 @@ class AuthManager: ObservableObject {
         }
     }
     
-    // ✅ FIXED: Logout - keep all data, just set isAuthenticated to false
+    // ✅ FIXED: Logout - disconnect WebSocket, keep all data intact
     func logout(completion: ((Bool) -> Void)? = nil) {
-        print("🚪 Logging out (keeping all data)...")
+        print("🚪 Logging out...")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print("LOGOUT PROCESS:")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         
-        // Optional: Call backend logout endpoint (but don't clear local data)
+        // Step 1: Save current state
+        SubscriptionManager.shared.forceSave()
+        ChannelSyncState.shared.forceSave()
+        print("✓ Saved current state")
+        
+        // Step 2: Log current stats
+        let subscriptions = SubscriptionManager.shared.subscribedChannels.count
+        let events = SubscriptionManager.shared.getTotalEventCount()
+        let saved = SubscriptionManager.shared.getSavedEvents().count
+        print("✓ Current data:")
+        print("  - Subscriptions: \(subscriptions)")
+        print("  - Events: \(events)")
+        print("  - Saved messages: \(saved)")
+        
+        // Step 3: Disconnect WebSocket (CRITICAL - stops receiving events)
+        WebSocketService.shared.disconnect()
+        print("✓ WebSocket disconnected")
+        
+        // Step 4: Optional backend logout (but keep local data)
         if let token = token, let url = URL(string: "\(baseURL)/auth/logout") {
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
@@ -349,17 +370,38 @@ class AuthManager: ObservableObject {
         }
     }
     
-    // ✅ FIXED: Only set isAuthenticated to false, keep token/user data
+    // ✅ FIXED: Only set isAuthenticated to false, keep everything else
     private func performLogout() {
-        // ✅ DO NOT clear token, expiry, or user_data
+        // ✅ DO NOT clear:
+        // - auth_token (keeps for same clientId on re-login)
+        // - token_expiry
+        // - user_data
+        // - subscriptions
+        // - events
+        // - saved messages
+        
         // Just set the flag to false so user sees login screen
-        
         isAuthenticated = false
-        // Keep currentUser in memory for quick re-login
         
-        print("✅ Logged out (data preserved for resume)")
-        print("   Token still in UserDefaults: \(token != nil)")
-        print("   User data still available: \(currentUser?.name ?? "nil")")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print("✅ LOGOUT COMPLETE")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print("DATA PRESERVATION:")
+        print("  ✓ Token preserved: \(token != nil)")
+        print("  ✓ User data: \(currentUser?.name ?? "nil")")
+        print("  ✓ Subscriptions: \(SubscriptionManager.shared.subscribedChannels.count)")
+        print("  ✓ Events: \(SubscriptionManager.shared.getTotalEventCount())")
+        print("  ✓ Saved messages: \(SubscriptionManager.shared.getSavedEvents().count)")
+        print("")
+        print("WHAT HAPPENS NEXT:")
+        print("  → User will see login screen")
+        print("  → WebSocket is disconnected")
+        print("  → All data is preserved")
+        print("  → On re-login with same phone:")
+        print("    • Same clientId will be used")
+        print("    • Backend will send all pending events")
+        print("    • Events will be ACKed as processed")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     }
     
     // MARK: - Token Validation

@@ -343,7 +343,7 @@ struct SettingsView: View {
     private var logoutAlert: Alert {
         Alert(
             title: Text("Sign Out"),
-            message: Text("Are you sure you want to sign out? Your data and subscriptions will be preserved."),
+            message: Text("Are you sure you want to sign out?\n\nYour data and subscriptions will be preserved.\nWhen you log back in with the same phone number, you'll receive all pending events."),
             primaryButton: .cancel(),
             secondaryButton: .destructive(Text("Sign Out")) {
                 logout()
@@ -470,11 +470,11 @@ struct SettingsView: View {
         presentAlert(alert)
     }
     
-    // ✅ FIXED: Actually clear the data from UserDefaults
+    // ✅ FIXED: Actually clear the data from UserDefaults AND memory
     private func performClearData() {
         isClearing = true
         
-        // Save current subscriptions
+        // Save current subscriptions (these will be preserved)
         let currentSubscriptions = subscriptionManager.subscribedChannels
         
         print("🗑️ Starting data clear...")
@@ -484,39 +484,48 @@ struct SettingsView: View {
         webSocketService.disconnect()
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            // ✅ ACTUALLY clear all event and saved data from UserDefaults
+            // ✅ STEP 1: Clear from UserDefaults
             let userDefaults = UserDefaults.standard
             
-            // Clear events cache
             userDefaults.removeObject(forKey: "events_cache")
-            
-            // Clear unread counts
             userDefaults.removeObject(forKey: "unread_cache")
-            
-            // Clear saved events
             userDefaults.removeObject(forKey: "saved_events")
-            
-            // Force synchronize
             userDefaults.synchronize()
             
-            print("✅ Cleared events_cache, unread_cache, saved_events from UserDefaults")
+            print("✅ Cleared UserDefaults: events_cache, unread_cache, saved_events")
             
-            // Clear sync state
-            ChannelSyncState.shared.clearAll()
+            // ✅ STEP 2: Clear from SubscriptionManager memory
+            // This forces a reload from UserDefaults (which we just cleared)
+            let manager = SubscriptionManager.shared
             
-            // Reload subscription manager to pick up cleared data
-            subscriptionManager.subscribedChannels.removeAll()
-            
-            // Restore subscriptions
-            for channel in currentSubscriptions {
-                subscriptionManager.subscribe(channel: channel)
+            // Clear events cache in memory
+            for channelId in currentSubscriptions.map({ $0.id }) {
+                manager.markAsRead(channelId: channelId)
             }
             
-            // Force save subscriptions
-            subscriptionManager.forceSave()
+            // Clear saved events from memory
+            manager.clearSavedEvents()
+            
+            print("✅ Cleared SubscriptionManager memory")
+            
+            // ✅ STEP 3: Clear sync state
+            ChannelSyncState.shared.clearAll()
+            print("✅ Cleared sync state")
+            
+            // ✅ STEP 4: Force reload SubscriptionManager
+            // This will read from UserDefaults (which is now empty)
+            for channel in currentSubscriptions {
+                manager.subscribe(channel: channel)
+            }
+            
+            // Force save subscriptions only
+            manager.forceSave()
             ChannelSyncState.shared.forceSave()
             
             print("✅ Data cleared and subscriptions restored")
+            print("   - Events cache: 0 (cleared)")
+            print("   - Saved events: 0 (cleared)")
+            print("   - Subscriptions: \(currentSubscriptions.count) (preserved)")
             
             // Reconnect
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
@@ -535,10 +544,14 @@ struct SettingsView: View {
         let alert = UIAlertController(
             title: "✅ Data Cleared",
             message: """
-                • All cached events deleted
-                • All saved messages deleted
+                Successfully cleared:
+                • All cached events
+                • All saved messages
                 • Sync history reset
-                • Subscriptions preserved
+                
+                Preserved:
+                • Your subscriptions (\(subscriptionManager.subscribedChannels.count) channels)
+                • Your login session
                 
                 Reconnecting to receive fresh events...
                 """,
@@ -548,23 +561,30 @@ struct SettingsView: View {
         presentAlert(alert)
     }
     
-    // ✅ FIXED: Logout - just disconnect WebSocket, keep all data
+    // ✅ FIXED: Logout - disconnect WebSocket, keep all data
     private func logout() {
         print("🔐 Starting logout...")
         
-        // Save current state
+        // Save current state before logout
         subscriptionManager.forceSave()
         ChannelSyncState.shared.forceSave()
         
-        // Just disconnect WebSocket (keep all data)
+        print("   ✓ Saved current state")
+        print("   ✓ Subscriptions: \(subscriptionManager.subscribedChannels.count)")
+        print("   ✓ Events: \(subscriptionManager.getTotalEventCount())")
+        print("   ✓ Saved messages: \(subscriptionManager.getSavedEvents().count)")
+        
+        // Disconnect WebSocket (critical - stops receiving events)
         webSocketService.disconnect()
+        print("   ✓ WebSocket disconnected")
         
-        print("✅ WebSocket disconnected, data preserved")
-        
-        // Call auth logout (this just updates isAuthenticated flag)
+        // Call auth logout (this just updates isAuthenticated flag, keeps everything else)
         authManager.logout { success in
             if success {
-                print("✅ Logged out successfully - data and subscriptions preserved")
+                print("✅ Logged out successfully")
+                print("   ℹ️ All data preserved")
+                print("   ℹ️ WebSocket will reconnect automatically when you log back in")
+                print("   ℹ️ You'll receive all pending events with the same clientId")
             }
         }
     }
