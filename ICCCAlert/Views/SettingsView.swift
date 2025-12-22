@@ -11,21 +11,16 @@ struct SettingsView: View {
     @State private var isClearing = false
     @State private var syncStats: [String: Any] = [:]
     
-    // ✅ WORKING: Notification settings that actually control behavior
+    // ✅ Notification settings that actually control behavior
     @AppStorage("notifications_enabled") private var notificationsEnabled = true
     @AppStorage("vibration_enabled") private var vibrationEnabled = true
     @AppStorage("sound_enabled") private var soundEnabled = true
-    
-    // ✅ WORKING: App preferences that control UI behavior
-    @AppStorage("show_timestamps") private var showTimestamps = true
-    @AppStorage("auto_mark_read") private var autoMarkRead = true
     
     var body: some View {
         NavigationView {
             List {
                 profileSection
                 notificationsSection
-                preferencesSection
                 connectionSection
                 statisticsSection
                 storageSection
@@ -102,7 +97,6 @@ struct SettingsView: View {
             .onChange(of: notificationsEnabled) { newValue in
                 print("✅ Notifications: \(newValue ? "Enabled" : "Disabled")")
                 if !newValue {
-                    // Clear pending notifications when disabled
                     NotificationManager.shared.clearNotifications()
                 }
             }
@@ -136,30 +130,6 @@ struct SettingsView: View {
             Text("Notifications")
         } footer: {
             Text("Control how you receive alerts. Notifications must be enabled in System Settings to work.")
-        }
-    }
-    
-    // MARK: - Preferences Section
-    
-    private var preferencesSection: some View {
-        Section {
-            Toggle(isOn: $showTimestamps) {
-                Label("Show Timestamps", systemImage: "clock.fill")
-            }
-            .onChange(of: showTimestamps) { _ in
-                print("✅ Show timestamps: \(showTimestamps ? "Enabled" : "Disabled")")
-            }
-            
-            Toggle(isOn: $autoMarkRead) {
-                Label("Auto Mark as Read", systemImage: "checkmark.circle.fill")
-            }
-            .onChange(of: autoMarkRead) { _ in
-                print("✅ Auto mark read: \(autoMarkRead ? "Enabled" : "Disabled")")
-            }
-        } header: {
-            Text("Preferences")
-        } footer: {
-            Text("Automatically mark events as read when viewing channel details")
         }
     }
     
@@ -263,7 +233,7 @@ struct SettingsView: View {
         } header: {
             Text("Storage Management")
         } footer: {
-            Text("Clearing data removes cached events and saved messages but keeps subscriptions and login intact")
+            Text("Clearing data removes all cached events and saved messages but keeps subscriptions and login intact")
         }
     }
     
@@ -373,7 +343,7 @@ struct SettingsView: View {
     private var logoutAlert: Alert {
         Alert(
             title: Text("Sign Out"),
-            message: Text("Are you sure you want to sign out? Your subscriptions will be preserved."),
+            message: Text("Are you sure you want to sign out? Your data and subscriptions will be preserved."),
             primaryButton: .cancel(),
             secondaryButton: .destructive(Text("Sign Out")) {
                 logout()
@@ -389,7 +359,7 @@ struct SettingsView: View {
                 
                 • All cached events (\(subscriptionManager.getTotalEventCount()) events)
                 • All saved messages (\(subscriptionManager.getSavedEvents().count) messages)
-                • Channel sync state
+                • Channel sync history
                 
                 Your subscriptions and login will be preserved.
                 
@@ -500,29 +470,59 @@ struct SettingsView: View {
         presentAlert(alert)
     }
     
+    // ✅ FIXED: Actually clear the data from UserDefaults
     private func performClearData() {
         isClearing = true
         
+        // Save current subscriptions
         let currentSubscriptions = subscriptionManager.subscribedChannels
         
         print("🗑️ Starting data clear...")
         print("   - Preserved \(currentSubscriptions.count) subscriptions")
         
+        // Disconnect WebSocket
         webSocketService.disconnect()
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            self.clearEventData()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            // ✅ ACTUALLY clear all event and saved data from UserDefaults
+            let userDefaults = UserDefaults.standard
+            
+            // Clear events cache
+            userDefaults.removeObject(forKey: "events_cache")
+            
+            // Clear unread counts
+            userDefaults.removeObject(forKey: "unread_cache")
+            
+            // Clear saved events
+            userDefaults.removeObject(forKey: "saved_events")
+            
+            // Force synchronize
+            userDefaults.synchronize()
+            
+            print("✅ Cleared events_cache, unread_cache, saved_events from UserDefaults")
+            
+            // Clear sync state
             ChannelSyncState.shared.clearAll()
-            self.restoreSubscriptions(currentSubscriptions)
-            self.subscriptionManager.forceSave()
+            
+            // Reload subscription manager to pick up cleared data
+            subscriptionManager.subscribedChannels.removeAll()
+            
+            // Restore subscriptions
+            for channel in currentSubscriptions {
+                subscriptionManager.subscribe(channel: channel)
+            }
+            
+            // Force save subscriptions
+            subscriptionManager.forceSave()
             ChannelSyncState.shared.forceSave()
             
-            print("✅ Data cleared successfully")
+            print("✅ Data cleared and subscriptions restored")
             
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            // Reconnect
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 self.webSocketService.connect()
                 
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     self.isClearing = false
                     self.loadSyncStats()
                     self.showSuccessMessage()
@@ -531,42 +531,12 @@ struct SettingsView: View {
         }
     }
     
-    private func clearEventData() {
-        let userDefaults = UserDefaults.standard
-        
-        if let eventsData = userDefaults.data(forKey: "events_cache"),
-           var eventsCache = try? JSONDecoder().decode([String: [Event]].self, from: eventsData) {
-            eventsCache.removeAll()
-            if let data = try? JSONEncoder().encode(eventsCache) {
-                userDefaults.set(data, forKey: "events_cache")
-            }
-        }
-        
-        if let unreadData = userDefaults.data(forKey: "unread_cache"),
-           var unreadCache = try? JSONDecoder().decode([String: Int].self, from: unreadData) {
-            unreadCache.removeAll()
-            if let data = try? JSONEncoder().encode(unreadCache) {
-                userDefaults.set(data, forKey: "unread_cache")
-            }
-        }
-        
-        userDefaults.removeObject(forKey: "saved_events")
-        userDefaults.synchronize()
-    }
-    
-    private func restoreSubscriptions(_ subscriptions: [Channel]) {
-        subscriptionManager.subscribedChannels.removeAll()
-        for channel in subscriptions {
-            subscriptionManager.subscribe(channel: channel)
-        }
-    }
-    
     private func showSuccessMessage() {
         let alert = UIAlertController(
             title: "✅ Data Cleared",
             message: """
-                • Cached events deleted
-                • Saved messages deleted
+                • All cached events deleted
+                • All saved messages deleted
                 • Sync history reset
                 • Subscriptions preserved
                 
@@ -578,14 +548,23 @@ struct SettingsView: View {
         presentAlert(alert)
     }
     
+    // ✅ FIXED: Logout - just disconnect WebSocket, keep all data
     private func logout() {
+        print("🔐 Starting logout...")
+        
+        // Save current state
         subscriptionManager.forceSave()
         ChannelSyncState.shared.forceSave()
+        
+        // Just disconnect WebSocket (keep all data)
         webSocketService.disconnect()
         
+        print("✅ WebSocket disconnected, data preserved")
+        
+        // Call auth logout (this just updates isAuthenticated flag)
         authManager.logout { success in
             if success {
-                print("✅ Logged out successfully")
+                print("✅ Logged out successfully - data and subscriptions preserved")
             }
         }
     }

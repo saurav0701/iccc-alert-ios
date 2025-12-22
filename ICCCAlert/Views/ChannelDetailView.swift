@@ -15,10 +15,6 @@ struct ChannelDetailView: View {
     
     @State private var eventObserver: NSObjectProtocol?
     
-    // ✅ Access settings
-    @AppStorage("auto_mark_read") private var autoMarkRead = true
-    @AppStorage("show_timestamps") private var showTimestamps = true
-    
     @Environment(\.presentationMode) var presentationMode
     
     var isSubscribed: Bool {
@@ -115,10 +111,8 @@ struct ChannelDetailView: View {
         }
         .onAppear {
             if isSubscribed {
-                // ✅ Respect auto mark as read setting
-                if autoMarkRead {
-                    subscriptionManager.markAsRead(channelId: channel.id)
-                }
+                // ✅ Always auto mark as read when viewing
+                subscriptionManager.markAsRead(channelId: channel.id)
                 
                 // Clear notifications for this channel
                 NotificationManager.shared.clearNotifications(for: channel.id)
@@ -129,8 +123,8 @@ struct ChannelDetailView: View {
         .onDisappear {
             removeNotificationObserver()
             
-            // ✅ Always mark as read when leaving (if setting is on)
-            if isSubscribed && autoMarkRead {
+            // ✅ Always mark as read when leaving
+            if isSubscribed {
                 subscriptionManager.markAsRead(channelId: channel.id)
             }
         }
@@ -154,7 +148,7 @@ struct ChannelDetailView: View {
                                 GPSEventCard(
                                     event: event,
                                     channel: channel,
-                                    showTimestamp: showTimestamps,
+                                    showTimestamp: true,  // ✅ Always show timestamps
                                     onTap: {
                                         selectedEvent = event
                                         showingMapView = true
@@ -170,7 +164,7 @@ struct ChannelDetailView: View {
                                 ModernEventCard(
                                     event: event,
                                     channel: channel,
-                                    showTimestamp: showTimestamps,
+                                    showTimestamp: true,  // ✅ Always show timestamps
                                     onTap: {
                                         selectedEvent = event
                                         showingImageDetail = true
@@ -488,7 +482,6 @@ struct GPSEventCard: View {
                 }
                 .padding(.trailing, 8)
                 
-                // ✅ Show timestamp based on setting
                 if showTimestamp {
                     Text(dateFormatter.string(from: event.date))
                         .font(.caption)
@@ -572,7 +565,6 @@ struct GPSEventCard: View {
             }
             .buttonStyle(PlainButtonStyle())
 
-            // ✅ Show full date based on setting
             if showTimestamp {
                 Text(fullDateFormatter.string(from: event.date))
                     .font(.caption)
@@ -644,7 +636,6 @@ struct ModernEventCard: View {
                 }
                 .padding(.trailing, 8)
                 
-                // ✅ Show timestamp based on setting
                 if showTimestamp {
                     Text(dateFormatter.string(from: event.date))
                         .font(.caption)
@@ -668,7 +659,6 @@ struct ModernEventCard: View {
             }
             .buttonStyle(PlainButtonStyle())
 
-            // ✅ Show full date based on setting
             if showTimestamp {
                 Text(fullDateFormatter.string(from: event.date))
                     .font(.caption)

@@ -20,8 +20,7 @@ struct SavedEventsView: View {
     // Filter state
     @State private var selectedSystemFilter: SystemFilter = .all
     
-    // ✅ Access show timestamps setting
-    @AppStorage("show_timestamps") private var showTimestamps = true
+
     
     // VTS event types
     private let vtsEventTypes = ["off-route", "tamper", "overspeed"]
@@ -164,7 +163,7 @@ struct SavedEventsView: View {
                         GPSEventCard(
                             event: event,
                             channel: getChannelForEvent(event),
-                            showTimestamp: showTimestamps,  // ✅ FIXED: Added missing parameter
+                            showTimestamp: true,  // ✅ Always show timestamps
                             onTap: {
                                 selectedEvent = event
                                 showingMapView = true
@@ -181,7 +180,7 @@ struct SavedEventsView: View {
                         ModernEventCard(
                             event: event,
                             channel: getChannelForEvent(event),
-                            showTimestamp: showTimestamps,  // ✅ Also added for consistency
+                            showTimestamp: true,  // ✅ Always show timestamps
                             onTap: {
                                 selectedEvent = event
                                 showingImageDetail = true

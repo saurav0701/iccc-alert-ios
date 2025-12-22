@@ -327,40 +327,39 @@ class AuthManager: ObservableObject {
         }
     }
     
+    // ✅ FIXED: Logout - keep all data, just set isAuthenticated to false
     func logout(completion: ((Bool) -> Void)? = nil) {
-        print("🚪 Logging out...")
+        print("🚪 Logging out (keeping all data)...")
         
-        guard let token = token else {
+        // Optional: Call backend logout endpoint (but don't clear local data)
+        if let token = token, let url = URL(string: "\(baseURL)/auth/logout") {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            
+            URLSession.shared.dataTask(with: request) { _, _, _ in
+                DispatchQueue.main.async {
+                    self.performLogout()
+                    completion?(true)
+                }
+            }.resume()
+        } else {
             performLogout()
             completion?(true)
-            return
         }
-        
-        guard let url = URL(string: "\(baseURL)/auth/logout") else {
-            performLogout()
-            completion?(true)
-            return
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        
-        URLSession.shared.dataTask(with: request) { _, _, _ in
-            DispatchQueue.main.async {
-                self.performLogout()
-                completion?(true)
-            }
-        }.resume()
     }
     
+    // ✅ FIXED: Only set isAuthenticated to false, keep token/user data
     private func performLogout() {
-        UserDefaults.standard.removeObject(forKey: "auth_token")
-        UserDefaults.standard.removeObject(forKey: "token_expiry")
-        UserDefaults.standard.removeObject(forKey: "user_data")
+        // ✅ DO NOT clear token, expiry, or user_data
+        // Just set the flag to false so user sees login screen
+        
         isAuthenticated = false
-        currentUser = nil
-        print("✅ Logged out successfully")
+        // Keep currentUser in memory for quick re-login
+        
+        print("✅ Logged out (data preserved for resume)")
+        print("   Token still in UserDefaults: \(token != nil)")
+        print("   User data still available: \(currentUser?.name ?? "nil")")
     }
     
     // MARK: - Token Validation
@@ -386,10 +385,21 @@ class AuthManager: ObservableObject {
                    httpResponse.statusCode == 200 {
                     completion(true)
                 } else {
-                    self.performLogout()
+                    // Token expired or invalid - clear everything
+                    self.performFullLogout()
                     completion(false)
                 }
             }
         }.resume()
+    }
+    
+    // ✅ NEW: Full logout (for expired tokens) - clears everything
+    private func performFullLogout() {
+        UserDefaults.standard.removeObject(forKey: "auth_token")
+        UserDefaults.standard.removeObject(forKey: "token_expiry")
+        UserDefaults.standard.removeObject(forKey: "user_data")
+        isAuthenticated = false
+        currentUser = nil
+        print("✅ Full logout - token expired, all data cleared")
     }
 }
