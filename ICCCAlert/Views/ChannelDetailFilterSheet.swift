@@ -110,9 +110,6 @@ struct ChannelDetailFilterSheet: View {
                 Section {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
-                            @ViewBuilder var _ = {
-                                // Logic removed from view body if not needed
-                            }()
                             Text("Total Events")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
@@ -243,21 +240,16 @@ struct ChannelDetailFilterSheet: View {
             }
             .navigationTitle("Timeline & Filters")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Reset") {
-                        resetFilters()
-                    }
-                    .foregroundColor(.red)
+            .navigationBarItems(
+                leading: Button("Reset") {
+                    resetFilters()
                 }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        presentationMode.wrappedValue.dismiss()
-                    }
-                    .font(.system(size: 17, weight: .semibold))
+                .foregroundColor(.red),
+                trailing: Button("Done") {
+                    presentationMode.wrappedValue.dismiss()
                 }
-            }
+                .font(.system(size: 17, weight: .semibold))
+            )
             .sheet(isPresented: $showCustomDatePicker) {
                 CustomDateRangePicker(
                     startDate: $customStartDate,
@@ -429,23 +421,18 @@ struct CustomDateRangePicker: View {
             }
             .navigationTitle("Custom Date Range")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        presentationMode.wrappedValue.dismiss()
+            .navigationBarItems(
+                leading: Button("Cancel") {
+                    presentationMode.wrappedValue.dismiss()
+                },
+                trailing: Button("Apply") {
+                    if endDate >= startDate {
+                        onApply()
                     }
                 }
-
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Apply") {
-                        if endDate >= startDate {
-                            onApply()
-                        }
-                    }
-                    .font(.system(size: 17, weight: .semibold))
-                    .disabled(endDate < startDate)
-                }
-            }
+                .font(.system(size: 17, weight: .semibold))
+                .disabled(endDate < startDate)
+            )
         }
     }
     
