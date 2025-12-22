@@ -241,21 +241,21 @@ struct ChannelDetailFilterSheet: View {
             }
             .navigationTitle("Timeline & Filters")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar(content: {
-    ToolbarItem(placement: .navigationBarLeading) {
+            .toolbar {
+    ToolbarItemGroup(placement: .navigationBarLeading) {
         Button("Reset") {
             resetFilters()
         }
         .foregroundColor(.red)
     }
 
-    ToolbarItem(placement: .navigationBarTrailing) {
+    ToolbarItemGroup(placement: .navigationBarTrailing) {
         Button("Done") {
             presentationMode.wrappedValue.dismiss()
         }
         .font(.system(size: 17, weight: .semibold))
     }
-})
+}
 
             .sheet(isPresented: $showCustomDatePicker) {
                 CustomDateRangePicker(
@@ -428,14 +428,14 @@ struct CustomDateRangePicker: View {
             }
             .navigationTitle("Custom Date Range")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar(content: {
-    ToolbarItem(placement: .navigationBarLeading) {
+            .toolbar {
+    ToolbarItemGroup(placement: .navigationBarLeading) {
         Button("Cancel") {
             presentationMode.wrappedValue.dismiss()
         }
     }
 
-    ToolbarItem(placement: .navigationBarTrailing) {
+    ToolbarItemGroup(placement: .navigationBarTrailing) {
         Button("Apply") {
             if endDate >= startDate {
                 onApply()
@@ -444,7 +444,7 @@ struct CustomDateRangePicker: View {
         .font(.system(size: 17, weight: .semibold))
         .disabled(endDate < startDate)
     }
-})
+}
 
         }
     }
