@@ -250,7 +250,7 @@ struct ChannelDetailFilterSheet: View {
                     }
                     .foregroundColor(.red)
                 }
-
+                
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
                         presentationMode.wrappedValue.dismiss()

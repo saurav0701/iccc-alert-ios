@@ -18,7 +18,6 @@ class WebSocketService: ObservableObject {
     private var hasSubscribed = false
     private var lastSubscriptionTime: TimeInterval = 0
  
-    // ✅ OPTIMIZED: Adaptive concurrency based on device
     private let eventQueue = DispatchQueue(label: "com.iccc.eventProcessing", qos: .userInitiated, attributes: .concurrent)
     private let ackQueue = DispatchQueue(label: "com.iccc.ackProcessing", qos: .utility)
     private let maxConcurrentProcessors = ProcessInfo.processInfo.processorCount.clamped(to: 2...4)
@@ -34,11 +33,10 @@ class WebSocketService: ObservableObject {
     private var processedCount = 0
     private var droppedCount = 0
     private var ackedCount = 0
-    
-    // ✅ NEW: Crash recovery tracking
+
     private var lastProcessedTimestamp: TimeInterval = 0
     private var catchUpMode = false
-    private let catchUpThreshold = 10 // If >10 pending, enter catch-up mode
+    private let catchUpThreshold = 10 
     
     private var clientId: String {
         if let uuid = UIDevice.current.identifierForVendor?.uuidString {
@@ -53,10 +51,9 @@ class WebSocketService: ObservableObject {
         session = URLSession(configuration: config)
         
         startAckFlusher()
-        startHealthMonitor()  // ✅ NEW
+        startHealthMonitor() 
     }
-    
-    // ✅ NEW: Monitor for hangs/crashes
+
     private func startHealthMonitor() {
         Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
@@ -139,10 +136,9 @@ class WebSocketService: ObservableObject {
                 case .string(let text):
                     self.receivedCount += 1
                     self.lastProcessedTimestamp = Date().timeIntervalSince1970
-                    
-                    // ✅ OPTIMIZED: Throttle processing during catch-up
+
                     if self.catchUpMode {
-                        Thread.sleep(forTimeInterval: 0.01) // 10ms delay
+                        Thread.sleep(forTimeInterval: 0.01) 
                     }
                     
                     self.eventQueue.async {
@@ -178,9 +174,7 @@ class WebSocketService: ObservableObject {
         }
     }
 
-    // ✅ FIXED: Crash-proof message handling with memory management
     private func handleMessage(_ text: String) {
-        // Auto-release pool for memory management during bulk operations
         autoreleasepool {
             do {
                 try _handleMessageInternal(text)
@@ -250,15 +244,12 @@ class WebSocketService: ObservableObject {
             return
         }
 
-        // ✅ CRITICAL: Store event FIRST (highest priority)
         let added = SubscriptionManager.shared.addEvent(event)
         
         if added {
             processedCount += 1
-            
-            // ✅ OPTIMIZED: Batch notifications during catch-up
+ 
             if !catchUpMode {
-                // Live mode - send notifications immediately
                 let tempChannel = Channel(
                     id: channelId,
                     area: area,
@@ -270,14 +261,12 @@ class WebSocketService: ObservableObject {
                     isMuted: false,
                     isPinned: false
                 )
-                
-                // ✅ FIXED: Ensure main thread for notifications
+
                 DispatchQueue.main.async {
                     NotificationManager.shared.sendEventNotification(event: event, channel: tempChannel)
                 }
             }
 
-            // ✅ FIXED: UI updates MUST be on main thread
             DispatchQueue.main.async {
                 NotificationCenter.default.post(
                     name: .newEventReceived,
@@ -457,8 +446,7 @@ class WebSocketService: ObservableObject {
         if !resetConsumers {
             catchUpMode = true
             DebugLogger.shared.log("⚡ CATCH-UP MODE ENABLED", emoji: "🚀", color: .orange)
-            
-            // Auto-disable after 30 seconds
+
             DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
                 if self.catchUpMode {
                     self.catchUpMode = false
