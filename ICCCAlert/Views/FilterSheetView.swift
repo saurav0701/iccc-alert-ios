@@ -149,14 +149,10 @@ struct FilterSheetView: View {
             }
             .navigationTitle("Advanced Filters")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        presentationMode.wrappedValue.dismiss()
-                    }
-                    .font(.system(size: 17, weight: .semibold))
-                }
+            .navigationBarItems(trailing: Button("Done") {
+                presentationMode.wrappedValue.dismiss()
             }
+            .font(.system(size: 17, weight: .semibold)))
             .sheet(isPresented: $showCustomDatePicker) {
                 CustomDateTimePickerView(
                     startDate: $customStartDate,
@@ -269,13 +265,9 @@ struct CustomDateTimePickerView: View {
             }
             .navigationTitle("Custom Time Range")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        presentationMode.wrappedValue.dismiss()
-                    }
-                }
-            }
+            .navigationBarItems(leading: Button("Cancel") {
+                presentationMode.wrappedValue.dismiss()
+            })
         }
     }
 }
