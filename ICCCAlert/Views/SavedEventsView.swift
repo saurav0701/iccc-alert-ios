@@ -1,13 +1,5 @@
 import SwiftUI
 
-// MARK: - System Filter Enum (shared across views)
-
-enum SystemFilter {
-    case all
-    case va   // Video Analytics
-    case vts  // Vehicle Tracking System
-}
-
 // MARK: - Saved Events View
 
 struct SavedEventsView: View {
@@ -19,8 +11,6 @@ struct SavedEventsView: View {
     
     // Filter state
     @State private var selectedSystemFilter: SystemFilter = .all
-    
-
     
     // VTS event types
     private let vtsEventTypes = ["off-route", "tamper", "overspeed"]
