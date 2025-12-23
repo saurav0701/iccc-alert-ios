@@ -205,7 +205,7 @@ class PDFMapRenderer {
         snapshotter.start { snapshot, error in
             defer { semaphore.signal() }
             
-                                    if error != nil {
+                                    if let error = error {
                 print("❌ Map snapshot error: \(error.localizedDescription)")
                 return
             }
@@ -220,6 +220,9 @@ class PDFMapRenderer {
             
             // First draw the base map
             snapshot.image.draw(at: .zero)
+            
+            // Overlay Google Hybrid tiles (same as live view - using TileOverlay approach)
+            // We'll use the standard map as base and draw geofences/pins on top
             
             let context = UIGraphicsGetCurrentContext()
             
