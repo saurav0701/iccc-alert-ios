@@ -683,10 +683,3 @@ extension Comparable {
         return min(max(self, limits.lowerBound), limits.upperBound)
     }
 }
-
-// ✅ NEW: System filter enum
-enum SystemFilter {
-    case all
-    case va
-    case vts
-}
