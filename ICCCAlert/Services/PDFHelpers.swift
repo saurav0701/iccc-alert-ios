@@ -205,7 +205,7 @@ class PDFMapRenderer {
         snapshotter.start { snapshot, error in
             defer { semaphore.signal() }
             
-            if let error = error {
+                                    if error != nil {
                 print("❌ Map snapshot error: \(error.localizedDescription)")
                 return
             }
@@ -220,11 +220,6 @@ class PDFMapRenderer {
             
             // First draw the base map
             snapshot.image.draw(at: .zero)
-            
-            // Now overlay Google Hybrid tiles (same as live view)
-            if let googleHybridImage = downloadGoogleHybridTiles(for: snapshot, event: event) {
-                googleHybridImage.draw(at: .zero, blendMode: .normal, alpha: 1.0)
-            }
             
             let context = UIGraphicsGetCurrentContext()
             
@@ -328,49 +323,14 @@ class PDFMapRenderer {
         
         _ = semaphore.wait(timeout: .now() + 15)
         
-        if let image = resultImage {
-            print("✅ Map snapshot generated matching live view")
-        } else {
-            print("⚠️ Failed to generate map snapshot")
-        }
-        
         return resultImage
     }
     
     // MARK: - Download Google Hybrid Tiles (Same as Live View)
     
     private static func downloadGoogleHybridTiles(for snapshot: MKMapSnapshotter.Snapshot, event: Event) -> UIImage? {
-        // Calculate tile coordinates for the visible region
-        let region = snapshot.mapSnapshotter.options.region
-        let center = region.center
-        let span = region.span
-        
-        // Get tile coordinates at zoom level 15 (good balance for our use case)
-        let zoom = 15
-        let tileCoords = getTileCoordinates(lat: center.latitude, lng: center.longitude, zoom: zoom)
-        
-        // Download the tile
-        let tileServer = "https://mt0.google.com/vt/lyrs=y&hl=en"
-        let urlString = "\(tileServer)&x=\(tileCoords.x)&y=\(tileCoords.y)&z=\(zoom)&s=Ga"
-        
-        guard let url = URL(string: urlString),
-              let data = try? Data(contentsOf: url),
-              let tileImage = UIImage(data: data) else {
-            print("⚠️ Failed to download Google Hybrid tile")
-            return nil
-        }
-        
-        print("✅ Downloaded Google Hybrid tile matching live view")
-        return tileImage
-    }
-    
-    // MARK: - Get Tile Coordinates
-    
-    private static func getTileCoordinates(lat: Double, lng: Double, zoom: Int) -> (x: Int, y: Int) {
-        let n = pow(2.0, Double(zoom))
-        let x = Int((lng + 180.0) / 360.0 * n)
-        let latRad = lat * .pi / 180.0
-        let y = Int((1.0 - log(tan(latRad) + 1.0 / cos(latRad)) / .pi) / 2.0 * n)
-        return (x, y)
+        // For PDF generation, we'll use the base map since we can't easily overlay tiles
+        // The geofence and pin overlays will still match the live view exactly
+        return nil
     }
 }
