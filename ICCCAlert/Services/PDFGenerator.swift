@@ -244,238 +244,314 @@ class PDFGenerator {
         }
     }
     
-    // Generate PDF for multiple events (channel events)
-    func generateChannelEventsPDF(events: [Event], channel: Channel) -> URL? {
-        guard !events.isEmpty else {
-            print("❌ No events to generate PDF")
-            return nil
-        }
+// Generate PDF for multiple events (channel events)
+func generateChannelEventsPDF(events: [Event], channel: Channel) -> URL? {
+    guard !events.isEmpty else {
+        print("❌ No events to generate PDF")
+        return nil
+    }
+    
+    print("📄 Generating PDF for \(events.count) events...")
+    
+    let pdfMetaData = [
+        kCGPDFContextCreator: "ICCC Event Manager",
+        kCGPDFContextAuthor: "ICCC",
+        kCGPDFContextTitle: "Events Report - \(channel.eventTypeDisplay)"
+    ]
+    let format = UIGraphicsPDFRendererFormat()
+    format.documentInfo = pdfMetaData as [String: Any]
+    
+    let pageWidth = 8.5 * 72.0
+    let pageHeight = 11 * 72.0
+    let pageRect = CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight)
+    let margin: CGFloat = 40
+    let contentWidth = pageWidth - (2 * margin)
+    
+    let renderer = UIGraphicsPDFRenderer(bounds: pageRect, format: format)
+    
+    let data = renderer.pdfData { context in
+        let titleFont = UIFont.boldSystemFont(ofSize: 24)
+        let headerFont = UIFont.boldSystemFont(ofSize: 16)
+        let bodyFont = UIFont.systemFont(ofSize: 14)
+        let captionFont = UIFont.systemFont(ofSize: 12)
+        let smallFont = UIFont.systemFont(ofSize: 10)
         
-        print("📄 Generating PDF for \(events.count) events...")
+        // First page - Summary
+        context.beginPage()
+        var yPosition: CGFloat = 40
         
-        let pdfMetaData = [
-            kCGPDFContextCreator: "ICCC Event Manager",
-            kCGPDFContextAuthor: "ICCC",
-            kCGPDFContextTitle: "Events Report - \(channel.eventTypeDisplay)"
+        let titleText = "Events Report"
+        let titleAttributes: [NSAttributedString.Key: Any] = [
+            .font: titleFont,
+            .foregroundColor: UIColor.black
         ]
-        let format = UIGraphicsPDFRendererFormat()
-        format.documentInfo = pdfMetaData as [String: Any]
+        let titleSize = titleText.size(withAttributes: titleAttributes)
+        titleText.draw(at: CGPoint(x: (pageWidth - titleSize.width) / 2, y: yPosition), withAttributes: titleAttributes)
+        yPosition += titleSize.height + 10
         
-        let pageWidth = 8.5 * 72.0
-        let pageHeight = 11 * 72.0
-        let pageRect = CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight)
+        let subtitleText = "\(channel.eventTypeDisplay) - \(channel.areaDisplay)"
+        let subtitleAttributes: [NSAttributedString.Key: Any] = [
+            .font: headerFont,
+            .foregroundColor: UIColor.darkGray
+        ]
+        let subtitleSize = subtitleText.size(withAttributes: subtitleAttributes)
+        subtitleText.draw(at: CGPoint(x: (pageWidth - subtitleSize.width) / 2, y: yPosition), withAttributes: subtitleAttributes)
+        yPosition += subtitleSize.height + 20
         
-        let renderer = UIGraphicsPDFRenderer(bounds: pageRect, format: format)
+        // Separator
+        context.cgContext.setStrokeColor(UIColor.lightGray.cgColor)
+        context.cgContext.setLineWidth(1)
+        context.cgContext.move(to: CGPoint(x: margin, y: yPosition))
+        context.cgContext.addLine(to: CGPoint(x: pageWidth - margin, y: yPosition))
+        context.cgContext.strokePath()
+        yPosition += 20
         
-        let data = renderer.pdfData { context in
-            let titleFont = UIFont.boldSystemFont(ofSize: 24)
-            let headerFont = UIFont.boldSystemFont(ofSize: 16)
-            let bodyFont = UIFont.systemFont(ofSize: 14)
-            let captionFont = UIFont.systemFont(ofSize: 12)
-            let smallFont = UIFont.systemFont(ofSize: 10)
-            
-            // First page - Summary
-            context.beginPage()
-            var yPosition: CGFloat = 40
-            
-            let titleText = "Events Report"
-            let titleAttributes: [NSAttributedString.Key: Any] = [
-                .font: titleFont,
-                .foregroundColor: UIColor.black
-            ]
-            let titleSize = titleText.size(withAttributes: titleAttributes)
-            titleText.draw(at: CGPoint(x: (pageWidth - titleSize.width) / 2, y: yPosition), withAttributes: titleAttributes)
-            yPosition += titleSize.height + 10
-            
-            let subtitleText = "\(channel.eventTypeDisplay) - \(channel.areaDisplay)"
-            let subtitleAttributes: [NSAttributedString.Key: Any] = [
-                .font: headerFont,
-                .foregroundColor: UIColor.darkGray
-            ]
-            let subtitleSize = subtitleText.size(withAttributes: subtitleAttributes)
-            subtitleText.draw(at: CGPoint(x: (pageWidth - subtitleSize.width) / 2, y: yPosition), withAttributes: subtitleAttributes)
-            yPosition += subtitleSize.height + 20
-            
-            // Separator
-            context.cgContext.setStrokeColor(UIColor.lightGray.cgColor)
-            context.cgContext.setLineWidth(1)
-            context.cgContext.move(to: CGPoint(x: 40, y: yPosition))
-            context.cgContext.addLine(to: CGPoint(x: pageWidth - 40, y: yPosition))
-            context.cgContext.strokePath()
-            yPosition += 20
-            
-            // Summary info
-            let summaryLabel = "Total Events:"
-            let summaryValue = "\(events.count)"
-            yPosition = self.drawLabelValue(label: summaryLabel, value: summaryValue,
-                                      yPosition: yPosition, pageWidth: pageWidth,
-                                      headerFont: headerFont, bodyFont: bodyFont, context: context)
-            yPosition += 15
-            
-            let dateFormatter = DateFormatter()
-            dateFormatter.dateFormat = "MMM dd, yyyy"
-            let reportDateLabel = "Report Generated:"
-            let reportDateValue = dateFormatter.string(from: Date())
-            yPosition = self.drawLabelValue(label: reportDateLabel, value: reportDateValue,
-                                      yPosition: yPosition, pageWidth: pageWidth,
-                                      headerFont: headerFont, bodyFont: bodyFont, context: context)
-            yPosition += 30
-            
-            // Event details on subsequent pages
-            for (index, event) in events.enumerated() {
-                // Check if we need a new page (accounting for image/map height)
-                let estimatedContentHeight: CGFloat = event.isGpsEvent ? 500 : 500 // Image/map + details
-                if yPosition > pageHeight - estimatedContentHeight {
-                    context.beginPage()
-                    yPosition = 40
-                }
-                
-                // Event header
-                let eventTitle = "Event #\(index + 1)"
-                let eventTitleAttributes: [NSAttributedString.Key: Any] = [
-                    .font: headerFont,
-                    .foregroundColor: UIColor.black
-                ]
-                eventTitle.draw(at: CGPoint(x: 40, y: yPosition), withAttributes: eventTitleAttributes)
-                yPosition += 25
-                
-                // Event details
-                dateFormatter.dateFormat = "MMM dd, yyyy 'at' HH:mm:ss"
-                let eventDate = dateFormatter.string(from: event.date)
-                yPosition = self.drawLabelValue(label: "Time:", value: eventDate,
-                                          yPosition: yPosition, pageWidth: pageWidth,
-                                          headerFont: bodyFont, bodyFont: smallFont, context: context)
-                yPosition += 12
-                
-                let eventType = event.typeDisplay ?? event.type ?? "Unknown"
-                yPosition = self.drawLabelValue(label: "Type:", value: eventType,
-                                          yPosition: yPosition, pageWidth: pageWidth,
-                                          headerFont: bodyFont, bodyFont: smallFont, context: context)
-                yPosition += 12
-                
-                yPosition = self.drawLabelValue(label: "Location:", value: event.location,
-                                          yPosition: yPosition, pageWidth: pageWidth,
-                                          headerFont: bodyFont, bodyFont: smallFont, context: context)
-                yPosition += 15
-                
-                // GPS event details
-                if event.isGpsEvent {
-                    if let vehicleNumber = event.vehicleNumber {
-                        yPosition = self.drawLabelValue(label: "Vehicle:", value: vehicleNumber,
-                                                  yPosition: yPosition, pageWidth: pageWidth,
-                                                  headerFont: bodyFont, bodyFont: smallFont, context: context)
-                        yPosition += 12
-                    }
-                    
-                    if let gpsLoc = event.gpsAlertLocation {
-                        let coords = String(format: "%.6f, %.6f", gpsLoc.lat, gpsLoc.lng)
-                        yPosition = self.drawLabelValue(label: "Coordinates:", value: coords,
-                                                  yPosition: yPosition, pageWidth: pageWidth,
-                                                  headerFont: bodyFont, bodyFont: smallFont, context: context)
-                        yPosition += 15
-                    }
-                    
-                    // Add map snapshot for GPS events
-                    if let mapImage = self.generateMapSnapshot(for: event) {
-                        let maxImageWidth = pageWidth - 80
-                        let maxImageHeight: CGFloat = 300
-                        
-                        let imageSize = mapImage.size
-                        let aspectRatio = imageSize.width / imageSize.height
-                        
-                        var drawWidth = maxImageWidth
-                        var drawHeight = drawWidth / aspectRatio
-                        
-                        if drawHeight > maxImageHeight {
-                            drawHeight = maxImageHeight
-                            drawWidth = drawHeight * aspectRatio
-                        }
-                        
-                        let imageX = (pageWidth - drawWidth) / 2
-                        let imageRect = CGRect(x: imageX, y: yPosition, width: drawWidth, height: drawHeight)
-                        
-                        mapImage.draw(in: imageRect)
-                        yPosition += drawHeight + 20
-                    }
-                } else {
-                    // Add image for camera events
-                    if let image = self.loadEventImage(event: event) {
-                        let maxImageWidth = pageWidth - 80
-                        let maxImageHeight: CGFloat = 300
-                        
-                        let imageSize = image.size
-                        let aspectRatio = imageSize.width / imageSize.height
-                        
-                        var drawWidth = maxImageWidth
-                        var drawHeight = drawWidth / aspectRatio
-                        
-                        if drawHeight > maxImageHeight {
-                            drawHeight = maxImageHeight
-                            drawWidth = drawHeight * aspectRatio
-                        }
-                        
-                        let imageX = (pageWidth - drawWidth) / 2
-                        let imageRect = CGRect(x: imageX, y: yPosition, width: drawWidth, height: drawHeight)
-                        
-                        image.draw(in: imageRect)
-                        yPosition += drawHeight + 20
-                    }
-                }
-                
-                // Separator
-                context.cgContext.setStrokeColor(UIColor.lightGray.cgColor)
-                context.cgContext.setLineWidth(0.5)
-                context.cgContext.move(to: CGPoint(x: 40, y: yPosition))
-                context.cgContext.addLine(to: CGPoint(x: pageWidth - 40, y: yPosition))
-                context.cgContext.strokePath()
-                yPosition += 15
-            }
-            
-            // Footer on last page
-            if yPosition < pageHeight - 60 {
-                yPosition = pageHeight - 60
-            } else {
+        // Summary info
+        let summaryLabel = "Total Events:"
+        let summaryValue = "\(events.count)"
+        yPosition = self.drawLabelValue(label: summaryLabel, value: summaryValue,
+                                  yPosition: yPosition, pageWidth: pageWidth,
+                                  headerFont: headerFont, bodyFont: bodyFont, context: context)
+        yPosition += 15
+        
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "MMM dd, yyyy"
+        let reportDateLabel = "Report Generated:"
+        let reportDateValue = dateFormatter.string(from: Date())
+        yPosition = self.drawLabelValue(label: reportDateLabel, value: reportDateValue,
+                                  yPosition: yPosition, pageWidth: pageWidth,
+                                  headerFont: headerFont, bodyFont: bodyFont, context: context)
+        yPosition += 30
+        
+        // ✅ NEW: Process events in pairs (2 per page)
+        var eventIndex = 0
+        
+        while eventIndex < events.count {
+            // Start new page for events
+            if eventIndex > 0 {
                 context.beginPage()
-                yPosition = pageHeight - 60
+            } else if yPosition > margin + 100 {
+                // Continue on summary page if space available
+                context.beginPage()
             }
             
-            context.cgContext.setStrokeColor(UIColor.lightGray.cgColor)
-            context.cgContext.setLineWidth(1)
-            context.cgContext.move(to: CGPoint(x: 40, y: yPosition))
-            context.cgContext.addLine(to: CGPoint(x: pageWidth - 40, y: yPosition))
-            context.cgContext.strokePath()
-            yPosition += 10
+            yPosition = margin
             
-            let footerText = "Generated by ICCC Event Manager"
-            let footerAttributes: [NSAttributedString.Key: Any] = [
-                .font: captionFont,
-                .foregroundColor: UIColor.gray
-            ]
-            let footerSize = footerText.size(withAttributes: footerAttributes)
-            footerText.draw(at: CGPoint(x: (pageWidth - footerSize.width) / 2, y: yPosition), withAttributes: footerAttributes)
-        }
-        
-        let fileName = "Events_\(channel.eventType)_\(Int(Date().timeIntervalSince1970)).pdf"
-        
-        guard let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
-            print("❌ Could not access Documents directory")
-            return nil
-        }
-        
-        let fileURL = documentsPath.appendingPathComponent(fileName)
-        
-        do {
-            try data.write(to: fileURL)
-            print("✅ PDF saved successfully to: \(fileURL.path)")
-            print("📁 File size: \(data.count) bytes")
-            return fileURL
-        } catch {
-            print("❌ Error saving PDF: \(error.localizedDescription)")
-            return nil
+            // ✅ Process 2 events per page
+            let eventsThisPage = min(2, events.count - eventIndex)
+            let availableHeight = pageHeight - (2 * margin) - 60 // Reserve 60 for footer
+            let eventHeight = availableHeight / 2 // Split page in half
+            
+            for i in 0..<eventsThisPage {
+                let event = events[eventIndex + i]
+                let isFirstEvent = (i == 0)
+                let startY = margin + (CGFloat(i) * eventHeight)
+                
+                yPosition = startY
+                
+                // Draw event in allocated space
+                yPosition = self.drawEventInBox(
+                    event: event,
+                    eventNumber: eventIndex + i + 1,
+                    startY: yPosition,
+                    maxHeight: eventHeight - 10, // 10pt padding between events
+                    pageWidth: pageWidth,
+                    margin: margin,
+                    contentWidth: contentWidth,
+                    headerFont: headerFont,
+                    bodyFont: bodyFont,
+                    smallFont: smallFont,
+                    captionFont: captionFont,
+                    context: context
+                )
+                
+                // Draw separator between events (not after last event on page)
+                if i < eventsThisPage - 1 {
+                    let separatorY = startY + eventHeight - 5
+                    context.cgContext.setStrokeColor(UIColor.lightGray.cgColor)
+                    context.cgContext.setLineWidth(1)
+                    context.cgContext.setLineDash(phase: 0, lengths: [5, 3])
+                    context.cgContext.move(to: CGPoint(x: margin, y: separatorY))
+                    context.cgContext.addLine(to: CGPoint(x: pageWidth - margin, y: separatorY))
+                    context.cgContext.strokePath()
+                    context.cgContext.setLineDash(phase: 0, lengths: [])
+                }
+            }
+            
+            // Draw footer on this page
+            self.drawFooter(
+                pageWidth: pageWidth,
+                pageHeight: pageHeight,
+                margin: margin,
+                captionFont: captionFont,
+                context: context
+            )
+            
+            eventIndex += eventsThisPage
         }
     }
     
-   // MARK: - Helper: Generate Map Snapshot for GPS Events (Using Google Hybrid Tiles)
+    let fileName = "Events_\(channel.eventType)_\(Int(Date().timeIntervalSince1970)).pdf"
+    
+    guard let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+        print("❌ Could not access Documents directory")
+        return nil
+    }
+    
+    let fileURL = documentsPath.appendingPathComponent(fileName)
+    
+    do {
+        try data.write(to: fileURL)
+        print("✅ PDF saved successfully to: \(fileURL.path)")
+        print("📁 File size: \(data.count) bytes")
+        return fileURL
+    } catch {
+        print("❌ Error saving PDF: \(error.localizedDescription)")
+        return nil
+    }
+}
+
+// MARK: - Helper: Draw Event in Allocated Box
+
+private func drawEventInBox(
+    event: Event,
+    eventNumber: Int,
+    startY: CGFloat,
+    maxHeight: CGFloat,
+    pageWidth: CGFloat,
+    margin: CGFloat,
+    contentWidth: CGFloat,
+    headerFont: UIFont,
+    bodyFont: UIFont,
+    smallFont: UIFont,
+    captionFont: UIFont,
+    context: UIGraphicsPDFRendererContext
+) -> CGFloat {
+    var yPosition = startY
+    
+    // Event header
+    let eventTitle = "Event #\(eventNumber)"
+    let eventTitleAttributes: [NSAttributedString.Key: Any] = [
+        .font: headerFont,
+        .foregroundColor: UIColor.black
+    ]
+    eventTitle.draw(at: CGPoint(x: margin, y: yPosition), withAttributes: eventTitleAttributes)
+    yPosition += 25
+    
+    // Event details
+    let dateFormatter = DateFormatter()
+    dateFormatter.dateFormat = "MMM dd, yyyy 'at' HH:mm:ss"
+    let eventDate = dateFormatter.string(from: event.date)
+    yPosition = self.drawLabelValue(label: "Time:", value: eventDate,
+                              yPosition: yPosition, pageWidth: pageWidth,
+                              headerFont: bodyFont, bodyFont: smallFont, context: context)
+    yPosition += 10
+    
+    let eventType = event.typeDisplay ?? event.type ?? "Unknown"
+    yPosition = self.drawLabelValue(label: "Type:", value: eventType,
+                              yPosition: yPosition, pageWidth: pageWidth,
+                              headerFont: bodyFont, bodyFont: smallFont, context: context)
+    yPosition += 10
+    
+    yPosition = self.drawLabelValue(label: "Location:", value: event.location,
+                              yPosition: yPosition, pageWidth: pageWidth,
+                              headerFont: bodyFont, bodyFont: smallFont, context: context)
+    yPosition += 12
+    
+    // GPS event details
+    if event.isGpsEvent {
+        if let vehicleNumber = event.vehicleNumber {
+            yPosition = self.drawLabelValue(label: "Vehicle:", value: vehicleNumber,
+                                      yPosition: yPosition, pageWidth: pageWidth,
+                                      headerFont: bodyFont, bodyFont: smallFont, context: context)
+            yPosition += 10
+        }
+        
+        if let gpsLoc = event.gpsAlertLocation {
+            let coords = String(format: "%.6f, %.6f", gpsLoc.lat, gpsLoc.lng)
+            yPosition = self.drawLabelValue(label: "Coordinates:", value: coords,
+                                      yPosition: yPosition, pageWidth: pageWidth,
+                                      headerFont: bodyFont, bodyFont: smallFont, context: context)
+            yPosition += 12
+        }
+        
+        // Add map snapshot for GPS events
+        if let mapImage = self.generateMapSnapshot(for: event) {
+            let availableImageHeight = (startY + maxHeight) - yPosition - 30
+            let maxImageWidth = contentWidth
+            let maxImageHeight = min(availableImageHeight, 200) // Cap at 200
+            
+            let imageSize = mapImage.size
+            let aspectRatio = imageSize.width / imageSize.height
+            
+            var drawWidth = maxImageWidth
+            var drawHeight = drawWidth / aspectRatio
+            
+            if drawHeight > maxImageHeight {
+                drawHeight = maxImageHeight
+                drawWidth = drawHeight * aspectRatio
+            }
+            
+            let imageX = (pageWidth - drawWidth) / 2
+            let imageRect = CGRect(x: imageX, y: yPosition, width: drawWidth, height: drawHeight)
+            
+            mapImage.draw(in: imageRect)
+            yPosition += drawHeight + 10
+        }
+    } else {
+        // Add image for camera events
+        if let image = self.loadEventImage(event: event) {
+            let availableImageHeight = (startY + maxHeight) - yPosition - 30
+            let maxImageWidth = contentWidth
+            let maxImageHeight = min(availableImageHeight, 200) // Cap at 200
+            
+            let imageSize = image.size
+            let aspectRatio = imageSize.width / imageSize.height
+            
+            var drawWidth = maxImageWidth
+            var drawHeight = drawWidth / aspectRatio
+            
+            if drawHeight > maxImageHeight {
+                drawHeight = maxImageHeight
+                drawWidth = drawHeight * aspectRatio
+            }
+            
+            let imageX = (pageWidth - drawWidth) / 2
+            let imageRect = CGRect(x: imageX, y: yPosition, width: drawWidth, height: drawHeight)
+            
+            image.draw(in: imageRect)
+            yPosition += drawHeight + 10
+        }
+    }
+    
+    return yPosition
+}
+
+// MARK: - Helper: Draw Footer
+
+private func drawFooter(
+    pageWidth: CGFloat,
+    pageHeight: CGFloat,
+    margin: CGFloat,
+    captionFont: UIFont,
+    context: UIGraphicsPDFRendererContext
+) {
+    let footerY = pageHeight - 50
+    
+    context.cgContext.setStrokeColor(UIColor.lightGray.cgColor)
+    context.cgContext.setLineWidth(1)
+    context.cgContext.move(to: CGPoint(x: margin, y: footerY))
+    context.cgContext.addLine(to: CGPoint(x: pageWidth - margin, y: footerY))
+    context.cgContext.strokePath()
+    
+    let footerText = "Generated by ICCC Event Manager"
+    let footerAttributes: [NSAttributedString.Key: Any] = [
+        .font: captionFont,
+        .foregroundColor: UIColor.gray
+    ]
+    let footerSize = footerText.size(withAttributes: footerAttributes)
+    footerText.draw(at: CGPoint(x: (pageWidth - footerSize.width) / 2, y: footerY + 10), withAttributes: footerAttributes)
+}
 
 private func generateMapSnapshot(for event: Event) -> UIImage? {
     guard let alertLoc = event.gpsAlertLocation else {
