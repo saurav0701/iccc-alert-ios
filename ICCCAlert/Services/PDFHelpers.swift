@@ -16,21 +16,26 @@ class PDFLayoutHelper {
         margin: CGFloat,
         context: UIGraphicsPDFRendererContext
     ) {
-        let titleFont = UIFont.boldSystemFont(ofSize: 20)
+        let titleFont = UIFont.boldSystemFont(ofSize: 22)
         let subtitleFont = UIFont.systemFont(ofSize: 14)
         let captionFont = UIFont.systemFont(ofSize: 11)
         
         var yPosition: CGFloat = margin
         
-        // Company logo/title
-        let companyText = "ICCC Event Manager"
+        // Top bar background
+        context.cgContext.setFillColor(UIColor.systemBlue.withAlphaComponent(0.1).cgColor)
+        context.cgContext.fill(CGRect(x: margin, y: yPosition, width: pageWidth - 2 * margin, height: 70))
+        
+        // Company text (left side)
+        yPosition += 15
+        let companyText = "Dadhwal ICCC Event Manager"
         let companyAttributes: [NSAttributedString.Key: Any] = [
             .font: UIFont.boldSystemFont(ofSize: 16),
             .foregroundColor: UIColor.systemBlue
         ]
-        companyText.draw(at: CGPoint(x: margin, y: yPosition), withAttributes: companyAttributes)
+        companyText.draw(at: CGPoint(x: margin + 10, y: yPosition), withAttributes: companyAttributes)
         
-        // Date on right
+        // Date text (right side)
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "MMM dd, yyyy HH:mm"
         let dateText = "Generated: \(dateFormatter.string(from: Date()))"
@@ -39,7 +44,7 @@ class PDFLayoutHelper {
             .foregroundColor: UIColor.darkGray
         ]
         let dateSize = dateText.size(withAttributes: dateAttributes)
-        dateText.draw(at: CGPoint(x: pageWidth - margin - dateSize.width, y: yPosition), withAttributes: dateAttributes)
+        dateText.draw(at: CGPoint(x: pageWidth - margin - dateSize.width - 10, y: yPosition), withAttributes: dateAttributes)
         
         yPosition += 25
         
@@ -52,7 +57,7 @@ class PDFLayoutHelper {
         let titleSize = titleText.size(withAttributes: titleAttributes)
         titleText.draw(at: CGPoint(x: (pageWidth - titleSize.width) / 2, y: yPosition), withAttributes: titleAttributes)
         
-        yPosition += 30
+        yPosition += 35
         
         // Channel info
         let channelText = "\(channel.eventTypeDisplay) - \(channel.areaDisplay)"
@@ -63,24 +68,55 @@ class PDFLayoutHelper {
         let channelSize = channelText.size(withAttributes: channelAttributes)
         channelText.draw(at: CGPoint(x: (pageWidth - channelSize.width) / 2, y: yPosition), withAttributes: channelAttributes)
         
-        yPosition += 25
+        yPosition += 30
+        
+        // Info box for event count
+        let countBoxY = yPosition
+        let countBoxHeight: CGFloat = 28
+        let countBoxWidth: CGFloat = 200
+        
+        // Draw rounded rectangle background
+        let countBoxRect = CGRect(
+            x: (pageWidth - countBoxWidth) / 2,
+            y: countBoxY,
+            width: countBoxWidth,
+            height: countBoxHeight
+        )
+        
+        let path = UIBezierPath(roundedRect: countBoxRect, cornerRadius: 6)
+        context.cgContext.setFillColor(UIColor.systemBlue.withAlphaComponent(0.15).cgColor)
+        context.cgContext.addPath(path.cgPath)
+        context.cgContext.fillPath()
         
         // Total events count
         let countText = "Total Events: \(totalEvents)"
         let countAttributes: [NSAttributedString.Key: Any] = [
-            .font: UIFont.boldSystemFont(ofSize: 12),
-            .foregroundColor: UIColor.black
+            .font: UIFont.boldSystemFont(ofSize: 13),
+            .foregroundColor: UIColor.systemBlue
         ]
         let countSize = countText.size(withAttributes: countAttributes)
-        countText.draw(at: CGPoint(x: (pageWidth - countSize.width) / 2, y: yPosition), withAttributes: countAttributes)
+        countText.draw(
+            at: CGPoint(
+                x: (pageWidth - countSize.width) / 2,
+                y: countBoxY + (countBoxHeight - countSize.height) / 2
+            ),
+            withAttributes: countAttributes
+        )
         
-        yPosition += 20
+        yPosition += countBoxHeight + 15
         
-        // Separator line
+        // Separator line with gradient effect
         context.cgContext.setStrokeColor(UIColor.systemBlue.cgColor)
-        context.cgContext.setLineWidth(2)
+        context.cgContext.setLineWidth(2.5)
         context.cgContext.move(to: CGPoint(x: margin, y: yPosition))
         context.cgContext.addLine(to: CGPoint(x: pageWidth - margin, y: yPosition))
+        context.cgContext.strokePath()
+        
+        // Add subtle shadow line
+        context.cgContext.setStrokeColor(UIColor.systemBlue.withAlphaComponent(0.3).cgColor)
+        context.cgContext.setLineWidth(1)
+        context.cgContext.move(to: CGPoint(x: margin, y: yPosition + 2))
+        context.cgContext.addLine(to: CGPoint(x: pageWidth - margin, y: yPosition + 2))
         context.cgContext.strokePath()
     }
     
@@ -94,12 +130,16 @@ class PDFLayoutHelper {
         margin: CGFloat,
         context: UIGraphicsPDFRendererContext
     ) {
-        let footerY = pageHeight - 40
+        let footerY = pageHeight - 45
         let captionFont = UIFont.systemFont(ofSize: 10)
         
+        // Background bar
+        context.cgContext.setFillColor(UIColor.systemGray6.cgColor)
+        context.cgContext.fill(CGRect(x: margin, y: footerY - 5, width: pageWidth - 2 * margin, height: 40))
+        
         // Separator line
-        context.cgContext.setStrokeColor(UIColor.lightGray.cgColor)
-        context.cgContext.setLineWidth(1)
+        context.cgContext.setStrokeColor(UIColor.systemBlue.withAlphaComponent(0.5).cgColor)
+        context.cgContext.setLineWidth(1.5)
         context.cgContext.move(to: CGPoint(x: margin, y: footerY))
         context.cgContext.addLine(to: CGPoint(x: pageWidth - margin, y: footerY))
         context.cgContext.strokePath()
@@ -107,26 +147,35 @@ class PDFLayoutHelper {
         // Page number (left)
         let pageText = "Page \(pageNumber) of \(totalPages)"
         let pageAttributes: [NSAttributedString.Key: Any] = [
-            .font: captionFont,
-            .foregroundColor: UIColor.gray
+            .font: UIFont.boldSystemFont(ofSize: 10),
+            .foregroundColor: UIColor.darkGray
         ]
-        pageText.draw(at: CGPoint(x: margin, y: footerY + 10), withAttributes: pageAttributes)
+        pageText.draw(at: CGPoint(x: margin + 10, y: footerY + 12), withAttributes: pageAttributes)
         
         // Company text (center)
-        let companyText = "ICCC Event Manager - Events Report"
+        let companyText = "Dadhwal ICCC Event Manager"
         let companyAttributes: [NSAttributedString.Key: Any] = [
-            .font: captionFont,
-            .foregroundColor: UIColor.gray
+            .font: UIFont.systemFont(ofSize: 10),
+            .foregroundColor: UIColor.systemBlue
         ]
         let companySize = companyText.size(withAttributes: companyAttributes)
-        companyText.draw(at: CGPoint(x: (pageWidth - companySize.width) / 2, y: footerY + 10), withAttributes: companyAttributes)
+        companyText.draw(at: CGPoint(x: (pageWidth - companySize.width) / 2, y: footerY + 12), withAttributes: companyAttributes)
+        
+        // Confidential text (right)
+        let confidentialText = "Confidential"
+        let confidentialAttributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.italicSystemFont(ofSize: 9),
+            .foregroundColor: UIColor.gray
+        ]
+        let confidentialSize = confidentialText.size(withAttributes: confidentialAttributes)
+        confidentialText.draw(at: CGPoint(x: pageWidth - margin - confidentialSize.width - 10, y: footerY + 12), withAttributes: confidentialAttributes)
     }
     
     // MARK: - Draw Vertical Line
     
     static func drawVerticalLine(x: CGFloat, y: CGFloat, height: CGFloat, context: UIGraphicsPDFRendererContext) {
-        context.cgContext.setStrokeColor(UIColor.lightGray.cgColor)
-        context.cgContext.setLineWidth(0.5)
+        context.cgContext.setStrokeColor(UIColor.systemGray4.cgColor)
+        context.cgContext.setLineWidth(1)
         context.cgContext.move(to: CGPoint(x: x, y: y))
         context.cgContext.addLine(to: CGPoint(x: x, y: y + height))
         context.cgContext.strokePath()
@@ -205,7 +254,7 @@ class PDFMapRenderer {
         snapshotter.start { snapshot, error in
             defer { semaphore.signal() }
             
-                                    if let error = error {
+            if let error = error {
                 print("❌ Map snapshot error: \(error.localizedDescription)")
                 return
             }
@@ -220,9 +269,6 @@ class PDFMapRenderer {
             
             // First draw the base map
             snapshot.image.draw(at: .zero)
-            
-            // Overlay Google Hybrid tiles (same as live view - using TileOverlay approach)
-            // We'll use the standard map as base and draw geofences/pins on top
             
             let context = UIGraphicsGetCurrentContext()
             
@@ -327,13 +373,5 @@ class PDFMapRenderer {
         _ = semaphore.wait(timeout: .now() + 15)
         
         return resultImage
-    }
-    
-    // MARK: - Download Google Hybrid Tiles (Same as Live View)
-    
-    private static func downloadGoogleHybridTiles(for snapshot: MKMapSnapshotter.Snapshot, event: Event) -> UIImage? {
-        // For PDF generation, we'll use the base map since we can't easily overlay tiles
-        // The geofence and pin overlays will still match the live view exactly
-        return nil
     }
 }

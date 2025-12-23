@@ -69,8 +69,9 @@ class PDFGenerator {
                 }
                 
                 // Calculate position for this event
+                // Increased header space from 120 to 170 to prevent collision
                 let eventIndex = index % eventsPerPage
-                let startY = 120 + CGFloat(eventIndex) * 150  // Header is 120pt, each event row is 150pt
+                let startY = 170 + CGFloat(eventIndex) * 145  // Header is now 170pt, each event row is 145pt
                 
                 // Draw event row in table format
                 drawEventTableRow(
@@ -84,8 +85,8 @@ class PDFGenerator {
                 
                 // Draw separator line between events (except last on page)
                 if eventIndex < eventsPerPage - 1 && index < events.count - 1 {
-                    let separatorY = startY + 145
-                    context.cgContext.setStrokeColor(UIColor.lightGray.cgColor)
+                    let separatorY = startY + 140
+                    context.cgContext.setStrokeColor(UIColor.systemGray4.cgColor)
                     context.cgContext.setLineWidth(0.5)
                     context.cgContext.move(to: CGPoint(x: margin, y: separatorY))
                     context.cgContext.addLine(to: CGPoint(x: pageWidth - margin, y: separatorY))
@@ -136,32 +137,67 @@ class PDFGenerator {
     ) {
         let contentWidth = pageWidth - (2 * margin)
         
-        // Column widths (landscape layout)
+        // Column widths (landscape layout) - optimized proportions
         let col1Width: CGFloat = 50   // Event #
-        let col2Width: CGFloat = 120  // Type
-        let col3Width: CGFloat = 200  // Location
-        let col4Width: CGFloat = 120  // Timestamp
+        let col2Width: CGFloat = 115  // Type
+        let col3Width: CGFloat = 190  // Location
+        let col4Width: CGFloat = 115  // Timestamp
         let col5Width: CGFloat = contentWidth - col1Width - col2Width - col3Width - col4Width  // Image/Map
         
         var currentX = margin
-        let rowHeight: CGFloat = 140
+        let rowHeight: CGFloat = 135
         
         // Fonts
         let headerFont = UIFont.boldSystemFont(ofSize: 11)
         let bodyFont = UIFont.systemFont(ofSize: 10)
         let smallFont = UIFont.systemFont(ofSize: 9)
         
-        // Draw background for row
-        context.cgContext.setFillColor(UIColor.systemGray6.cgColor)
+        // Draw subtle alternating row background
+        if eventNumber % 2 == 0 {
+            context.cgContext.setFillColor(UIColor(white: 0.97, alpha: 1.0).cgColor)
+        } else {
+            context.cgContext.setFillColor(UIColor.white.cgColor)
+        }
         context.cgContext.fill(CGRect(x: margin, y: startY, width: contentWidth, height: rowHeight))
+        
+        // Add subtle inner shadow effect at top
+        let shadowGradient = CGGradient(
+            colorsSpace: CGColorSpaceCreateDeviceRGB(),
+            colors: [
+                UIColor.black.withAlphaComponent(0.03).cgColor,
+                UIColor.clear.cgColor
+            ] as CFArray,
+            locations: [0.0, 1.0]
+        )
+        
+        if let gradient = shadowGradient {
+            context.cgContext.saveGState()
+            context.cgContext.clip(to: CGRect(x: margin, y: startY, width: contentWidth, height: 4))
+            context.cgContext.drawLinearGradient(
+                gradient,
+                start: CGPoint(x: margin, y: startY),
+                end: CGPoint(x: margin, y: startY + 4),
+                options: []
+            )
+            context.cgContext.restoreGState()
+        }
         
         // Column 1: Event Number
         let numberText = "#\(eventNumber)"
         let numberAttributes: [NSAttributedString.Key: Any] = [
-            .font: headerFont,
-            .foregroundColor: UIColor.black
+            .font: UIFont.boldSystemFont(ofSize: 14),
+            .foregroundColor: UIColor.systemBlue
         ]
         let numberSize = numberText.size(withAttributes: numberAttributes)
+        
+        // Draw circular background for number
+        let circleDiameter: CGFloat = 36
+        let circleX = currentX + (col1Width - circleDiameter) / 2
+        let circleY = startY + (rowHeight - circleDiameter) / 2
+        
+        context.cgContext.setFillColor(UIColor.systemBlue.withAlphaComponent(0.1).cgColor)
+        context.cgContext.fillEllipse(in: CGRect(x: circleX, y: circleY, width: circleDiameter, height: circleDiameter))
+        
         numberText.draw(
             at: CGPoint(x: currentX + (col1Width - numberSize.width) / 2, y: startY + (rowHeight - numberSize.height) / 2),
             withAttributes: numberAttributes
@@ -169,99 +205,124 @@ class PDFGenerator {
         currentX += col1Width
         
         // Vertical separator
-        PDFLayoutHelper.drawVerticalLine(x: currentX, y: startY, height: rowHeight, context: context)
-        currentX += 5
+        PDFLayoutHelper.drawVerticalLine(x: currentX, y: startY + 5, height: rowHeight - 10, context: context)
+        currentX += 8
         
         // Column 2: Event Type
         let eventType = event.typeDisplay ?? event.type ?? "Unknown"
         let typeAttributes: [NSAttributedString.Key: Any] = [
-            .font: bodyFont,
-            .foregroundColor: UIColor.black
+            .font: UIFont.boldSystemFont(ofSize: 11),
+            .foregroundColor: UIColor.darkGray
         ]
-        let typeRect = CGRect(x: currentX, y: startY + 10, width: col2Width - 10, height: rowHeight - 20)
+        let typeRect = CGRect(x: currentX, y: startY + 15, width: col2Width - 16, height: 40)
         eventType.draw(in: typeRect, withAttributes: typeAttributes)
         
-        // Show vehicle number for GPS events
+        // Show vehicle number for GPS events with icon
         if event.isGpsEvent, let vehicle = event.vehicleNumber {
             let vehicleAttributes: [NSAttributedString.Key: Any] = [
                 .font: smallFont,
-                .foregroundColor: UIColor.darkGray
+                .foregroundColor: UIColor.systemBlue
             ]
-            let vehicleRect = CGRect(x: currentX, y: startY + 35, width: col2Width - 10, height: 40)
-            "Vehicle: \(vehicle)".draw(in: vehicleRect, withAttributes: vehicleAttributes)
+            let vehicleRect = CGRect(x: currentX, y: startY + 45, width: col2Width - 16, height: 40)
+            "🚗 \(vehicle)".draw(in: vehicleRect, withAttributes: vehicleAttributes)
         }
         
         currentX += col2Width
         
         // Vertical separator
-        PDFLayoutHelper.drawVerticalLine(x: currentX, y: startY, height: rowHeight, context: context)
-        currentX += 5
+        PDFLayoutHelper.drawVerticalLine(x: currentX, y: startY + 5, height: rowHeight - 10, context: context)
+        currentX += 8
         
         // Column 3: Location
+        let locationLabelAttributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.boldSystemFont(ofSize: 9),
+            .foregroundColor: UIColor.systemGray
+        ]
+        "LOCATION".draw(at: CGPoint(x: currentX, y: startY + 10), withAttributes: locationLabelAttributes)
+        
         let locationAttributes: [NSAttributedString.Key: Any] = [
             .font: bodyFont,
-            .foregroundColor: UIColor.darkGray
+            .foregroundColor: UIColor.black
         ]
-        let locationRect = CGRect(x: currentX, y: startY + 10, width: col3Width - 10, height: rowHeight - 20)
+        let locationRect = CGRect(x: currentX, y: startY + 25, width: col3Width - 16, height: 45)
         event.location.draw(in: locationRect, withAttributes: locationAttributes)
         
         // Show coordinates for GPS events
         if event.isGpsEvent, let gpsLoc = event.gpsAlertLocation {
-            let coordsText = String(format: "%.6f, %.6f", gpsLoc.lat, gpsLoc.lng)
+            let coordsText = String(format: "📍 %.6f, %.6f", gpsLoc.lat, gpsLoc.lng)
             let coordsAttributes: [NSAttributedString.Key: Any] = [
                 .font: smallFont,
                 .foregroundColor: UIColor.systemBlue
             ]
-            let coordsRect = CGRect(x: currentX, y: startY + 55, width: col3Width - 10, height: 40)
+            let coordsRect = CGRect(x: currentX, y: startY + 75, width: col3Width - 16, height: 40)
             coordsText.draw(in: coordsRect, withAttributes: coordsAttributes)
         }
         
         currentX += col3Width
         
         // Vertical separator
-        PDFLayoutHelper.drawVerticalLine(x: currentX, y: startY, height: rowHeight, context: context)
-        currentX += 5
+        PDFLayoutHelper.drawVerticalLine(x: currentX, y: startY + 5, height: rowHeight - 10, context: context)
+        currentX += 8
         
         // Column 4: Timestamp
+        let timestampLabelAttributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.boldSystemFont(ofSize: 9),
+            .foregroundColor: UIColor.systemGray
+        ]
+        "DATE & TIME".draw(at: CGPoint(x: currentX, y: startY + 10), withAttributes: timestampLabelAttributes)
+        
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "MMM dd, yyyy"
         let timeFormatter = DateFormatter()
         timeFormatter.dateFormat = "HH:mm:ss"
         
-        let dateText = dateFormatter.string(from: event.date)
-        let timeText = timeFormatter.string(from: event.date)
+        let dateText = "📅 " + dateFormatter.string(from: event.date)
+        let timeText = "🕒 " + timeFormatter.string(from: event.date)
         
         let dateAttributes: [NSAttributedString.Key: Any] = [
             .font: bodyFont,
             .foregroundColor: UIColor.black
         ]
         let timeAttributes: [NSAttributedString.Key: Any] = [
-            .font: smallFont,
+            .font: bodyFont,
             .foregroundColor: UIColor.darkGray
         ]
         
-        dateText.draw(at: CGPoint(x: currentX, y: startY + 40), withAttributes: dateAttributes)
-        timeText.draw(at: CGPoint(x: currentX, y: startY + 60), withAttributes: timeAttributes)
+        dateText.draw(at: CGPoint(x: currentX, y: startY + 30), withAttributes: dateAttributes)
+        timeText.draw(at: CGPoint(x: currentX, y: startY + 50), withAttributes: timeAttributes)
         
         currentX += col4Width
         
         // Vertical separator
-        PDFLayoutHelper.drawVerticalLine(x: currentX, y: startY, height: rowHeight, context: context)
-        currentX += 5
+        PDFLayoutHelper.drawVerticalLine(x: currentX, y: startY + 5, height: rowHeight - 10, context: context)
+        currentX += 8
         
         // Column 5: Image/Map
-        let imageRect = CGRect(x: currentX, y: startY + 5, width: col5Width - 10, height: rowHeight - 10)
+        let imageRect = CGRect(x: currentX, y: startY + 8, width: col5Width - 16, height: rowHeight - 16)
+        
+        // Draw subtle border around image area
+        context.cgContext.setStrokeColor(UIColor.systemGray5.cgColor)
+        context.cgContext.setLineWidth(1)
+        context.cgContext.stroke(imageRect)
         
         if event.isGpsEvent {
             // Generate map snapshot matching live view EXACTLY
             if let mapImage = PDFMapRenderer.generateMapSnapshot(for: event) {
+                // Add rounded corners effect
+                context.cgContext.saveGState()
+                let path = UIBezierPath(roundedRect: imageRect, cornerRadius: 4)
+                context.cgContext.addPath(path.cgPath)
+                context.cgContext.clip()
+                
                 mapImage.draw(in: imageRect)
+                
+                context.cgContext.restoreGState()
             } else {
                 // Placeholder
-                context.cgContext.setFillColor(UIColor.systemGray5.cgColor)
+                context.cgContext.setFillColor(UIColor.systemGray6.cgColor)
                 context.cgContext.fill(imageRect)
                 
-                let placeholderText = "Map unavailable"
+                let placeholderText = "🗺️ Map unavailable"
                 let placeholderAttributes: [NSAttributedString.Key: Any] = [
                     .font: smallFont,
                     .foregroundColor: UIColor.gray
@@ -278,7 +339,7 @@ class PDFGenerator {
         } else {
             // Load camera event image
             if let image = loadEventImage(event: event) {
-                // Aspect fit
+                // Aspect fit with rounded corners
                 let imageSize = image.size
                 let aspectRatio = imageSize.width / imageSize.height
                 let rectAspect = imageRect.width / imageRect.height
@@ -296,13 +357,20 @@ class PDFGenerator {
                     drawRect.size.width = newWidth
                 }
                 
+                context.cgContext.saveGState()
+                let path = UIBezierPath(roundedRect: drawRect, cornerRadius: 4)
+                context.cgContext.addPath(path.cgPath)
+                context.cgContext.clip()
+                
                 image.draw(in: drawRect)
+                
+                context.cgContext.restoreGState()
             } else {
                 // Placeholder
-                context.cgContext.setFillColor(UIColor.systemGray5.cgColor)
+                context.cgContext.setFillColor(UIColor.systemGray6.cgColor)
                 context.cgContext.fill(imageRect)
                 
-                let placeholderText = "Image unavailable"
+                let placeholderText = "📷 Image unavailable"
                 let placeholderAttributes: [NSAttributedString.Key: Any] = [
                     .font: smallFont,
                     .foregroundColor: UIColor.gray
@@ -318,8 +386,8 @@ class PDFGenerator {
             }
         }
         
-        // Draw border around entire row
-        context.cgContext.setStrokeColor(UIColor.lightGray.cgColor)
+        // Draw border around entire row with shadow effect
+        context.cgContext.setStrokeColor(UIColor.systemGray4.cgColor)
         context.cgContext.setLineWidth(1.0)
         context.cgContext.stroke(CGRect(x: margin, y: startY, width: contentWidth, height: rowHeight))
     }
