@@ -356,17 +356,22 @@ class PDFGenerator {
     
     // Helper to load event image
     private func loadEventImage(event: Event) -> UIImage? {
-        // Try to load from EventImageLoader cache
-        let loader = EventImageLoader.shared
+        guard let eventId = event.id, let area = event.area else {
+            return nil
+        }
         
-        // Check if image is already in memory cache
-        if let cachedImage = loader.getCachedImage(for: event) {
+        // Try to get cached image from EventImageLoader
+        if let cachedImage = EventImageLoader.shared.getCachedImage(area: area, eventId: eventId) {
             return cachedImage
         }
         
         // Try to load from disk cache synchronously
-        if let diskImage = loader.loadFromDisk(event: event) {
-            return diskImage
+        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let fileURL = cacheDir.appendingPathComponent("event_\(eventId).jpg")
+        
+        if let data = try? Data(contentsOf: fileURL),
+           let image = UIImage(data: data) {
+            return image
         }
         
         return nil
@@ -439,27 +444,5 @@ class PDFGenerator {
             alert.addAction(UIAlertAction(title: "OK", style: .default))
             viewController.present(alert, animated: true)
         }
-    }
-}
-
-// Extension to EventImageLoader to expose cache access
-extension EventImageLoader {
-    func getCachedImage(for event: Event) -> UIImage? {
-        guard let id = event.id else { return nil }
-        return memoryCache.object(forKey: id as NSString)
-    }
-    
-    func loadFromDisk(event: Event) -> UIImage? {
-        guard let id = event.id else { return nil }
-        
-        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        let fileURL = cacheDir.appendingPathComponent("event_\(id).jpg")
-        
-        if let data = try? Data(contentsOf: fileURL),
-           let image = UIImage(data: data) {
-            return image
-        }
-        
-        return nil
     }
 }

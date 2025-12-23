@@ -1,5 +1,13 @@
 import Foundation
 
+// MARK: - System Filter (for AlertsView)
+
+enum SystemFilter {
+    case all
+    case va   // Video Analytics (camera events)
+    case vts  // Vehicle Tracking System (GPS events)
+}
+
 // MARK: - Event
 
 struct Event: Codable, Identifiable {
