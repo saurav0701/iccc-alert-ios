@@ -2,6 +2,7 @@ import Foundation
 import UIKit
 import PDFKit
 import MapKit
+import SwiftUI
 
 class PDFGenerator {
     static let shared = PDFGenerator()
@@ -640,7 +641,6 @@ class PDFGenerator {
             
             // Cache it for next time
             try? data.write(to: fileURL)
-            EventImageLoader.shared.getCachedImage(area: area, eventId: eventId)
             
             return image
         }
