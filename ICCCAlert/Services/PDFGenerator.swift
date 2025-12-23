@@ -123,7 +123,7 @@ class PDFGenerator {
             
             yPosition += 10
             
-            // Image section
+            // Image section (for camera events only)
             if !event.isGpsEvent {
                 let imageLabel = "Event Image:"
                 let imageAttributes: [NSAttributedString.Key: Any] = [
@@ -133,12 +133,12 @@ class PDFGenerator {
                 imageLabel.draw(at: CGPoint(x: 40, y: yPosition), withAttributes: imageAttributes)
                 yPosition += 25
                 
-                // Try to get the cached image
-                if let cachedImage = ImageCacheManager.shared.getImage(for: event) {
+                // Try to load image from EventImageLoader
+                if let loadedImage = loadEventImage(event: event) {
                     let maxImageWidth = pageWidth - 80
                     let maxImageHeight: CGFloat = 400
                     
-                    let imageSize = cachedImage.size
+                    let imageSize = loadedImage.size
                     let aspectRatio = imageSize.width / imageSize.height
                     
                     var drawWidth = maxImageWidth
@@ -152,7 +152,7 @@ class PDFGenerator {
                     let imageX = (pageWidth - drawWidth) / 2
                     let imageRect = CGRect(x: imageX, y: yPosition, width: drawWidth, height: drawHeight)
                     
-                    cachedImage.draw(in: imageRect)
+                    loadedImage.draw(in: imageRect)
                     yPosition += drawHeight + 20
                 } else {
                     let noImageText = "Image not available"
@@ -354,6 +354,24 @@ class PDFGenerator {
         return nil
     }
     
+    // Helper to load event image
+    private func loadEventImage(event: Event) -> UIImage? {
+        // Try to load from EventImageLoader cache
+        let loader = EventImageLoader.shared
+        
+        // Check if image is already in memory cache
+        if let cachedImage = loader.getCachedImage(for: event) {
+            return cachedImage
+        }
+        
+        // Try to load from disk cache synchronously
+        if let diskImage = loader.loadFromDisk(event: event) {
+            return diskImage
+        }
+        
+        return nil
+    }
+    
     // Helper function to draw label-value pairs
     private func drawLabelValue(label: String, value: String, yPosition: CGFloat, 
                                 pageWidth: CGFloat, headerFont: UIFont, bodyFont: UIFont,
@@ -421,5 +439,27 @@ class PDFGenerator {
             alert.addAction(UIAlertAction(title: "OK", style: .default))
             viewController.present(alert, animated: true)
         }
+    }
+}
+
+// Extension to EventImageLoader to expose cache access
+extension EventImageLoader {
+    func getCachedImage(for event: Event) -> UIImage? {
+        guard let id = event.id else { return nil }
+        return memoryCache.object(forKey: id as NSString)
+    }
+    
+    func loadFromDisk(event: Event) -> UIImage? {
+        guard let id = event.id else { return nil }
+        
+        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let fileURL = cacheDir.appendingPathComponent("event_\(id).jpg")
+        
+        if let data = try? Data(contentsOf: fileURL),
+           let image = UIImage(data: data) {
+            return image
+        }
+        
+        return nil
     }
 }
