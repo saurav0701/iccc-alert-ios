@@ -437,37 +437,27 @@ class PDFGenerator {
     // MARK: - Share PDF via WhatsApp
     
     func sharePDFViaWhatsApp(pdfURL: URL, from viewController: UIViewController) {
-        let whatsappURL = URL(string: "whatsapp://app")!
+        // Simply present the share sheet - iOS will show WhatsApp if installed
+        let activityViewController = UIActivityViewController(
+            activityItems: [pdfURL],
+            applicationActivities: nil
+        )
         
-        if UIApplication.shared.canOpenURL(whatsappURL) {
-            let activityViewController = UIActivityViewController(
-                activityItems: [pdfURL],
-                applicationActivities: nil
-            )
-            
-            activityViewController.excludedActivityTypes = [
-                .addToReadingList,
-                .assignToContact,
-                .print
-            ]
-            
-            if let popoverController = activityViewController.popoverPresentationController {
-                popoverController.sourceView = viewController.view
-                popoverController.sourceRect = CGRect(x: viewController.view.bounds.midX,
-                                                     y: viewController.view.bounds.midY,
-                                                     width: 0, height: 0)
-                popoverController.permittedArrowDirections = []
-            }
-            
-            viewController.present(activityViewController, animated: true)
-        } else {
-            let alert = UIAlertController(
-                title: "WhatsApp Not Found",
-                message: "Please install WhatsApp to share via WhatsApp",
-                preferredStyle: .alert
-            )
-            alert.addAction(UIAlertAction(title: "OK", style: .default))
-            viewController.present(alert, animated: true)
+        // Optional: Exclude some activities
+        activityViewController.excludedActivityTypes = [
+            .addToReadingList,
+            .assignToContact
+        ]
+        
+        // For iPad support
+        if let popoverController = activityViewController.popoverPresentationController {
+            popoverController.sourceView = viewController.view
+            popoverController.sourceRect = CGRect(x: viewController.view.bounds.midX,
+                                                 y: viewController.view.bounds.midY,
+                                                 width: 0, height: 0)
+            popoverController.permittedArrowDirections = []
         }
+        
+        viewController.present(activityViewController, animated: true)
     }
 }
