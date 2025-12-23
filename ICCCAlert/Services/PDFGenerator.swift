@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import PDFKit
+import MapKit
 
 class PDFGenerator {
     static let shared = PDFGenerator()
@@ -123,8 +124,48 @@ class PDFGenerator {
             
             yPosition += 10
             
-            // Image section (for camera events only)
-            if !event.isGpsEvent {
+            // Image section (for camera events) or Map (for GPS events)
+            if event.isGpsEvent {
+                // GPS Event - Generate map snapshot
+                let mapLabel = "Location Map:"
+                let mapAttributes: [NSAttributedString.Key: Any] = [
+                    .font: headerFont,
+                    .foregroundColor: UIColor.black
+                ]
+                mapLabel.draw(at: CGPoint(x: 40, y: yPosition), withAttributes: mapAttributes)
+                yPosition += 25
+                
+                if let mapImage = self.generateMapSnapshot(for: event) {
+                    let maxImageWidth = pageWidth - 80
+                    let maxImageHeight: CGFloat = 400
+                    
+                    let imageSize = mapImage.size
+                    let aspectRatio = imageSize.width / imageSize.height
+                    
+                    var drawWidth = maxImageWidth
+                    var drawHeight = drawWidth / aspectRatio
+                    
+                    if drawHeight > maxImageHeight {
+                        drawHeight = maxImageHeight
+                        drawWidth = drawHeight * aspectRatio
+                    }
+                    
+                    let imageX = (pageWidth - drawWidth) / 2
+                    let imageRect = CGRect(x: imageX, y: yPosition, width: drawWidth, height: drawHeight)
+                    
+                    mapImage.draw(in: imageRect)
+                    yPosition += drawHeight + 20
+                } else {
+                    let noMapText = "Map not available"
+                    let noMapAttributes: [NSAttributedString.Key: Any] = [
+                        .font: captionFont,
+                        .foregroundColor: UIColor.gray
+                    ]
+                    noMapText.draw(at: CGPoint(x: 40, y: yPosition), withAttributes: noMapAttributes)
+                    yPosition += 30
+                }
+            } else {
+                // Camera Event - Load and display image
                 let imageLabel = "Event Image:"
                 let imageAttributes: [NSAttributedString.Key: Any] = [
                     .font: headerFont,
@@ -133,7 +174,6 @@ class PDFGenerator {
                 imageLabel.draw(at: CGPoint(x: 40, y: yPosition), withAttributes: imageAttributes)
                 yPosition += 25
                 
-                // Try to load image from EventImageLoader
                 if let loadedImage = self.loadEventImage(event: event) {
                     let maxImageWidth = pageWidth - 80
                     let maxImageHeight: CGFloat = 400
@@ -183,7 +223,6 @@ class PDFGenerator {
             footerText.draw(at: CGPoint(x: (pageWidth - footerSize.width) / 2, y: yPosition), withAttributes: footerAttributes)
         }
         
-        // Save to Documents directory (not temporary)
         let fileName = "Event_\(event.id ?? UUID().uuidString)_\(Int(Date().timeIntervalSince1970)).pdf"
         
         guard let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
@@ -282,7 +321,9 @@ class PDFGenerator {
             
             // Event details on subsequent pages
             for (index, event) in events.enumerated() {
-                if yPosition > pageHeight - 150 {
+                // Check if we need a new page (accounting for image/map height)
+                let estimatedContentHeight: CGFloat = event.isGpsEvent ? 500 : 500 // Image/map + details
+                if yPosition > pageHeight - estimatedContentHeight {
                     context.beginPage()
                     yPosition = 40
                 }
@@ -313,7 +354,71 @@ class PDFGenerator {
                 yPosition = self.drawLabelValue(label: "Location:", value: event.location,
                                           yPosition: yPosition, pageWidth: pageWidth,
                                           headerFont: bodyFont, bodyFont: smallFont, context: context)
-                yPosition += 20
+                yPosition += 15
+                
+                // GPS event details
+                if event.isGpsEvent {
+                    if let vehicleNumber = event.vehicleNumber {
+                        yPosition = self.drawLabelValue(label: "Vehicle:", value: vehicleNumber,
+                                                  yPosition: yPosition, pageWidth: pageWidth,
+                                                  headerFont: bodyFont, bodyFont: smallFont, context: context)
+                        yPosition += 12
+                    }
+                    
+                    if let gpsLoc = event.gpsAlertLocation {
+                        let coords = String(format: "%.6f, %.6f", gpsLoc.lat, gpsLoc.lng)
+                        yPosition = self.drawLabelValue(label: "Coordinates:", value: coords,
+                                                  yPosition: yPosition, pageWidth: pageWidth,
+                                                  headerFont: bodyFont, bodyFont: smallFont, context: context)
+                        yPosition += 15
+                    }
+                    
+                    // Add map snapshot for GPS events
+                    if let mapImage = self.generateMapSnapshot(for: event) {
+                        let maxImageWidth = pageWidth - 80
+                        let maxImageHeight: CGFloat = 300
+                        
+                        let imageSize = mapImage.size
+                        let aspectRatio = imageSize.width / imageSize.height
+                        
+                        var drawWidth = maxImageWidth
+                        var drawHeight = drawWidth / aspectRatio
+                        
+                        if drawHeight > maxImageHeight {
+                            drawHeight = maxImageHeight
+                            drawWidth = drawHeight * aspectRatio
+                        }
+                        
+                        let imageX = (pageWidth - drawWidth) / 2
+                        let imageRect = CGRect(x: imageX, y: yPosition, width: drawWidth, height: drawHeight)
+                        
+                        mapImage.draw(in: imageRect)
+                        yPosition += drawHeight + 20
+                    }
+                } else {
+                    // Add image for camera events
+                    if let image = self.loadEventImage(event: event) {
+                        let maxImageWidth = pageWidth - 80
+                        let maxImageHeight: CGFloat = 300
+                        
+                        let imageSize = image.size
+                        let aspectRatio = imageSize.width / imageSize.height
+                        
+                        var drawWidth = maxImageWidth
+                        var drawHeight = drawWidth / aspectRatio
+                        
+                        if drawHeight > maxImageHeight {
+                            drawHeight = maxImageHeight
+                            drawWidth = drawHeight * aspectRatio
+                        }
+                        
+                        let imageX = (pageWidth - drawWidth) / 2
+                        let imageRect = CGRect(x: imageX, y: yPosition, width: drawWidth, height: drawHeight)
+                        
+                        image.draw(in: imageRect)
+                        yPosition += drawHeight + 20
+                    }
+                }
                 
                 // Separator
                 context.cgContext.setStrokeColor(UIColor.lightGray.cgColor)
@@ -348,7 +453,6 @@ class PDFGenerator {
             footerText.draw(at: CGPoint(x: (pageWidth - footerSize.width) / 2, y: yPosition), withAttributes: footerAttributes)
         }
         
-        // Save to Documents directory
         let fileName = "Events_\(channel.eventType)_\(Int(Date().timeIntervalSince1970)).pdf"
         
         guard let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
@@ -369,7 +473,141 @@ class PDFGenerator {
         }
     }
     
-    // Helper to load event image (safely, won't crash if not available)
+    // MARK: - Helper: Generate Map Snapshot for GPS Events
+    
+    private func generateMapSnapshot(for event: Event) -> UIImage? {
+        guard let alertLoc = event.gpsAlertLocation else {
+            print("⚠️ No GPS location for event")
+            return nil
+        }
+        
+        let mapSize = CGSize(width: 800, height: 600)
+        let options = MKMapSnapshotter.Options()
+        
+        // Set region
+        let center = CLLocationCoordinate2D(latitude: alertLoc.lat, longitude: alertLoc.lng)
+        
+        // Adjust span based on geofence or use default
+        var span = MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+        
+        if let geofence = event.geofenceInfo,
+           let geojson = geofence.geojson,
+           let coords = geojson.coordinatesArray {
+            
+            // Calculate bounding box for geofence
+            let lats = coords.map { $0[1] }
+            let lngs = coords.map { $0[0] }
+            
+            if let minLat = lats.min(), let maxLat = lats.max(),
+               let minLng = lngs.min(), let maxLng = lngs.max() {
+                
+                let latDelta = max((maxLat - minLat) * 1.5, 0.01)
+                let lngDelta = max((maxLng - minLng) * 1.5, 0.01)
+                span = MKCoordinateSpan(latitudeDelta: latDelta, longitudeDelta: lngDelta)
+            }
+        }
+        
+        options.region = MKCoordinateRegion(center: center, span: span)
+        options.size = mapSize
+        options.scale = UIScreen.main.scale
+        
+        let snapshotter = MKMapSnapshotter(options: options)
+        let semaphore = DispatchSemaphore(value: 0)
+        var resultImage: UIImage?
+        
+        snapshotter.start { snapshot, error in
+            defer { semaphore.signal() }
+            
+            if let error = error {
+                print("❌ Map snapshot error: \(error.localizedDescription)")
+                return
+            }
+            
+            guard let snapshot = snapshot else {
+                print("❌ No snapshot generated")
+                return
+            }
+            
+            // Draw annotations on the snapshot
+            UIGraphicsBeginImageContextWithOptions(mapSize, true, 0)
+            snapshot.image.draw(at: .zero)
+            
+            let context = UIGraphicsGetCurrentContext()
+            
+            // Draw alert location marker
+            let pinPoint = snapshot.point(for: center)
+            
+            // Draw red pin
+            context?.setFillColor(UIColor.red.cgColor)
+            context?.fillEllipse(in: CGRect(x: pinPoint.x - 10, y: pinPoint.y - 10, width: 20, height: 20))
+            context?.setFillColor(UIColor.white.cgColor)
+            context?.fillEllipse(in: CGRect(x: pinPoint.x - 5, y: pinPoint.y - 5, width: 10, height: 10))
+            
+            // Draw geofence if available
+            if let geofence = event.geofenceInfo,
+               let geojson = geofence.geojson,
+               let coords = geojson.coordinatesArray {
+                
+                let colorStr = geofence.attributes?.color ?? 
+                              geofence.attributes?.polylineColor ?? 
+                              (geofence.type == "P" ? "#FFC107" : "#3388ff")
+                let color = UIColor(Color(hex: colorStr))
+                
+                context?.setStrokeColor(color.cgColor)
+                context?.setLineWidth(3)
+                
+                switch geojson.type {
+                case "Point":
+                    if let first = coords.first, first.count >= 2 {
+                        let coord = CLLocationCoordinate2D(latitude: first[1], longitude: first[0])
+                        let point = snapshot.point(for: coord)
+                        context?.strokeEllipse(in: CGRect(x: point.x - 50, y: point.y - 50, width: 100, height: 100))
+                    }
+                    
+                case "LineString":
+                    let points = coords.map { snapshot.point(for: CLLocationCoordinate2D(latitude: $0[1], longitude: $0[0])) }
+                    if !points.isEmpty {
+                        context?.move(to: points[0])
+                        for point in points.dropFirst() {
+                            context?.addLine(to: point)
+                        }
+                        context?.strokePath()
+                    }
+                    
+                case "Polygon":
+                    let points = coords.map { snapshot.point(for: CLLocationCoordinate2D(latitude: $0[1], longitude: $0[0])) }
+                    if !points.isEmpty {
+                        context?.setFillColor(color.withAlphaComponent(0.3).cgColor)
+                        context?.move(to: points[0])
+                        for point in points.dropFirst() {
+                            context?.addLine(to: point)
+                        }
+                        context?.closePath()
+                        context?.drawPath(using: .fillStroke)
+                    }
+                    
+                default:
+                    break
+                }
+            }
+            
+            resultImage = UIGraphicsGetImageFromCurrentImageContext()
+            UIGraphicsEndImageContext()
+        }
+        
+        _ = semaphore.wait(timeout: .now() + 10)
+        
+        if let image = resultImage {
+            print("✅ Map snapshot generated for event")
+        } else {
+            print("⚠️ Failed to generate map snapshot")
+        }
+        
+        return resultImage
+    }
+    
+    // MARK: - Helper: Load Event Image
+    
     private func loadEventImage(event: Event) -> UIImage? {
         guard let eventId = event.id, let area = event.area else {
             print("⚠️ Event missing ID or area")
@@ -392,11 +630,27 @@ class PDFGenerator {
             return image
         }
         
+        // Try to download image synchronously (last resort)
+        let imageUrl = EventImageLoader.shared.buildImageUrl(area: area, eventId: eventId)
+        
+        if let url = URL(string: imageUrl),
+           let data = try? Data(contentsOf: url),
+           let image = UIImage(data: data) {
+            print("✅ Downloaded image for event \(eventId)")
+            
+            // Cache it for next time
+            try? data.write(to: fileURL)
+            EventImageLoader.shared.getCachedImage(area: area, eventId: eventId)
+            
+            return image
+        }
+        
         print("⚠️ No image available for event \(eventId)")
         return nil
     }
     
-    // Helper function to draw label-value pairs
+    // MARK: - Helper: Draw Label-Value Pairs
+    
     private func drawLabelValue(label: String, value: String, yPosition: CGFloat, 
                                 pageWidth: CGFloat, headerFont: UIFont, bodyFont: UIFont,
                                 context: UIGraphicsPDFRendererContext) -> CGFloat {
@@ -426,7 +680,8 @@ class PDFGenerator {
         return currentY
     }
     
-    // Share PDF via WhatsApp
+    // MARK: - Share PDF via WhatsApp
+    
     func sharePDFViaWhatsApp(pdfURL: URL, from viewController: UIViewController) {
         let whatsappURL = URL(string: "whatsapp://app")!
         
@@ -436,14 +691,12 @@ class PDFGenerator {
                 applicationActivities: nil
             )
             
-            // Exclude irrelevant activities
             activityViewController.excludedActivityTypes = [
                 .addToReadingList,
                 .assignToContact,
                 .print
             ]
             
-            // For iPad
             if let popoverController = activityViewController.popoverPresentationController {
                 popoverController.sourceView = viewController.view
                 popoverController.sourceRect = CGRect(x: viewController.view.bounds.midX,
@@ -454,7 +707,6 @@ class PDFGenerator {
             
             viewController.present(activityViewController, animated: true)
         } else {
-            // WhatsApp not installed
             let alert = UIAlertController(
                 title: "WhatsApp Not Found",
                 message: "Please install WhatsApp to share via WhatsApp",
