@@ -36,30 +36,7 @@ class WebSocketService: ObservableObject {
 
     private var lastProcessedTimestamp: TimeInterval = 0
     private var catchUpMode = false
-    private let catchUpThreshold = 10
-    
-    // ✅ NEW: Connection state management
-    private enum ConnectionState {
-        case disconnected
-        case connecting
-        case connected
-        case reconnecting
-    }
-    private var connectionState: ConnectionState = .disconnected
-    private let connectionLock = NSLock()
-    
-    // ✅ NEW: Reconnection backoff
-    private var reconnectAttempts = 0
-    private let maxReconnectAttempts = 5
-    private var reconnectTimer: Timer?
-    
-    // ✅ NEW: Subscription queue
-    private var subscriptionQueue: DispatchQueue = DispatchQueue(label: "com.iccc.subscriptionQueue")
-    private var isSubscribing = false
-    
-    // ✅ NEW: Health check
-    private var missedPingCount = 0
-    private let maxMissedPings = 3
+    private let catchUpThreshold = 10 
     
     private var clientId: String {
         if let uuid = UIDevice.current.identifierForVendor?.uuidString {
@@ -71,101 +48,60 @@ class WebSocketService: ObservableObject {
     private init() {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
-        config.waitsForConnectivity = true // ✅ NEW: Wait for network
         session = URLSession(configuration: config)
         
         startAckFlusher()
-        startHealthMonitor()
+        startHealthMonitor() 
     }
 
     private func startHealthMonitor() {
-        Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+        Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             
             let now = Date().timeIntervalSince1970
-            
-            // Check if processing is stalled
-            if self.lastProcessedTimestamp > 0 && (now - self.lastProcessedTimestamp) > 30 {
-                DebugLogger.shared.log("⚠️ Processing stalled for 30s", emoji: "🔄", color: .orange)
-                
-                // Only reconnect if we're supposed to be connected
-                if self.connectionState == .connected {
-                    self.handleConnectionIssue(reason: "Processing stalled")
-                }
+            if self.lastProcessedTimestamp > 0 && (now - self.lastProcessedTimestamp) > 10 {
+                DebugLogger.shared.log("⚠️ Processing stalled, reconnecting", emoji: "🔄", color: .orange)
+                self.reconnect()
             }
         }
     }
     
-    // ✅ IMPROVED: Connection with state management
     func connect() {
-        connectionLock.lock()
-        
-        // Prevent multiple simultaneous connection attempts
-        guard connectionState == .disconnected || connectionState == .reconnecting else {
-            DebugLogger.shared.log("Already connecting/connected", emoji: "⚠️", color: .orange)
-            connectionLock.unlock()
+        guard webSocketTask == nil else {
+            DebugLogger.shared.log("WebSocket already exists", emoji: "⚠️", color: .orange)
             return
         }
         
-        connectionState = .connecting
-        connectionLock.unlock()
-        
         guard let url = URL(string: "\(baseURL)/ws") else {
             DebugLogger.shared.log("Invalid URL", emoji: "❌", color: .red)
-            connectionState = .disconnected
             return
         }
         
         DebugLogger.shared.log("Connecting... clientId=\(clientId)", emoji: "🔌", color: .blue)
-        
-        // Clean up existing connection
-        webSocketTask?.cancel(with: .goingAway, reason: nil)
-        webSocketTask = nil
         
         webSocketTask = session?.webSocketTask(with: url)
         webSocketTask?.resume()
         
         receiveMessage()
         
-        // ✅ IMPROVED: Better connection verification
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             if self.webSocketTask?.state == .running {
-                self.connectionLock.lock()
-                self.connectionState = .connected
-                self.connectionLock.unlock()
-                
                 self.isConnected = true
                 self.connectionStatus = "Connected"
                 self.hasSubscribed = false
-                self.reconnectAttempts = 0
-                self.missedPingCount = 0
-                
-                DebugLogger.shared.log("✅ Connected successfully", emoji: "✅", color: .green)
-                
+                DebugLogger.shared.log("Connected successfully", emoji: "✅", color: .green)
                 self.startPing()
-                
-                // ✅ IMPROVED: Delayed subscription with state check
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    if self.connectionState == .connected {
-                        self.sendSubscriptionV2()
-                    }
+  
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    self.sendSubscriptionV2()
                 }
             } else {
                 DebugLogger.shared.log("Connection failed", emoji: "❌", color: .red)
-                self.handleConnectionFailure()
             }
         }
     }
     
     func disconnect() {
-        connectionLock.lock()
-        connectionState = .disconnected
-        connectionLock.unlock()
-        
-        // Cancel reconnect timer
-        reconnectTimer?.invalidate()
-        reconnectTimer = nil
-        
         flushAcksSync()
         
         webSocketTask?.cancel(with: .goingAway, reason: nil)
@@ -174,65 +110,18 @@ class WebSocketService: ObservableObject {
         hasSubscribed = false
         pingTimer?.invalidate()
         ackFlushTimer?.invalidate()
-        
         DebugLogger.shared.log("Disconnected", emoji: "🔌", color: .gray)
     }
     
-    // ✅ NEW: Handle connection issues intelligently
-    private func handleConnectionIssue(reason: String) {
-        connectionLock.lock()
-        let currentState = connectionState
-        connectionLock.unlock()
+    private func reconnect() {
+        DebugLogger.shared.log("Attempting reconnect...", emoji: "🔄", color: .orange)
         
-        guard currentState == .connected else {
-            DebugLogger.shared.log("Ignoring connection issue - not connected", emoji: "⏭️", color: .gray)
-            return
-        }
-        
-        DebugLogger.shared.log("Connection issue: \(reason)", emoji: "⚠️", color: .orange)
-        reconnectWithBackoff()
-    }
-    
-    // ✅ NEW: Handle connection failure
-    private func handleConnectionFailure() {
-        connectionLock.lock()
-        connectionState = .disconnected
-        connectionLock.unlock()
-        
+        webSocketTask?.cancel(with: .goingAway, reason: nil)
+        webSocketTask = nil
         isConnected = false
-        reconnectWithBackoff()
-    }
-    
-    // ✅ IMPROVED: Reconnect with exponential backoff
-    private func reconnectWithBackoff() {
-        connectionLock.lock()
+        hasSubscribed = false
         
-        guard connectionState != .reconnecting else {
-            DebugLogger.shared.log("Already reconnecting", emoji: "⏭️", color: .gray)
-            connectionLock.unlock()
-            return
-        }
-        
-        connectionState = .reconnecting
-        connectionLock.unlock()
-        
-        reconnectAttempts += 1
-        
-        // Calculate backoff delay: 2s, 4s, 8s, 16s, 32s
-        let delay = min(pow(2.0, Double(reconnectAttempts - 1)), 32.0)
-        
-        DebugLogger.shared.log("Reconnecting in \(delay)s (attempt \(reconnectAttempts)/\(maxReconnectAttempts))", emoji: "🔄", color: .orange)
-        
-        // Cancel existing timer
-        reconnectTimer?.invalidate()
-        
-        reconnectTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
-            guard let self = self else { return }
-            
-            self.connectionLock.lock()
-            self.connectionState = .disconnected
-            self.connectionLock.unlock()
-            
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             self.connect()
         }
     }
@@ -243,16 +132,13 @@ class WebSocketService: ObservableObject {
             
             switch result {
             case .success(let message):
-                // ✅ Reset missed ping counter on successful message
-                self.missedPingCount = 0
-                
                 switch message {
                 case .string(let text):
                     self.receivedCount += 1
                     self.lastProcessedTimestamp = Date().timeIntervalSince1970
 
                     if self.catchUpMode {
-                        Thread.sleep(forTimeInterval: 0.01)
+                        Thread.sleep(forTimeInterval: 0.01) 
                     }
                     
                     self.eventQueue.async {
@@ -279,16 +165,10 @@ class WebSocketService: ObservableObject {
                 
             case .failure(let error):
                 DebugLogger.shared.log("WebSocket error: \(error.localizedDescription)", emoji: "❌", color: .red)
-                
-                self.connectionLock.lock()
-                let wasConnected = self.connectionState == .connected
-                self.connectionLock.unlock()
-                
                 self.isConnected = false
                 
-                // ✅ Only reconnect if we were actually connected
-                if wasConnected && self.webSocketTask?.state != .canceling {
-                    self.handleConnectionIssue(reason: "Receive error")
+                if self.webSocketTask?.state != .canceling {
+                    self.reconnect()
                 }
             }
         }
@@ -307,9 +187,8 @@ class WebSocketService: ObservableObject {
     
     private func _handleMessageInternal(_ text: String) throws {
         if text.contains("\"status\":\"subscribed\"") {
-            DebugLogger.shared.log("✅ Subscription confirmed", emoji: "✅", color: .green)
+            DebugLogger.shared.log("Subscription confirmed", emoji: "✅", color: .green)
             pendingSubscriptionUpdate = false
-            isSubscribing = false
             return
         }
   
@@ -345,6 +224,7 @@ class WebSocketService: ObservableObject {
         }()
 
         if !SubscriptionManager.shared.isSubscribed(channelId: channelId) {
+            DebugLogger.shared.log("Not subscribed to \(channelId)", emoji: "⏭️", color: .orange)
             droppedCount += 1
             sendAck(eventId: eventId)
             return
@@ -358,6 +238,7 @@ class WebSocketService: ObservableObject {
         )
         
         if !isNew && sequence > 0 {
+            DebugLogger.shared.log("Duplicate event \(eventId)", emoji: "⏭️", color: .orange)
             droppedCount += 1
             sendAck(eventId: eventId)
             return
@@ -401,7 +282,7 @@ class WebSocketService: ObservableObject {
 
         if processedCount % 100 == 0 {
             let stats = "received=\(receivedCount), processed=\(processedCount), dropped=\(droppedCount), acked=\(ackedCount)"
-            DebugLogger.shared.log("📊 STATS: \(stats)", emoji: "📊", color: .blue)
+            DebugLogger.shared.log("STATS: \(stats)", emoji: "📊", color: .blue)
         }
     }
 
@@ -504,43 +385,22 @@ class WebSocketService: ObservableObject {
         DebugLogger.shared.log("Flushed \(allAcks.count) ACKs on shutdown", emoji: "💾", color: .blue)
     }
 
-    // ✅ IMPROVED: Subscription with better error handling
     func sendSubscriptionV2() {
-        // Check connection state
-        connectionLock.lock()
-        let currentState = connectionState
-        connectionLock.unlock()
-        
-        guard currentState == .connected else {
-            DebugLogger.shared.log("Cannot subscribe - not connected (state: \(currentState))", emoji: "⚠️", color: .orange)
+        guard isConnected, webSocketTask?.state == .running else {
+            DebugLogger.shared.log("Cannot subscribe - not connected", emoji: "⚠️", color: .orange)
             pendingSubscriptionUpdate = true
-            return
-        }
-        
-        guard webSocketTask?.state == .running else {
-            DebugLogger.shared.log("Cannot subscribe - websocket not running", emoji: "⚠️", color: .orange)
-            pendingSubscriptionUpdate = true
-            return
-        }
-        
-        // ✅ Prevent concurrent subscriptions
-        guard !isSubscribing else {
-            DebugLogger.shared.log("Subscription already in progress", emoji: "⏭️", color: .gray)
+            reconnect()
             return
         }
         
         let now = Date().timeIntervalSince1970
-        
-        // ✅ Prevent duplicate subscriptions within 3 seconds
-        if hasSubscribed && (now - lastSubscriptionTime) < 3 {
-            DebugLogger.shared.log("Skipping duplicate subscription (last: \(Int(now - lastSubscriptionTime))s ago)", emoji: "⏭️", color: .gray)
+        if hasSubscribed && (now - lastSubscriptionTime) < 5 {
+            DebugLogger.shared.log("Skipping duplicate subscription", emoji: "⚠️", color: .orange)
             return
         }
         
         let subscriptions = SubscriptionManager.shared.subscribedChannels
         guard !subscriptions.isEmpty else { return }
-        
-        isSubscribing = true
         
         let filters = subscriptions.map { channel -> [String: String] in
             return ["area": channel.area, "eventType": channel.eventType]
@@ -576,14 +436,13 @@ class WebSocketService: ObservableObject {
         guard let data = try? JSONSerialization.data(withJSONObject: request),
               let str = String(data: data, encoding: .utf8) else {
             DebugLogger.shared.log("Failed to serialize subscription", emoji: "❌", color: .red)
-            isSubscribing = false
             return
         }
         
         let mode = resetConsumers ? "RESET" : "RESUME"
         DebugLogger.shared.log("Sending subscription (\(mode)): \(subscriptions.count) channels", emoji: "📤", color: .blue)
         
-        // Enter catch-up mode if resuming
+        // ✅ NEW: Enter catch-up mode if resuming with state
         if !resetConsumers {
             catchUpMode = true
             DebugLogger.shared.log("⚡ CATCH-UP MODE ENABLED", emoji: "🚀", color: .orange)
@@ -596,79 +455,33 @@ class WebSocketService: ObservableObject {
             }
         }
         
-        // ✅ IMPROVED: Better error handling - don't reconnect on subscription failure
-        webSocketTask?.send(.string(str)) { [weak self] error in
-            guard let self = self else { return }
-            
+        webSocketTask?.send(.string(str)) { error in
             if let error = error {
-                DebugLogger.shared.log("❌ Subscription send failed: \(error.localizedDescription)", emoji: "❌", color: .red)
-                self.isSubscribing = false
-                
-                // ✅ Don't reconnect immediately - check connection state
-                self.connectionLock.lock()
-                let currentState = self.connectionState
-                self.connectionLock.unlock()
-                
-                if currentState == .connected {
-                    // Connection is fine, just retry subscription after delay
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        if self.connectionState == .connected {
-                            self.sendSubscriptionV2()
-                        }
-                    }
-                }
+                DebugLogger.shared.log("Subscription failed: \(error.localizedDescription)", emoji: "❌", color: .red)
+                self.reconnect()
             } else {
                 self.hasSubscribed = true
                 self.lastSubscriptionTime = now
-                DebugLogger.shared.log("✅ Subscription sent (reset=\(resetConsumers))", emoji: "✅", color: .green)
-                
-                // ✅ Set timeout for subscription confirmation
-                DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-                    if self.isSubscribing {
-                        DebugLogger.shared.log("⚠️ Subscription confirmation timeout", emoji: "⚠️", color: .orange)
-                        self.isSubscribing = false
-                    }
-                }
+                DebugLogger.shared.log("Subscription sent (reset=\(resetConsumers))", emoji: "✅", color: .green)
             }
         }
     }
     
-    // ✅ IMPROVED: Better ping with health check
     private func startPing() {
         pingTimer?.invalidate()
         pingTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             
-            self.connectionLock.lock()
-            let currentState = self.connectionState
-            self.connectionLock.unlock()
-            
-            guard currentState == .connected else {
-                DebugLogger.shared.log("Skipping ping - not connected", emoji: "⏭️", color: .gray)
-                return
-            }
-            
             if self.webSocketTask?.state == .running {
                 self.webSocketTask?.sendPing { error in
                     if let error = error {
-                        self.missedPingCount += 1
-                        DebugLogger.shared.log("Ping failed (\(self.missedPingCount)/\(self.maxMissedPings)): \(error.localizedDescription)", emoji: "❌", color: .red)
-                        
-                        // ✅ Only reconnect after multiple failures
-                        if self.missedPingCount >= self.maxMissedPings {
-                            self.handleConnectionIssue(reason: "Multiple ping failures")
-                        }
-                    } else {
-                        // Reset counter on successful ping
-                        if self.missedPingCount > 0 {
-                            DebugLogger.shared.log("Ping recovered", emoji: "✅", color: .green)
-                        }
-                        self.missedPingCount = 0
+                        DebugLogger.shared.log("Ping failed: \(error.localizedDescription)", emoji: "❌", color: .red)
+                        self.reconnect()
                     }
                 }
             } else {
-                DebugLogger.shared.log("Connection lost during ping check", emoji: "🔄", color: .orange)
-                self.handleConnectionIssue(reason: "Connection state changed")
+                DebugLogger.shared.log("Connection lost during ping", emoji: "🔄", color: .orange)
+                self.reconnect()
             }
         }
     }
