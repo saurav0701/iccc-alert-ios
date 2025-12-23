@@ -102,8 +102,6 @@ struct Channel: Codable, Identifiable {
     var isPinned: Bool
 }
 
-// MARK: - User
-
 struct User: Codable {
     let id: Int
     let name: String
@@ -119,8 +117,6 @@ struct User: Codable {
         case id, name, phone, area, designation, organisation, isActive, createdAt, updatedAt
     }
 }
-
-// MARK: - Auth
 
 struct LoginRequest: Codable {
     let phone: String
@@ -146,7 +142,6 @@ struct ApiResponse<T: Codable>: Codable {
     let data: T?
 }
 
-// MARK: - GPS Event Data Structures
 
 struct GpsLocation: Codable {
     let lat: Double

@@ -1,4 +1,5 @@
 import SwiftUI
+import PDFKit
 
 struct ChannelDetailView: View {
     let channel: Channel
@@ -13,11 +14,17 @@ struct ChannelDetailView: View {
     @State private var showingMapView = false
     @State private var refreshTrigger = UUID()
     
-    // ✅ NEW: Filter states
+    // Filter states
     @State private var showFilterSheet = false
     @State private var timeFilter: TimeFilter = .all
     @State private var sortOption: EventSortOption = .newestFirst
     @State private var showOnlySaved = false
+    
+    // PDF/Share states
+    @State private var showShareOptions = false
+    @State private var isGeneratingPDF = false
+    @State private var showPDFSuccess = false
+    @State private var pdfSuccessMessage = ""
     
     @State private var eventObserver: NSObjectProtocol?
     
@@ -31,21 +38,17 @@ struct ChannelDetailView: View {
         subscriptionManager.isChannelMuted(channelId: channel.id)
     }
     
-    // ✅ UPDATED: Apply filters to events
     var filteredEvents: [Event] {
         var events = subscriptionManager.getEvents(channelId: channel.id)
         
-        // Apply saved filter
         if showOnlySaved {
             events = events.filter { $0.isSaved }
         }
         
-        // Apply time filter
         events = events.filter { event in
             timeFilter.matches(eventDate: event.date)
         }
         
-        // Apply sort
         switch sortOption {
         case .newestFirst:
             events = events.sorted { $0.timestamp > $1.timestamp }
@@ -74,7 +77,6 @@ struct ChannelDetailView: View {
                channel.eventType == "overspeed"
     }
     
-    // ✅ NEW: Check if filters are active
     var hasActiveFilters: Bool {
         return timeFilter != .all || sortOption != .newestFirst || showOnlySaved
     }
@@ -90,11 +92,30 @@ struct ChannelDetailView: View {
             if showNewEventsBanner && pendingEventsCount > 0 {
                 newEventsBanner
             }
+            
+            // PDF Generation Loading Overlay
+            if isGeneratingPDF {
+                Color.black.opacity(0.4)
+                    .ignoresSafeArea()
+                
+                VStack(spacing: 20) {
+                    ProgressView()
+                        .scaleEffect(1.5)
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    
+                    Text("Generating PDF...")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                }
+                .padding(30)
+                .background(Color(.systemGray6))
+                .cornerRadius(15)
+                .shadow(radius: 10)
+            }
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                // ✅ UPDATED: Make header tappable
                 Button(action: { showFilterSheet = true }) {
                     VStack(spacing: 2) {
                         HStack(spacing: 6) {
@@ -102,7 +123,6 @@ struct ChannelDetailView: View {
                                 .font(.headline)
                                 .foregroundColor(.primary)
                             
-                            // Filter indicator
                             if hasActiveFilters {
                                 Circle()
                                     .fill(Color.blue)
@@ -126,7 +146,6 @@ struct ChannelDetailView: View {
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                                 
-                                // Show filtered count vs total
                                 if hasActiveFilters {
                                     Text("\(filteredEvents.count)/\(allEvents.count) events")
                                         .font(.caption)
@@ -145,7 +164,14 @@ struct ChannelDetailView: View {
             
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 16) {
-                    if isSubscribed {
+                    if isSubscribed && !allEvents.isEmpty {
+                        // Share PDF button
+                        Button(action: { showShareOptions = true }) {
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.system(size: 20))
+                                .foregroundColor(.blue)
+                        }
+                        
                         // Filter button
                         Button(action: { showFilterSheet = true }) {
                             ZStack(alignment: .topTrailing) {
@@ -167,12 +193,6 @@ struct ChannelDetailView: View {
                                 .foregroundColor(isMuted ? .orange : .blue)
                         }
                     }
-
-                    Button(action: toggleSubscription) {
-                        Text(isSubscribed ? "Unsubscribe" : "Subscribe")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(isSubscribed ? .red : .blue)
-                    }
                 }
             }
         }
@@ -181,6 +201,28 @@ struct ChannelDetailView: View {
                 title: Text("Subscription"),
                 message: Text(alertMessage),
                 dismissButton: .default(Text("OK"))
+            )
+        }
+        .alert(isPresented: $showPDFSuccess) {
+            Alert(
+                title: Text("Success"),
+                message: Text(pdfSuccessMessage),
+                dismissButton: .default(Text("OK"))
+            )
+        }
+        .actionSheet(isPresented: $showShareOptions) {
+            ActionSheet(
+                title: Text("Export Events"),
+                message: Text("Choose an option"),
+                buttons: [
+                    .default(Text("Download PDF")) {
+                        downloadPDF()
+                    },
+                    .default(Text("Share via WhatsApp")) {
+                        shareViaWhatsApp()
+                    },
+                    .cancel()
+                ]
             )
         }
         .sheet(isPresented: $showFilterSheet) {
@@ -223,13 +265,11 @@ struct ChannelDetailView: View {
     
     private var eventsListView: some View {
         VStack(spacing: 0) {
-            // ✅ NEW: Active filter chips
             if hasActiveFilters {
                 activeFilterChips
             }
             
             if filteredEvents.isEmpty && hasActiveFilters {
-                // Show empty state for filtered results
                 emptyFilteredView
             } else if allEvents.isEmpty {
                 emptyEventsView
@@ -280,7 +320,6 @@ struct ChannelDetailView: View {
         .background(Color(.systemGroupedBackground))
     }
     
-    // ✅ NEW: Active filter chips bar
     private var activeFilterChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
@@ -314,7 +353,6 @@ struct ChannelDetailView: View {
                     }
                 }
                 
-                // Clear all button
                 Button(action: clearAllFilters) {
                     Text("Clear All")
                         .font(.caption)
@@ -332,7 +370,6 @@ struct ChannelDetailView: View {
         .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 2)
     }
     
-    // ✅ NEW: Empty filtered results view
     private var emptyFilteredView: some View {
         VStack(spacing: 20) {
             Spacer()
@@ -538,7 +575,6 @@ struct ChannelDetailView: View {
         }
     }
     
-    // ✅ NEW: Clear all filters
     private func clearAllFilters() {
         timeFilter = .all
         sortOption = .newestFirst
@@ -625,6 +661,95 @@ struct ChannelDetailView: View {
             NotificationCenter.default.removeObserver(observer)
             eventObserver = nil
         }
+    }
+    
+    // MARK: - PDF Generation Functions
+    
+    private func downloadPDF() {
+        guard !filteredEvents.isEmpty else {
+            alertMessage = "No events to export"
+            showingAlert = true
+            return
+        }
+        
+        isGeneratingPDF = true
+        
+        DispatchQueue.global(qos: .userInitiated).async {
+            if let pdfURL = PDFGenerator.shared.generateChannelEventsPDF(
+                events: self.filteredEvents,
+                channel: self.channel
+            ) {
+                DispatchQueue.main.async {
+                    self.isGeneratingPDF = false
+                    self.pdfSuccessMessage = "PDF saved to Files app!\nLocation: Documents/\(pdfURL.lastPathComponent)"
+                    self.showPDFSuccess = true
+                    
+                    self.savePDFToPhotos(pdfURL: pdfURL)
+                }
+            } else {
+                DispatchQueue.main.async {
+                    self.isGeneratingPDF = false
+                    self.alertMessage = "Failed to generate PDF"
+                    self.showingAlert = true
+                }
+            }
+        }
+    }
+    
+    private func shareViaWhatsApp() {
+        guard !filteredEvents.isEmpty else {
+            alertMessage = "No events to share"
+            showingAlert = true
+            return
+        }
+        
+        isGeneratingPDF = true
+        
+        DispatchQueue.global(qos: .userInitiated).async {
+            if let pdfURL = PDFGenerator.shared.generateChannelEventsPDF(
+                events: self.filteredEvents,
+                channel: self.channel
+            ) {
+                DispatchQueue.main.async {
+                    self.isGeneratingPDF = false
+                    
+                    if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                       let rootViewController = windowScene.windows.first?.rootViewController {
+                        
+                        var topViewController = rootViewController
+                        while let presentedViewController = topViewController.presentedViewController {
+                            topViewController = presentedViewController
+                        }
+                        
+                        PDFGenerator.shared.sharePDFViaWhatsApp(pdfURL: pdfURL, from: topViewController)
+                    }
+                }
+            } else {
+                DispatchQueue.main.async {
+                    self.isGeneratingPDF = false
+                    self.alertMessage = "Failed to generate PDF"
+                    self.showingAlert = true
+                }
+            }
+        }
+    }
+    
+    private func savePDFToPhotos(pdfURL: URL) {
+        guard let pdfDocument = PDFDocument(url: pdfURL),
+              let pdfPage = pdfDocument.page(at: 0) else { return }
+        
+        let pageRect = pdfPage.bounds(for: .mediaBox)
+        let renderer = UIGraphicsImageRenderer(size: pageRect.size)
+        
+        let image = renderer.image { context in
+            UIColor.white.set()
+            context.fill(pageRect)
+            context.cgContext.translateBy(x: 0, y: pageRect.size.height)
+            context.cgContext.scaleBy(x: 1.0, y: -1.0)
+            pdfPage.draw(with: .mediaBox, to: context.cgContext)
+        }
+        
+        UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
     }
 }
 
