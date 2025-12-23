@@ -289,9 +289,7 @@ class SubscriptionManager: ObservableObject {
     func isChannelMuted(channelId: String) -> Bool {
         return subscribedChannels.first { $0.id == channelId }?.isMuted ?? false
     }
-    
-    // MARK: - Event Management
-    
+
     func addEvent(_ event: Event) -> Bool {
         guard let eventId = event.id,
               let area = event.area,
@@ -316,8 +314,7 @@ class SubscriptionManager: ObservableObject {
                 return false
             }
         }
-        
-        // Set saved status if event was saved before
+
         var eventToAdd = event
         if savedEventIds.contains(eventId) {
             eventToAdd.isSaved = true
@@ -427,12 +424,9 @@ class SubscriptionManager: ObservableObject {
             }
             savedEvents.append(contentsOf: channelSavedEvents)
         }
-        
-        // Sort by timestamp (newest first)
+
         return savedEvents.sorted { $0.timestamp > $1.timestamp }
     }
-    
-    // MARK: - Available Channels
     
     static func getAllAvailableChannels() -> [Channel] {
         let areas = [

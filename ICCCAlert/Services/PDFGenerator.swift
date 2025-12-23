@@ -54,7 +54,7 @@ class PDFGenerator {
             // Event Type
             let eventTypeLabel = "Event Type:"
             let eventTypeValue = event.typeDisplay ?? event.type ?? "Unknown"
-            yPosition = drawLabelValue(label: eventTypeLabel, value: eventTypeValue, 
+            yPosition = self.drawLabelValue(label: eventTypeLabel, value: eventTypeValue, 
                                       yPosition: yPosition, pageWidth: pageWidth,
                                       headerFont: headerFont, bodyFont: bodyFont, context: context)
             yPosition += 15
@@ -62,7 +62,7 @@ class PDFGenerator {
             // Location
             let locationLabel = "Location:"
             let locationValue = event.location
-            yPosition = drawLabelValue(label: locationLabel, value: locationValue,
+            yPosition = self.drawLabelValue(label: locationLabel, value: locationValue,
                                       yPosition: yPosition, pageWidth: pageWidth,
                                       headerFont: headerFont, bodyFont: bodyFont, context: context)
             yPosition += 15
@@ -70,7 +70,7 @@ class PDFGenerator {
             // Area
             let areaLabel = "Area:"
             let areaValue = event.areaDisplay ?? event.area ?? "Unknown"
-            yPosition = drawLabelValue(label: areaLabel, value: areaValue,
+            yPosition = self.drawLabelValue(label: areaLabel, value: areaValue,
                                       yPosition: yPosition, pageWidth: pageWidth,
                                       headerFont: headerFont, bodyFont: bodyFont, context: context)
             yPosition += 15
@@ -80,7 +80,7 @@ class PDFGenerator {
             dateFormatter.dateFormat = "MMM dd, yyyy 'at' HH:mm:ss"
             let dateLabel = "Date & Time:"
             let dateValue = dateFormatter.string(from: event.date)
-            yPosition = drawLabelValue(label: dateLabel, value: dateValue,
+            yPosition = self.drawLabelValue(label: dateLabel, value: dateValue,
                                       yPosition: yPosition, pageWidth: pageWidth,
                                       headerFont: headerFont, bodyFont: bodyFont, context: context)
             yPosition += 15
@@ -89,7 +89,7 @@ class PDFGenerator {
             if event.isGpsEvent {
                 if let vehicleNumber = event.vehicleNumber {
                     let vehicleLabel = "Vehicle Number:"
-                    yPosition = drawLabelValue(label: vehicleLabel, value: vehicleNumber,
+                    yPosition = self.drawLabelValue(label: vehicleLabel, value: vehicleNumber,
                                               yPosition: yPosition, pageWidth: pageWidth,
                                               headerFont: headerFont, bodyFont: bodyFont, context: context)
                     yPosition += 15
@@ -97,7 +97,7 @@ class PDFGenerator {
                 
                 if let transporter = event.vehicleTransporter {
                     let transporterLabel = "Transporter:"
-                    yPosition = drawLabelValue(label: transporterLabel, value: transporter,
+                    yPosition = self.drawLabelValue(label: transporterLabel, value: transporter,
                                               yPosition: yPosition, pageWidth: pageWidth,
                                               headerFont: headerFont, bodyFont: bodyFont, context: context)
                     yPosition += 15
@@ -105,7 +105,7 @@ class PDFGenerator {
                 
                 if let alertSubType = event.alertSubType {
                     let alertLabel = "Alert Type:"
-                    yPosition = drawLabelValue(label: alertLabel, value: alertSubType,
+                    yPosition = self.drawLabelValue(label: alertLabel, value: alertSubType,
                                               yPosition: yPosition, pageWidth: pageWidth,
                                               headerFont: headerFont, bodyFont: bodyFont, context: context)
                     yPosition += 15
@@ -114,7 +114,7 @@ class PDFGenerator {
                 if let gpsLoc = event.gpsAlertLocation {
                     let coordsLabel = "Coordinates:"
                     let coordsValue = String(format: "%.6f, %.6f", gpsLoc.lat, gpsLoc.lng)
-                    yPosition = drawLabelValue(label: coordsLabel, value: coordsValue,
+                    yPosition = self.drawLabelValue(label: coordsLabel, value: coordsValue,
                                               yPosition: yPosition, pageWidth: pageWidth,
                                               headerFont: headerFont, bodyFont: bodyFont, context: context)
                     yPosition += 15
@@ -134,7 +134,7 @@ class PDFGenerator {
                 yPosition += 25
                 
                 // Try to load image from EventImageLoader
-                if let loadedImage = loadEventImage(event: event) {
+                if let loadedImage = self.loadEventImage(event: event) {
                     let maxImageWidth = pageWidth - 80
                     let maxImageHeight: CGFloat = 400
                     
@@ -183,22 +183,34 @@ class PDFGenerator {
             footerText.draw(at: CGPoint(x: (pageWidth - footerSize.width) / 2, y: yPosition), withAttributes: footerAttributes)
         }
         
-        // Save to temporary directory
-        let fileName = "Event_\(event.id ?? UUID().uuidString)_\(Date().timeIntervalSince1970).pdf"
-        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+        // Save to Documents directory (not temporary)
+        let fileName = "Event_\(event.id ?? UUID().uuidString)_\(Int(Date().timeIntervalSince1970)).pdf"
+        
+        guard let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            print("❌ Could not access Documents directory")
+            return nil
+        }
+        
+        let fileURL = documentsPath.appendingPathComponent(fileName)
         
         do {
-            try data.write(to: tempURL)
-            return tempURL
+            try data.write(to: fileURL)
+            print("✅ PDF saved to: \(fileURL.path)")
+            return fileURL
         } catch {
-            print("❌ Error saving PDF: \(error)")
+            print("❌ Error saving PDF: \(error.localizedDescription)")
             return nil
         }
     }
     
     // Generate PDF for multiple events (channel events)
     func generateChannelEventsPDF(events: [Event], channel: Channel) -> URL? {
-        guard !events.isEmpty else { return nil }
+        guard !events.isEmpty else {
+            print("❌ No events to generate PDF")
+            return nil
+        }
+        
+        print("📄 Generating PDF for \(events.count) events...")
         
         let pdfMetaData = [
             kCGPDFContextCreator: "ICCC Event Manager",
@@ -254,7 +266,7 @@ class PDFGenerator {
             // Summary info
             let summaryLabel = "Total Events:"
             let summaryValue = "\(events.count)"
-            yPosition = drawLabelValue(label: summaryLabel, value: summaryValue,
+            yPosition = self.drawLabelValue(label: summaryLabel, value: summaryValue,
                                       yPosition: yPosition, pageWidth: pageWidth,
                                       headerFont: headerFont, bodyFont: bodyFont, context: context)
             yPosition += 15
@@ -263,7 +275,7 @@ class PDFGenerator {
             dateFormatter.dateFormat = "MMM dd, yyyy"
             let reportDateLabel = "Report Generated:"
             let reportDateValue = dateFormatter.string(from: Date())
-            yPosition = drawLabelValue(label: reportDateLabel, value: reportDateValue,
+            yPosition = self.drawLabelValue(label: reportDateLabel, value: reportDateValue,
                                       yPosition: yPosition, pageWidth: pageWidth,
                                       headerFont: headerFont, bodyFont: bodyFont, context: context)
             yPosition += 30
@@ -287,18 +299,18 @@ class PDFGenerator {
                 // Event details
                 dateFormatter.dateFormat = "MMM dd, yyyy 'at' HH:mm:ss"
                 let eventDate = dateFormatter.string(from: event.date)
-                yPosition = drawLabelValue(label: "Time:", value: eventDate,
+                yPosition = self.drawLabelValue(label: "Time:", value: eventDate,
                                           yPosition: yPosition, pageWidth: pageWidth,
                                           headerFont: bodyFont, bodyFont: smallFont, context: context)
                 yPosition += 12
                 
                 let eventType = event.typeDisplay ?? event.type ?? "Unknown"
-                yPosition = drawLabelValue(label: "Type:", value: eventType,
+                yPosition = self.drawLabelValue(label: "Type:", value: eventType,
                                           yPosition: yPosition, pageWidth: pageWidth,
                                           headerFont: bodyFont, bodyFont: smallFont, context: context)
                 yPosition += 12
                 
-                yPosition = drawLabelValue(label: "Location:", value: event.location,
+                yPosition = self.drawLabelValue(label: "Location:", value: event.location,
                                           yPosition: yPosition, pageWidth: pageWidth,
                                           headerFont: bodyFont, bodyFont: smallFont, context: context)
                 yPosition += 20
@@ -337,31 +349,36 @@ class PDFGenerator {
         }
         
         // Save to Documents directory
-        let fileName = "Events_\(channel.eventType)_\(Date().timeIntervalSince1970).pdf"
+        let fileName = "Events_\(channel.eventType)_\(Int(Date().timeIntervalSince1970)).pdf"
         
-        if let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-            let fileURL = documentsPath.appendingPathComponent(fileName)
-            
-            do {
-                try data.write(to: fileURL)
-                return fileURL
-            } catch {
-                print("❌ Error saving PDF: \(error)")
-                return nil
-            }
+        guard let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            print("❌ Could not access Documents directory")
+            return nil
         }
         
-        return nil
+        let fileURL = documentsPath.appendingPathComponent(fileName)
+        
+        do {
+            try data.write(to: fileURL)
+            print("✅ PDF saved successfully to: \(fileURL.path)")
+            print("📁 File size: \(data.count) bytes")
+            return fileURL
+        } catch {
+            print("❌ Error saving PDF: \(error.localizedDescription)")
+            return nil
+        }
     }
     
-    // Helper to load event image
+    // Helper to load event image (safely, won't crash if not available)
     private func loadEventImage(event: Event) -> UIImage? {
         guard let eventId = event.id, let area = event.area else {
+            print("⚠️ Event missing ID or area")
             return nil
         }
         
         // Try to get cached image from EventImageLoader
         if let cachedImage = EventImageLoader.shared.getCachedImage(area: area, eventId: eventId) {
+            print("✅ Found cached image for event \(eventId)")
             return cachedImage
         }
         
@@ -371,9 +388,11 @@ class PDFGenerator {
         
         if let data = try? Data(contentsOf: fileURL),
            let image = UIImage(data: data) {
+            print("✅ Loaded image from disk for event \(eventId)")
             return image
         }
         
+        print("⚠️ No image available for event \(eventId)")
         return nil
     }
     

@@ -663,76 +663,111 @@ struct ChannelDetailView: View {
         }
     }
     
-    // MARK: - PDF Generation Functions
+// MARK: - PDF Generation Functions (Fixed)
+
+private func downloadPDF() {
+    print("📄 Download PDF button pressed")
     
-    private func downloadPDF() {
-        guard !filteredEvents.isEmpty else {
-            alertMessage = "No events to export"
-            showingAlert = true
+    guard !filteredEvents.isEmpty else {
+        print("⚠️ No events to export")
+        alertMessage = "No events to export"
+        showingAlert = true
+        return
+    }
+    
+    print("✅ Starting PDF generation for \(filteredEvents.count) events")
+    isGeneratingPDF = true
+    
+    DispatchQueue.global(qos: .userInitiated).async {
+        print("🔄 PDF generation started on background thread")
+        
+        guard let pdfURL = PDFGenerator.shared.generateChannelEventsPDF(
+            events: self.filteredEvents,
+            channel: self.channel
+        ) else {
+            print("❌ PDF generation failed")
+            DispatchQueue.main.async {
+                self.isGeneratingPDF = false
+                self.alertMessage = "Failed to generate PDF. Please try again."
+                self.showingAlert = true
+            }
             return
         }
         
-        isGeneratingPDF = true
+        print("✅ PDF generated successfully at: \(pdfURL.path)")
         
-        DispatchQueue.global(qos: .userInitiated).async {
-            if let pdfURL = PDFGenerator.shared.generateChannelEventsPDF(
-                events: self.filteredEvents,
-                channel: self.channel
-            ) {
-                DispatchQueue.main.async {
-                    self.isGeneratingPDF = false
-                    self.pdfSuccessMessage = "PDF saved to Files app!\nLocation: Documents/\(pdfURL.lastPathComponent)"
-                    self.showPDFSuccess = true
-                    
-                    self.savePDFToPhotos(pdfURL: pdfURL)
-                }
-            } else {
-                DispatchQueue.main.async {
-                    self.isGeneratingPDF = false
-                    self.alertMessage = "Failed to generate PDF"
-                    self.showingAlert = true
-                }
-            }
+        DispatchQueue.main.async {
+            self.isGeneratingPDF = false
+            
+            // Show success message
+            self.pdfSuccessMessage = """
+            PDF saved successfully!
+            
+            Location: Files app > On My iPhone > ICCCAlert > Documents
+            
+            File: \(pdfURL.lastPathComponent)
+            """
+            self.showPDFSuccess = true
+            
+            print("✅ PDF download complete")
         }
     }
+}
+
+private func shareViaWhatsApp() {
+    print("📤 Share via WhatsApp button pressed")
     
-    private func shareViaWhatsApp() {
-        guard !filteredEvents.isEmpty else {
-            alertMessage = "No events to share"
-            showingAlert = true
+    guard !filteredEvents.isEmpty else {
+        print("⚠️ No events to share")
+        alertMessage = "No events to share"
+        showingAlert = true
+        return
+    }
+    
+    print("✅ Starting PDF generation for sharing \(filteredEvents.count) events")
+    isGeneratingPDF = true
+    
+    DispatchQueue.global(qos: .userInitiated).async {
+        print("🔄 PDF generation started on background thread")
+        
+        guard let pdfURL = PDFGenerator.shared.generateChannelEventsPDF(
+            events: self.filteredEvents,
+            channel: self.channel
+        ) else {
+            print("❌ PDF generation failed")
+            DispatchQueue.main.async {
+                self.isGeneratingPDF = false
+                self.alertMessage = "Failed to generate PDF. Please try again."
+                self.showingAlert = true
+            }
             return
         }
         
-        isGeneratingPDF = true
+        print("✅ PDF generated successfully, preparing to share")
         
-        DispatchQueue.global(qos: .userInitiated).async {
-            if let pdfURL = PDFGenerator.shared.generateChannelEventsPDF(
-                events: self.filteredEvents,
-                channel: self.channel
-            ) {
-                DispatchQueue.main.async {
-                    self.isGeneratingPDF = false
-                    
-                    if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                       let rootViewController = windowScene.windows.first?.rootViewController {
-                        
-                        var topViewController = rootViewController
-                        while let presentedViewController = topViewController.presentedViewController {
-                            topViewController = presentedViewController
-                        }
-                        
-                        PDFGenerator.shared.sharePDFViaWhatsApp(pdfURL: pdfURL, from: topViewController)
-                    }
-                }
-            } else {
-                DispatchQueue.main.async {
-                    self.isGeneratingPDF = false
-                    self.alertMessage = "Failed to generate PDF"
-                    self.showingAlert = true
-                }
+        DispatchQueue.main.async {
+            self.isGeneratingPDF = false
+            
+            // Find the top view controller to present share sheet
+            guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                  let window = windowScene.windows.first,
+                  let rootViewController = window.rootViewController else {
+                print("❌ Could not find root view controller")
+                self.alertMessage = "Could not open share sheet"
+                self.showingAlert = true
+                return
             }
+            
+            var topViewController = rootViewController
+            while let presentedViewController = topViewController.presentedViewController {
+                topViewController = presentedViewController
+            }
+            
+            print("✅ Opening share sheet")
+            PDFGenerator.shared.sharePDFViaWhatsApp(pdfURL: pdfURL, from: topViewController)
         }
     }
+}
     
     private func savePDFToPhotos(pdfURL: URL) {
         guard let pdfDocument = PDFDocument(url: pdfURL),
