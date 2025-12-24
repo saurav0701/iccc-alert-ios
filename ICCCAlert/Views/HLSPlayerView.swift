@@ -97,9 +97,16 @@ struct HLSPlayerView: View {
     
     private var loadingView: some View {
         VStack(spacing: 20) {
-            ProgressView()
-                .scaleEffect(1.5)
-                .tint(.white)
+            // ✅ iOS 14 Compatible: Use ProgressView without tint modifier
+            if #available(iOS 15.0, *) {
+                ProgressView()
+                    .scaleEffect(1.5)
+                    .tint(.white)
+            } else {
+                ProgressView()
+                    .scaleEffect(1.5)
+                    .accentColor(.white)
+            }
             
             Text("Connecting to stream...")
                 .font(.headline)
