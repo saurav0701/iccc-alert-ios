@@ -5,8 +5,7 @@ class SubscriptionManager: ObservableObject {
     static let shared = SubscriptionManager()
     
     @Published var subscribedChannels: [Channel] = []
-    
-    // ✅ FIXED: Thread-safe data structures with proper locking
+
     private var eventsCache: [String: [Event]] = [:]
     private var unreadCountCache: [String: Int] = [:]
     private var savedEventIds: Set<String> = []
@@ -14,29 +13,20 @@ class SubscriptionManager: ObservableObject {
     private let eventsCacheLock = NSLock()
     private let unreadLock = NSLock()
     private let savedEventsLock = NSLock()
-    
-    // ✅ FIXED: Maximum cache size to prevent memory issues
     private let maxEventsPerChannel = 500
-    
     private let userDefaults = UserDefaults.standard
     private let channelsKey = "subscribed_channels"
     private let eventsKey = "events_cache"
     private let unreadKey = "unread_cache"
     private let savedEventsKey = "saved_events"
-    
-    // Deduplication
     private var recentEventIds: Set<String> = []
     private var eventTimestamps: [String: Int64] = [:]
     private let deduplicationLock = NSLock()
-    
-    // App kill detection
     private let lastRuntimeCheckKey = "last_runtime_check"
     private let serviceStartedAtKey = "service_started_at"
     private var runtimeCheckTimer: Timer?
     
     private var wasAppKilled = false
-    
-    // ✅ NEW: Save queue to prevent blocking
     private let saveQueue = DispatchQueue(label: "com.iccc.saveQueue", qos: .background)
     private var pendingSave = false
     
@@ -52,9 +42,7 @@ class SubscriptionManager: ObservableObject {
         
         startRecentEventCleanup()
     }
-    
-    // MARK: - App Kill Detection
-    
+
     private func detectAppKill() {
         let lastRuntimeCheck = userDefaults.object(forKey: lastRuntimeCheckKey) as? Int64 ?? 0
         let serviceStartedAt = userDefaults.object(forKey: serviceStartedAtKey) as? Int64 ?? 0
@@ -87,18 +75,14 @@ class SubscriptionManager: ObservableObject {
             self?.userDefaults.set(now, forKey: self?.lastRuntimeCheckKey ?? "")
         }
     }
-    
-    // MARK: - Data Management
-    
+
     private func loadData() {
-        // Load channels
         if let data = userDefaults.data(forKey: channelsKey),
            let channels = try? JSONDecoder().decode([Channel].self, from: data) {
             subscribedChannels = channels
             print("📦 Loaded \(channels.count) subscribed channels")
         }
-        
-        // Load events
+
         if let data = userDefaults.data(forKey: eventsKey),
            let events = try? JSONDecoder().decode([String: [Event]].self, from: data) {
             eventsCacheLock.lock()
@@ -107,16 +91,14 @@ class SubscriptionManager: ObservableObject {
             let totalEvents = events.values.reduce(0) { $0 + $1.count }
             print("📦 Loaded \(totalEvents) events across \(events.count) channels")
         }
-        
-        // Load unread counts
+
         if let data = userDefaults.data(forKey: unreadKey),
            let unread = try? JSONDecoder().decode([String: Int].self, from: data) {
             unreadLock.lock()
             unreadCountCache = unread
             unreadLock.unlock()
         }
-        
-        // Load saved event IDs
+
         if let savedIds = userDefaults.array(forKey: savedEventsKey) as? [String] {
             savedEventsLock.lock()
             savedEventIds = Set(savedIds)
@@ -142,8 +124,7 @@ class SubscriptionManager: ObservableObject {
             userDefaults.set(data, forKey: channelsKey)
         }
     }
-    
-    // ✅ FIXED: Non-blocking save with debouncing
+
     private func saveEvents() {
         guard !pendingSave else { return }
         pendingSave = true
@@ -185,8 +166,7 @@ class SubscriptionManager: ObservableObject {
     
     func clearAllEventData() {
         print("🗑️ Clearing ALL event data...")
-        
-        // Clear from memory with locks
+
         eventsCacheLock.lock()
         eventsCache.removeAll()
         eventsCacheLock.unlock()
@@ -203,23 +183,19 @@ class SubscriptionManager: ObservableObject {
         recentEventIds.removeAll()
         eventTimestamps.removeAll()
         deduplicationLock.unlock()
-        
-        // Clear from UserDefaults
+
         userDefaults.removeObject(forKey: eventsKey)
         userDefaults.removeObject(forKey: unreadKey)
         userDefaults.removeObject(forKey: savedEventsKey)
         userDefaults.synchronize()
         
         print("✅ ALL EVENT DATA CLEARED")
-        
-        // Force UI update on main thread
+
         DispatchQueue.main.async {
             self.objectWillChange.send()
         }
     }
-    
-    // MARK: - Recent Event IDs Management
-    
+
     private func buildRecentEventIds() {
         deduplicationLock.lock()
         defer { deduplicationLock.unlock() }
@@ -269,9 +245,7 @@ class SubscriptionManager: ObservableObject {
             }
         }
     }
-    
-    // MARK: - Subscription Management
-    
+
     func subscribe(channel: Channel) {
         guard !subscribedChannels.contains(where: { $0.id == channel.id }) else {
             print("⚠️ Already subscribed to \(channel.id)")
@@ -280,8 +254,7 @@ class SubscriptionManager: ObservableObject {
         
         var updatedChannel = channel
         updatedChannel.isSubscribed = true
-        
-        // ✅ FIXED: Update on main thread since it's @Published
+
         DispatchQueue.main.async {
             self.subscribedChannels.append(updatedChannel)
         }
@@ -297,13 +270,11 @@ class SubscriptionManager: ObservableObject {
         guard let index = subscribedChannels.firstIndex(where: { $0.id == channelId }) else {
             return
         }
-        
-        // ✅ FIXED: Update on main thread
+
         DispatchQueue.main.async {
             self.subscribedChannels.remove(at: index)
         }
-        
-        // Clean up events
+
         eventsCacheLock.lock()
         if let events = eventsCache[channelId] {
             deduplicationLock.lock()
@@ -361,8 +332,7 @@ class SubscriptionManager: ObservableObject {
         let channelId = "\(area)_\(type)"
         let timestamp = event.timestamp
         let now = Int64(Date().timeIntervalSince1970)
-        
-        // Check for duplicates with locks
+
         eventsCacheLock.lock()
         let isDuplicate = eventsCache[channelId]?.contains(where: { $0.id == eventId }) ?? false
         eventsCacheLock.unlock()
@@ -372,7 +342,6 @@ class SubscriptionManager: ObservableObject {
             return false
         }
         
-        // Check recent events
         deduplicationLock.lock()
         if let lastSeenTime = eventTimestamps[eventId] {
             deduplicationLock.unlock()
@@ -383,8 +352,6 @@ class SubscriptionManager: ObservableObject {
         } else {
             deduplicationLock.unlock()
         }
-
-        // Update saved status
         var eventToAdd = event
         savedEventsLock.lock()
         if savedEventIds.contains(eventId) {
@@ -392,15 +359,13 @@ class SubscriptionManager: ObservableObject {
         }
         savedEventsLock.unlock()
         
-        // ✅ CRITICAL: Add with size limit
         eventsCacheLock.lock()
         if eventsCache[channelId] == nil {
             eventsCache[channelId] = []
         }
         
         eventsCache[channelId]?.insert(eventToAdd, at: 0)
-        
-        // ✅ Trim to max size to prevent memory issues
+
         if let count = eventsCache[channelId]?.count, count > maxEventsPerChannel {
             eventsCache[channelId]?.removeLast(count - maxEventsPerChannel)
             print("🧹 Trimmed \(channelId) to \(maxEventsPerChannel) events")
@@ -408,21 +373,18 @@ class SubscriptionManager: ObservableObject {
         
         let totalEvents = eventsCache[channelId]?.count ?? 0
         eventsCacheLock.unlock()
-        
-        // Update deduplication
+
         deduplicationLock.lock()
         recentEventIds.insert(eventId)
         eventTimestamps[eventId] = timestamp
         deduplicationLock.unlock()
         
         print("✅ Added event \(eventId) to \(channelId) (total: \(totalEvents))")
-        
-        // Update unread count
+
         unreadLock.lock()
         unreadCountCache[channelId] = (unreadCountCache[channelId] ?? 0) + 1
         unreadLock.unlock()
-        
-        // Save asynchronously
+
         saveQueue.async {
             self.saveEvents()
             self.saveUnreadCounts()
@@ -438,8 +400,7 @@ class SubscriptionManager: ObservableObject {
             return []
         }
         eventsCacheLock.unlock()
-        
-        // Update saved status
+
         savedEventsLock.lock()
         for i in 0..<events.count {
             if let eventId = events[i].id {
@@ -458,8 +419,7 @@ class SubscriptionManager: ObservableObject {
             return nil
         }
         eventsCacheLock.unlock()
-        
-        // Update saved status
+
         if let eventId = event.id {
             savedEventsLock.lock()
             event.isSaved = savedEventIds.contains(eventId)
@@ -482,8 +442,7 @@ class SubscriptionManager: ObservableObject {
         unreadLock.unlock()
         
         saveUnreadCounts()
-        
-        // Force UI update on main thread
+
         DispatchQueue.main.async {
             self.objectWillChange.send()
         }
@@ -497,9 +456,7 @@ class SubscriptionManager: ObservableObject {
         eventsCacheLock.unlock()
         return count
     }
-    
-    // MARK: - Saved Events Management
-    
+
     func toggleSaved(eventId: String, channelId: String) {
         savedEventsLock.lock()
         if savedEventIds.contains(eventId) {
@@ -511,8 +468,7 @@ class SubscriptionManager: ObservableObject {
         }
         let wasSaved = savedEventIds.contains(eventId)
         savedEventsLock.unlock()
-        
-        // Update event in cache
+  
         eventsCacheLock.lock()
         if let index = eventsCache[channelId]?.firstIndex(where: { $0.id == eventId }) {
             eventsCache[channelId]?[index].isSaved = wasSaved
@@ -522,7 +478,6 @@ class SubscriptionManager: ObservableObject {
         saveSavedEvents()
         saveEvents()
         
-        // Force UI update
         DispatchQueue.main.async {
             self.objectWillChange.send()
         }

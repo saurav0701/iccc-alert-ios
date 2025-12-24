@@ -18,17 +18,14 @@ class WebSocketService: ObservableObject {
     private var hasSubscribed = false
     private var lastSubscriptionTime: TimeInterval = 0
  
-    // ✅ FIXED: Dedicated serial queue for message processing
     private let messageProcessingQueue = DispatchQueue(label: "com.iccc.messageProcessing", qos: .userInitiated)
     private let ackQueue = DispatchQueue(label: "com.iccc.ackProcessing", qos: .utility)
     
-    // ✅ FIXED: Thread-safe ack management
     private var pendingAcks: [String] = []
     private let ackLock = NSLock()
     private let maxAckBatchSize = 50
     private var ackFlushTimer: Timer?
 
-    // ✅ FIXED: Atomic counters with proper synchronization
     private let statsLock = NSLock()
     private var _receivedCount = 0
     private var _processedCount = 0
@@ -91,7 +88,6 @@ class WebSocketService: ObservableObject {
     private var catchUpMode = false
     private let catchUpThreshold = 10 
     
-    // ✅ FIXED: Memory pressure monitoring
     private var memoryWarningObserver: NSObjectProtocol?
     private let maxQueuedMessages = 1000
     private var queuedMessageCount = 0
@@ -106,7 +102,7 @@ class WebSocketService: ObservableObject {
     private init() {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
-        config.waitsForConnectivity = true // ✅ Better connection handling
+        config.waitsForConnectivity = true
         session = URLSession(configuration: config)
         
         startAckFlusher()
@@ -114,7 +110,6 @@ class WebSocketService: ObservableObject {
         setupMemoryWarningHandler()
     }
     
-    // ✅ NEW: Memory pressure handling
     private func setupMemoryWarningHandler() {
         memoryWarningObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didReceiveMemoryWarningNotification,
@@ -124,15 +119,12 @@ class WebSocketService: ObservableObject {
             guard let self = self else { return }
             DebugLogger.shared.log("⚠️ MEMORY WARNING - Clearing caches", emoji: "🧹", color: .red)
             
-            // Clear pending acks (they'll be re-sent on reconnect)
             self.ackLock.lock()
             self.pendingAcks.removeAll()
             self.ackLock.unlock()
             
-            // Clear image cache
             EventImageLoader.shared.clearCache()
             
-            // Force garbage collection
             self.queuedMessageCount = 0
         }
     }
@@ -147,7 +139,6 @@ class WebSocketService: ObservableObject {
                 self.reconnect()
             }
             
-            // ✅ FIXED: Check for message queue overflow
             if self.queuedMessageCount > self.maxQueuedMessages {
                 DebugLogger.shared.log("⚠️ Message queue overflow, clearing old messages", emoji: "🧹", color: .orange)
                 self.queuedMessageCount = 0
@@ -218,14 +209,13 @@ class WebSocketService: ObservableObject {
         }
     }
     
-    // ✅ FIXED: Improved message receiving with backpressure
     private func receiveMessage() {
         webSocketTask?.receive { [weak self] result in
             guard let self = self else { return }
             
             switch result {
             case .success(let message):
-                autoreleasepool { // ✅ CRITICAL: Prevent memory buildup
+                autoreleasepool {
                     switch message {
                     case .string(let text):
                         self.handleIncomingMessage(text)
@@ -239,7 +229,6 @@ class WebSocketService: ObservableObject {
                     }
                 }
                 
-                // ✅ Continue receiving only if not overloaded
                 if self.queuedMessageCount < self.maxQueuedMessages {
                     self.receiveMessage()
                 } else {
@@ -261,12 +250,10 @@ class WebSocketService: ObservableObject {
         }
     }
     
-    // ✅ FIXED: Separate function for message queuing
     private func handleIncomingMessage(_ text: String) {
         receivedCount += 1
         lastProcessedTimestamp = Date().timeIntervalSince1970
         
-        // ✅ Check queue size before adding
         guard queuedMessageCount < maxQueuedMessages else {
             droppedCount += 1
             DebugLogger.shared.log("⚠️ Dropped message - queue full", emoji: "🗑️", color: .red)
@@ -275,7 +262,6 @@ class WebSocketService: ObservableObject {
         
         queuedMessageCount += 1
         
-        // ✅ Process on dedicated serial queue (prevents race conditions)
         messageProcessingQueue.async { [weak self] in
             autoreleasepool {
                 self?.handleMessage(text)
@@ -294,7 +280,7 @@ class WebSocketService: ObservableObject {
     }
     
     private func _handleMessageInternal(_ text: String) throws {
-        // ✅ FIXED: Handle subscription confirmation early
+        // Handle subscription confirmation
         if text.contains("\"status\":\"subscribed\"") {
             DebugLogger.shared.log("Subscription confirmed", emoji: "✅", color: .green)
             pendingSubscriptionUpdate = false
@@ -305,11 +291,46 @@ class WebSocketService: ObservableObject {
             throw NSError(domain: "WebSocket", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert to data"])
         }
         
-        // ✅ FIXED: Use more efficient JSON decoding
+        // ✅ NEW: Try to parse as camera list first
+        if let cameraResponse = try? JSONDecoder().decode(CameraListResponse.self, from: data) {
+            handleCameraList(cameraResponse)
+            return
+        }
+        
+        // ✅ NEW: Check if message contains raw camera JSON (from backend's _raw_camera_json)
+        if text.contains("\"_raw_camera_json\"") {
+            if let jsonDict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let eventData = jsonDict["data"] as? [String: Any],
+               let rawCameraJSON = eventData["_raw_camera_json"] as? String,
+               let cameraData = rawCameraJSON.data(using: .utf8),
+               let cameraResponse = try? JSONDecoder().decode(CameraListResponse.self, from: cameraData) {
+                handleCameraList(cameraResponse)
+                return
+            }
+        }
+        
+        // Otherwise handle as regular event
         guard let event = try? JSONDecoder().decode(Event.self, from: data) else {
             throw NSError(domain: "WebSocket", code: -2, userInfo: [NSLocalizedDescriptionKey: "Failed to decode JSON"])
         }
         
+        handleEvent(event)
+    }
+    
+    // ✅ NEW: Handle camera list updates
+    private func handleCameraList(_ response: CameraListResponse) {
+        DispatchQueue.main.async {
+            CameraManager.shared.updateCameras(response.cameras)
+            
+            DebugLogger.shared.log(
+                "📹 Received camera list: \(response.cameras.count) cameras, \(CameraManager.shared.onlineCamerasCount) online",
+                emoji: "📹",
+                color: .blue
+            )
+        }
+    }
+    
+    private func handleEvent(_ event: Event) {
         guard let eventId = event.id,
               let area = event.area,
               let type = event.type else {
@@ -352,7 +373,6 @@ class WebSocketService: ObservableObject {
             return
         }
 
-        // ✅ FIXED: Add event on background thread (SubscriptionManager should handle this safely)
         let added = SubscriptionManager.shared.addEvent(event)
         
         if added {
@@ -371,13 +391,11 @@ class WebSocketService: ObservableObject {
                     isPinned: false
                 )
 
-                // ✅ FIXED: Dispatch to main thread for notifications
                 DispatchQueue.main.async {
                     NotificationManager.shared.sendEventNotification(event: event, channel: tempChannel)
                 }
             }
 
-            // ✅ FIXED: Post notification on main thread
             DispatchQueue.main.async {
                 NotificationCenter.default.post(
                     name: .newEventReceived,
@@ -391,7 +409,6 @@ class WebSocketService: ObservableObject {
         
         sendAck(eventId: eventId)
 
-        // ✅ FIXED: Log stats less frequently to reduce overhead
         if processedCount % 100 == 0 {
             let stats = "received=\(receivedCount), processed=\(processedCount), dropped=\(droppedCount), acked=\(ackedCount)"
             DebugLogger.shared.log("STATS: \(stats)", emoji: "📊", color: .blue)
@@ -410,7 +427,6 @@ class WebSocketService: ObservableObject {
     }
 
     private func startAckFlusher() {
-        // ✅ FIXED: Use main thread timer for stability
         ackFlushTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             self?.flushAcks()
         }
