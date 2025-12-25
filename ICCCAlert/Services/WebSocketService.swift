@@ -291,77 +291,99 @@ class WebSocketService: ObservableObject {
             throw NSError(domain: "WebSocket", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert to data"])
         }
         
-        // ✅ CRITICAL FIX: Try parsing as camera list FIRST
-        do {
-            let cameraResponse = try JSONDecoder().decode(CameraListResponse.self, from: data)
-            handleCameraList(cameraResponse)
-            DebugLogger.shared.log(
-                "📹 Parsed camera list directly: \(cameraResponse.cameras.count) cameras",
-                emoji: "✅",
-                color: .green
-            )
-            return
-        } catch {
-            // Not a direct camera list, continue...
+        // ✅ CRITICAL: Parse as Event first (backend sends cameras wrapped in Event)
+        guard let event = try? JSONDecoder().decode(Event.self, from: data) else {
+            throw NSError(domain: "WebSocket", code: -2, userInfo: [NSLocalizedDescriptionKey: "Failed to decode as Event"])
         }
         
-        // ✅ NEW: Check if message contains _raw_camera_json wrapper
-        if text.contains("\"_raw_camera_json\"") {
-            do {
-                // Parse as JSON dictionary first
-                if let jsonDict = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+        // ✅ Check if this is a camera-list event (type == "camera-list")
+        if let eventType = event.type, eventType == "camera-list" {
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            print("📹 CAMERA LIST EVENT DETECTED")
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            print("   Event ID: \(event.id ?? "nil")")
+            print("   Event Type: \(eventType)")
+            print("   Source: \(event.source ?? "nil")")
+            
+            // Extract _raw_camera_json from event.data
+            if let eventData = event.data,
+               let rawCameraJSON = eventData["_raw_camera_json"] {
+                
+                // Handle the JSON value which could be a string or direct object
+                var cameraJSONString: String?
+                
+                switch rawCameraJSON {
+                case .string(let str):
+                    cameraJSONString = str
+                    print("   Found _raw_camera_json as STRING")
                     
-                    // Check if it's wrapped in event structure
-                    if let eventData = jsonDict["data"] as? [String: Any],
-                       let rawCameraJSON = eventData["_raw_camera_json"] as? String {
-                        
-                        DebugLogger.shared.log(
-                            "📦 Found _raw_camera_json wrapper, extracting...",
-                            emoji: "📦",
-                            color: .blue
-                        )
-                        
-                        // Parse the nested JSON string
-                        if let cameraData = rawCameraJSON.data(using: .utf8) {
+                case .object(let dict):
+                    // If it's already a dictionary, convert back to JSON string
+                    if let jsonData = try? JSONSerialization.data(withJSONObject: dict),
+                       let jsonStr = String(data: jsonData, encoding: .utf8) {
+                        cameraJSONString = jsonStr
+                        print("   Found _raw_camera_json as OBJECT, converted to string")
+                    }
+                    
+                default:
+                    print("   ❌ _raw_camera_json is neither string nor object")
+                }
+                
+                if let cameraJSON = cameraJSONString {
+                    print("   Camera JSON length: \(cameraJSON.count) characters")
+                    print("   First 200 chars: \(String(cameraJSON.prefix(200)))")
+                    
+                    // Parse the camera JSON
+                    if let cameraData = cameraJSON.data(using: .utf8) {
+                        do {
                             let cameraResponse = try JSONDecoder().decode(CameraListResponse.self, from: cameraData)
+                            print("   ✅ Successfully decoded \(cameraResponse.cameras.count) cameras")
+                            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                            
                             handleCameraList(cameraResponse)
-                            DebugLogger.shared.log(
-                                "✅ Extracted camera list: \(cameraResponse.cameras.count) cameras",
-                                emoji: "✅",
-                                color: .green
-                            )
                             return
+                            
+                        } catch {
+                            print("   ❌ Failed to decode CameraListResponse: \(error)")
+                            print("   Error details: \(error.localizedDescription)")
+                            if let decodingError = error as? DecodingError {
+                                switch decodingError {
+                                case .keyNotFound(let key, let context):
+                                    print("   Missing key: \(key.stringValue)")
+                                    print("   Context: \(context.debugDescription)")
+                                case .typeMismatch(let type, let context):
+                                    print("   Type mismatch for type: \(type)")
+                                    print("   Context: \(context.debugDescription)")
+                                case .valueNotFound(let type, let context):
+                                    print("   Value not found for type: \(type)")
+                                    print("   Context: \(context.debugDescription)")
+                                case .dataCorrupted(let context):
+                                    print("   Data corrupted")
+                                    print("   Context: \(context.debugDescription)")
+                                @unknown default:
+                                    print("   Unknown decoding error")
+                                }
+                            }
+                            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                         }
                     }
-                    
-                    // Check if cameras array is at top level
-                    if let camerasArray = jsonDict["cameras"] as? [[String: Any]] {
-                        // Re-encode and decode properly
-                        let camerasData = try JSONSerialization.data(withJSONObject: ["cameras": camerasArray])
-                        let cameraResponse = try JSONDecoder().decode(CameraListResponse.self, from: camerasData)
-                        handleCameraList(cameraResponse)
-                        DebugLogger.shared.log(
-                            "✅ Parsed top-level cameras array: \(cameraResponse.cameras.count) cameras",
-                            emoji: "✅",
-                            color: .green
-                        )
-                        return
-                    }
+                } else {
+                    print("   ❌ Could not extract camera JSON string")
+                    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                 }
-            } catch {
-                DebugLogger.shared.log(
-                    "❌ Failed to parse camera JSON: \(error.localizedDescription)",
-                    emoji: "❌",
-                    color: .red
-                )
+            } else {
+                print("   ❌ No _raw_camera_json found in event.data")
+                if let eventData = event.data {
+                    print("   Available keys: \(eventData.keys)")
+                }
+                print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
             }
+            
+            // Don't process as regular event
+            return
         }
         
-        // Otherwise handle as regular event
-        guard let event = try? JSONDecoder().decode(Event.self, from: data) else {
-            throw NSError(domain: "WebSocket", code: -2, userInfo: [NSLocalizedDescriptionKey: "Failed to decode JSON"])
-        }
-        
+        // Handle regular event
         handleEvent(event)
     }
     
