@@ -2,8 +2,6 @@ import SwiftUI
 import AVKit
 import AVFoundation
 
-// MARK: - HLS Player View
-
 struct HLSPlayerView: View {
     let camera: Camera
     @StateObject private var playerManager = HLSPlayerManager()
@@ -21,11 +19,9 @@ struct HLSPlayerView: View {
                 VideoPlayer(player: playerManager.player)
                     .ignoresSafeArea()
             }
-            
-            // Status Overlay
+
             VStack {
                 HStack {
-                    // Camera Info
                     VStack(alignment: .leading, spacing: 4) {
                         Text(camera.displayName)
                             .font(.headline)
@@ -50,8 +46,7 @@ struct HLSPlayerView: View {
                     .cornerRadius(10)
                     
                     Spacer()
-                    
-                    // Close Button
+
                     Button(action: {
                         playerManager.stop()
                         presentationMode.wrappedValue.dismiss()
@@ -65,8 +60,7 @@ struct HLSPlayerView: View {
                 .padding()
                 
                 Spacer()
-                
-                // Reconnect Button (if error)
+
                 if playerManager.errorMessage != nil {
                     Button(action: {
                         playerManager.reconnect(camera: camera)
@@ -97,7 +91,6 @@ struct HLSPlayerView: View {
     
     private var loadingView: some View {
         VStack(spacing: 20) {
-            // ✅ iOS 14 Compatible: Use ProgressView without tint modifier
             if #available(iOS 15.0, *) {
                 ProgressView()
                     .scaleEffect(1.5)
@@ -147,8 +140,6 @@ struct HLSPlayerView: View {
     }
 }
 
-// MARK: - HLS Player Manager
-
 class HLSPlayerManager: ObservableObject {
     @Published var player: AVPlayer?
     @Published var isLoading = false
@@ -180,22 +171,18 @@ class HLSPlayerManager: ObservableObject {
         
         print("📹 HLSPlayer: Starting stream for \(camera.displayName)")
         print("   URL: \(streamURL)")
-        
-        // Create player item
+
         playerItem = AVPlayerItem(url: url)
         player = AVPlayer(playerItem: playerItem)
-        
-        // Observe player status
+
         statusObserver = playerItem?.observe(\.status, options: [.new]) { [weak self] item, _ in
             DispatchQueue.main.async {
                 self?.handlePlayerStatus(item.status)
             }
         }
-        
-        // Start playback
+   
         player?.play()
-        
-        // Set timeout for connection
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
             if self?.isLoading == true {
                 self?.errorMessage = "Connection timeout - Stream may be unavailable"

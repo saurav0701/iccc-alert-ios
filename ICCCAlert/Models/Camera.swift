@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - Camera Model
+// MARK: - Camera Model (matches backend exactly)
 
 struct Camera: Codable, Identifiable, Equatable {
     let category: String
@@ -22,7 +22,10 @@ struct Camera: Codable, Identifiable, Equatable {
     enum CodingKeys: String, CodingKey {
         case category, id, ip, Id
         case deviceId = "device_id"
-        case Name, name, latitude, longitude, status, groupId, area, transporter, location, lastUpdate
+        case Name, name, latitude, longitude, status
+        case groupId = "groupId"
+        case area, transporter, location
+        case lastUpdate = "lastUpdate"
     }
     
     var isOnline: Bool {
@@ -30,29 +33,33 @@ struct Camera: Codable, Identifiable, Equatable {
     }
     
     var displayName: String {
-        return name.isEmpty ? Name : name
+        // Prefer 'name' field, fallback to 'Name'
+        if !name.isEmpty {
+            return name
+        }
+        return Name.isEmpty ? "Camera \(id)" : Name
     }
     
     var streamURL: String? {
         return getStreamURL(for: groupId, cameraId: id)
     }
     
-    // Server URL mapping based on groupId (from your React code)
+    // Server URL mapping based on groupId
     private func getStreamURL(for groupId: Int, cameraId: String) -> String? {
         let serverURLs: [Int: String] = [
-            5: "http://103.208.173.131:8888",   // BARORA
-            6: "http://103.208.173.147:8888",   // BLOCK2
-            7: "http://103.208.173.163:8888",   // GOVINDPUR
-            8: "http://a5va.bccliccc.in:8888",  // KATRAS
-            9: "http://a5va.bccliccc.in:8888",  // SIJUA
-            10: "http://a6va.bccliccc.in:8888", // KUSUNDA
-            11: "http://103.208.173.195:8888",  // PB Area
-            12: "http://a9va.bccliccc.in:8888", // BASTACOLLA
-            13: "http://a10va.bccliccc.in:8888",// LODNA
-            14: "http://103.210.88.195:8888",   // EJ Area
-            15: "http://103.210.88.211:8888",   // CV Area
-            16: "http://103.208.173.179:8888",  // CCWO Area
-            22: "http://103.208.173.211:8888"   // WJ Area
+            5: "http://103.208.173.131:8888",
+            6: "http://103.208.173.147:8888",
+            7: "http://103.208.173.163:8888",
+            8: "http://a5va.bccliccc.in:8888",
+            9: "http://a5va.bccliccc.in:8888",
+            10: "http://a6va.bccliccc.in:8888",
+            11: "http://103.208.173.195:8888",
+            12: "http://a9va.bccliccc.in:8888",
+            13: "http://a10va.bccliccc.in:8888",
+            14: "http://103.210.88.195:8888",
+            15: "http://103.210.88.211:8888",
+            16: "http://103.208.173.179:8888",
+            22: "http://103.208.173.211:8888"
         ]
         
         guard let serverURL = serverURLs[groupId] else {
@@ -72,4 +79,9 @@ struct Camera: Codable, Identifiable, Equatable {
 struct CameraListResponse: Codable {
     let cameras: [Camera]
     let message: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case cameras
+        case message
+    }
 }

@@ -54,13 +54,10 @@ struct AreaCamerasView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            // Stats Bar
             statsBar
-            
-            // Search & Filter
+
             filterBar
-            
-            // Camera Grid/List
+
             if cameras.isEmpty {
                 emptyView
             } else {
@@ -92,9 +89,7 @@ struct AreaCamerasView: View {
             HLSPlayerView(camera: camera)
         }
     }
-    
-    // MARK: - Stats Bar
-    
+
     private var statsBar: some View {
         HStack {
             HStack(spacing: 8) {
@@ -131,12 +126,9 @@ struct AreaCamerasView: View {
         .background(Color(.systemBackground))
         .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 2)
     }
-    
-    // MARK: - Filter Bar
-    
+
     private var filterBar: some View {
         VStack(spacing: 12) {
-            // Search
             HStack {
                 Image(systemName: "magnifyingglass")
                     .foregroundColor(.gray)
@@ -155,8 +147,7 @@ struct AreaCamerasView: View {
             .background(Color(.systemGray6))
             .cornerRadius(10)
             .padding(.horizontal)
-            
-            // Online Toggle
+
             HStack {
                 Toggle(isOn: $showOnlineOnly) {
                     HStack(spacing: 8) {
@@ -173,9 +164,7 @@ struct AreaCamerasView: View {
         .padding(.vertical, 8)
         .background(Color(.systemGroupedBackground))
     }
-    
-    // MARK: - Camera Grid
-    
+
     private var cameraGridView: some View {
         ScrollView {
             LazyVGrid(
@@ -195,9 +184,7 @@ struct AreaCamerasView: View {
         }
         .background(Color(.systemGroupedBackground))
     }
-    
-    // MARK: - Empty View
-    
+
     private var emptyView: some View {
         VStack(spacing: 20) {
             Spacer()
@@ -239,15 +226,12 @@ struct AreaCamerasView: View {
     }
 }
 
-// MARK: - Camera Card
-
 struct CameraCard: View {
     let camera: Camera
     let layout: AreaCamerasView.GridLayout
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Camera Preview/Thumbnail
             ZStack {
                 Rectangle()
                     .fill(
@@ -267,7 +251,7 @@ struct CameraCard: View {
                         .foregroundColor(camera.isOnline ? .blue : .gray)
                     
                     if !camera.isOnline {
-                        Text("Offline")
+                        Text("Offline currently")
                             .font(.caption)
                             .foregroundColor(.gray)
                     }
@@ -279,8 +263,7 @@ struct CameraCard: View {
                 RoundedRectangle(cornerRadius: 12)
                     .stroke(camera.isOnline ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
             )
-            
-            // Camera Info
+
             VStack(alignment: .leading, spacing: 4) {
                 Text(camera.displayName)
                     .font(layout == .list ? .body : .caption)

@@ -291,21 +291,69 @@ class WebSocketService: ObservableObject {
             throw NSError(domain: "WebSocket", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert to data"])
         }
         
-        // ✅ NEW: Try to parse as camera list first
-        if let cameraResponse = try? JSONDecoder().decode(CameraListResponse.self, from: data) {
+        // ✅ CRITICAL FIX: Try parsing as camera list FIRST
+        do {
+            let cameraResponse = try JSONDecoder().decode(CameraListResponse.self, from: data)
             handleCameraList(cameraResponse)
+            DebugLogger.shared.log(
+                "📹 Parsed camera list directly: \(cameraResponse.cameras.count) cameras",
+                emoji: "✅",
+                color: .green
+            )
             return
+        } catch {
+            // Not a direct camera list, continue...
         }
         
-        // ✅ NEW: Check if message contains raw camera JSON (from backend's _raw_camera_json)
+        // ✅ NEW: Check if message contains _raw_camera_json wrapper
         if text.contains("\"_raw_camera_json\"") {
-            if let jsonDict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let eventData = jsonDict["data"] as? [String: Any],
-               let rawCameraJSON = eventData["_raw_camera_json"] as? String,
-               let cameraData = rawCameraJSON.data(using: .utf8),
-               let cameraResponse = try? JSONDecoder().decode(CameraListResponse.self, from: cameraData) {
-                handleCameraList(cameraResponse)
-                return
+            do {
+                // Parse as JSON dictionary first
+                if let jsonDict = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    
+                    // Check if it's wrapped in event structure
+                    if let eventData = jsonDict["data"] as? [String: Any],
+                       let rawCameraJSON = eventData["_raw_camera_json"] as? String {
+                        
+                        DebugLogger.shared.log(
+                            "📦 Found _raw_camera_json wrapper, extracting...",
+                            emoji: "📦",
+                            color: .blue
+                        )
+                        
+                        // Parse the nested JSON string
+                        if let cameraData = rawCameraJSON.data(using: .utf8) {
+                            let cameraResponse = try JSONDecoder().decode(CameraListResponse.self, from: cameraData)
+                            handleCameraList(cameraResponse)
+                            DebugLogger.shared.log(
+                                "✅ Extracted camera list: \(cameraResponse.cameras.count) cameras",
+                                emoji: "✅",
+                                color: .green
+                            )
+                            return
+                        }
+                    }
+                    
+                    // Check if cameras array is at top level
+                    if let camerasArray = jsonDict["cameras"] as? [[String: Any]] {
+                        // Re-encode and decode properly
+                        let camerasData = try JSONSerialization.data(withJSONObject: ["cameras": camerasArray])
+                        let cameraResponse = try JSONDecoder().decode(CameraListResponse.self, from: camerasData)
+                        handleCameraList(cameraResponse)
+                        DebugLogger.shared.log(
+                            "✅ Parsed top-level cameras array: \(cameraResponse.cameras.count) cameras",
+                            emoji: "✅",
+                            color: .green
+                        )
+                        return
+                    }
+                }
+            } catch {
+                DebugLogger.shared.log(
+                    "❌ Failed to parse camera JSON: \(error.localizedDescription)",
+                    emoji: "❌",
+                    color: .red
+                )
             }
         }
         
@@ -317,15 +365,35 @@ class WebSocketService: ObservableObject {
         handleEvent(event)
     }
     
-    // ✅ NEW: Handle camera list updates
+    // ✅ Handle camera list updates
     private func handleCameraList(_ response: CameraListResponse) {
+        let onlineCount = response.cameras.filter { $0.isOnline }.count
+        
+        DebugLogger.shared.log(
+            "📹 Processing camera list: \(response.cameras.count) total, \(onlineCount) online",
+            emoji: "📹",
+            color: .blue
+        )
+        
+        // Print first few cameras for debugging
+        if !response.cameras.isEmpty {
+            let sampleCount = min(3, response.cameras.count)
+            let sampleNames = response.cameras.prefix(sampleCount).map { $0.displayName }.joined(separator: ", ")
+            DebugLogger.shared.log(
+                "   Sample cameras: \(sampleNames)",
+                emoji: "📷",
+                color: .blue
+            )
+        }
+        
+        // Update on main thread
         DispatchQueue.main.async {
             CameraManager.shared.updateCameras(response.cameras)
             
             DebugLogger.shared.log(
-                "📹 Received camera list: \(response.cameras.count) cameras, \(CameraManager.shared.onlineCamerasCount) online",
-                emoji: "📹",
-                color: .blue
+                "✅ CameraManager updated with \(response.cameras.count) cameras",
+                emoji: "✅",
+                color: .green
             )
         }
     }

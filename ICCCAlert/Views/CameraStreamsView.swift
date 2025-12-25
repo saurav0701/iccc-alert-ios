@@ -29,13 +29,10 @@ struct CameraStreamsView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
-                // Stats Header
                 statsHeader
-                
-                // Search & Filter Bar
+
                 filterBar
-                
-                // Content
+
                 if cameraManager.cameras.isEmpty {
                     emptyStateView
                 } else if filteredAreas.isEmpty {
@@ -50,12 +47,9 @@ struct CameraStreamsView: View {
         .navigationViewStyle(StackNavigationViewStyle())
         .onAppear {
             print("📹 CameraStreamsView: Appeared")
-            // Camera data is already being received via WebSocket
         }
     }
-    
-    // MARK: - Stats Header
-    
+
     private var statsHeader: some View {
         HStack(spacing: 0) {
             StatCard(
@@ -89,12 +83,9 @@ struct CameraStreamsView: View {
         .background(Color(.systemBackground))
         .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 2)
     }
-    
-    // MARK: - Filter Bar
-    
+
     private var filterBar: some View {
         VStack(spacing: 12) {
-            // Search Bar
             HStack {
                 Image(systemName: "magnifyingglass")
                     .foregroundColor(.gray)
@@ -113,8 +104,7 @@ struct CameraStreamsView: View {
             .background(Color(.systemGray6))
             .cornerRadius(10)
             .padding(.horizontal)
-            
-            // Online Filter Toggle
+
             HStack {
                 Toggle(isOn: $showOnlineOnly) {
                     HStack(spacing: 8) {
@@ -131,9 +121,7 @@ struct CameraStreamsView: View {
         .padding(.vertical, 8)
         .background(Color(.systemGroupedBackground))
     }
-    
-    // MARK: - Areas List
-    
+ 
     private var areasList: some View {
         List {
             ForEach(filteredAreas, id: \.self) { area in
@@ -157,9 +145,7 @@ struct CameraStreamsView: View {
         
         return cameras
     }
-    
-    // MARK: - Empty States
-    
+ 
     private var emptyStateView: some View {
         VStack(spacing: 20) {
             Spacer()
@@ -244,8 +230,6 @@ struct CameraStreamsView: View {
     }
 }
 
-// MARK: - Stat Card Component
-
 struct StatCard: View {
     let icon: String
     let value: String
@@ -270,8 +254,6 @@ struct StatCard: View {
     }
 }
 
-// MARK: - Area Row Component
-
 struct AreaRow: View {
     let area: String
     let cameras: [Camera]
@@ -286,7 +268,6 @@ struct AreaRow: View {
     
     var body: some View {
         HStack(spacing: 16) {
-            // Area Icon
             ZStack {
                 Circle()
                     .fill(Color.blue.opacity(0.2))
@@ -296,8 +277,7 @@ struct AreaRow: View {
                     .font(.system(size: 20))
                     .foregroundColor(.blue)
             }
-            
-            // Area Info
+
             VStack(alignment: .leading, spacing: 6) {
                 Text(area)
                     .font(.headline)
@@ -326,8 +306,7 @@ struct AreaRow: View {
             }
             
             Spacer()
-            
-            // Camera Count Badge
+  
             Text("\(cameras.count)")
                 .font(.headline)
                 .foregroundColor(.white)

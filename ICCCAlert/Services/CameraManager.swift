@@ -33,9 +33,16 @@ class CameraManager: ObservableObject {
     func updateCameras(_ newCameras: [Camera]) {
         DispatchQueue.main.async {
             self.cameras = newCameras
-            print("📹 CameraManager: Updated \(newCameras.count) cameras")
-            print("   - Online: \(self.onlineCamerasCount)")
-            print("   - Areas: \(self.availableAreas.count)")
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            print("📹 CameraManager: Updated cameras")
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            print("   Total: \(newCameras.count)")
+            print("   Online: \(self.onlineCamerasCount)")
+            print("   Areas: \(self.availableAreas.count)")
+            if !self.availableAreas.isEmpty {
+                print("   Area list: \(self.availableAreas.joined(separator: ", "))")
+            }
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         }
         
         saveCameras()
@@ -67,6 +74,8 @@ class CameraManager: ObservableObject {
            let cached = try? JSONDecoder().decode([Camera].self, from: data) {
             cameras = cached
             print("📦 CameraManager: Loaded \(cached.count) cameras from cache")
+            print("   Online: \(onlineCamerasCount)")
+            print("   Areas: \(availableAreas.joined(separator: ", "))")
         }
     }
     
