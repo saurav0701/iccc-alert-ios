@@ -7,6 +7,7 @@ struct CameraStreamsView: View {
     @State private var searchText = ""
     @State private var showOnlineOnly = false
     @State private var selectedArea: String? = nil
+    @State private var refreshID = UUID()
     
     var filteredAreas: [String] {
         var areas = cameraManager.availableAreas
@@ -43,10 +44,26 @@ struct CameraStreamsView: View {
             }
             .navigationTitle("Camera Streams")
             .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    NavigationLink(destination: DebugView()) {
+                        Image(systemName: "ladybug.fill")
+                            .foregroundColor(.orange)
+                    }
+                }
+            }
         }
         .navigationViewStyle(StackNavigationViewStyle())
+        .id(refreshID)
         .onAppear {
-            print("📹 CameraStreamsView: Appeared")
+            DebugLogger.shared.log("📹 CameraStreamsView appeared", emoji: "📹", color: .blue)
+            DebugLogger.shared.log("   Cameras: \(cameraManager.cameras.count)", emoji: "📊", color: .gray)
+            DebugLogger.shared.log("   Areas: \(cameraManager.availableAreas.count)", emoji: "📍", color: .gray)
+            DebugLogger.shared.log("   WebSocket: \(webSocketService.isConnected ? "Connected" : "Disconnected")", emoji: webSocketService.isConnected ? "🟢" : "🔴", color: webSocketService.isConnected ? .green : .red)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("CamerasUpdated"))) { _ in
+            DebugLogger.shared.log("🔄 CameraStreamsView: Received CamerasUpdated notification", emoji: "🔄", color: .blue)
+            refreshID = UUID()
         }
     }
 
@@ -164,11 +181,22 @@ struct CameraStreamsView: View {
                 .font(.title2)
                 .fontWeight(.bold)
             
-            Text("Camera data will appear here when available from the server")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
+            VStack(spacing: 8) {
+                Text("Camera data will appear here when available from the server")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+                
+                // Debug info
+                Text("WebSocket: \(webSocketService.isConnected ? "Connected ✅" : "Disconnected ❌")")
+                    .font(.caption)
+                    .foregroundColor(webSocketService.isConnected ? .green : .red)
+                
+                Text("Camera Count: \(cameraManager.cameras.count)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
             
             if !webSocketService.isConnected {
                 Button(action: {

@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - Camera Model (matches backend exactly)
+// MARK: - Camera Model (matches backend exactly, with defaults for optional fields)
 
 struct Camera: Codable, Identifiable, Equatable {
     let category: String
@@ -26,6 +26,48 @@ struct Camera: Codable, Identifiable, Equatable {
         case groupId = "groupId"
         case area, transporter, location
         case lastUpdate = "lastUpdate"
+    }
+    
+    // Custom decoder to handle missing/null fields gracefully
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        
+        category = try container.decodeIfPresent(String.self, forKey: .category) ?? "camera"
+        id = try container.decode(String.self, forKey: .id)
+        ip = try container.decodeIfPresent(String.self, forKey: .ip) ?? ""
+        Id = try container.decodeIfPresent(Int.self, forKey: .Id) ?? 0
+        deviceId = try container.decodeIfPresent(Int.self, forKey: .deviceId) ?? 0
+        Name = try container.decodeIfPresent(String.self, forKey: .Name) ?? ""
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+        latitude = try container.decodeIfPresent(String.self, forKey: .latitude) ?? ""
+        longitude = try container.decodeIfPresent(String.self, forKey: .longitude) ?? ""
+        status = try container.decodeIfPresent(String.self, forKey: .status) ?? "offline"
+        groupId = try container.decodeIfPresent(Int.self, forKey: .groupId) ?? 0
+        area = try container.decodeIfPresent(String.self, forKey: .area) ?? "Unknown"
+        transporter = try container.decodeIfPresent(String.self, forKey: .transporter) ?? ""
+        location = try container.decodeIfPresent(String.self, forKey: .location) ?? ""
+        lastUpdate = try container.decodeIfPresent(String.self, forKey: .lastUpdate) ?? ""
+    }
+    
+    // Standard encoder
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        
+        try container.encode(category, forKey: .category)
+        try container.encode(id, forKey: .id)
+        try container.encode(ip, forKey: .ip)
+        try container.encode(Id, forKey: .Id)
+        try container.encode(deviceId, forKey: .deviceId)
+        try container.encode(Name, forKey: .Name)
+        try container.encode(name, forKey: .name)
+        try container.encode(latitude, forKey: .latitude)
+        try container.encode(longitude, forKey: .longitude)
+        try container.encode(status, forKey: .status)
+        try container.encode(groupId, forKey: .groupId)
+        try container.encode(area, forKey: .area)
+        try container.encode(transporter, forKey: .transporter)
+        try container.encode(location, forKey: .location)
+        try container.encode(lastUpdate, forKey: .lastUpdate)
     }
     
     var isOnline: Bool {
@@ -83,5 +125,11 @@ struct CameraListResponse: Codable {
     enum CodingKeys: String, CodingKey {
         case cameras
         case message
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        cameras = try container.decode([Camera].self, forKey: .cameras)
+        message = try container.decodeIfPresent(String.self, forKey: .message)
     }
 }
