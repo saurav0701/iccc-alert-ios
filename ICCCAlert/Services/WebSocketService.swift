@@ -280,112 +280,130 @@ class WebSocketService: ObservableObject {
     }
     
     private func _handleMessageInternal(_ text: String) throws {
-        // Handle subscription confirmation
-        if text.contains("\"status\":\"subscribed\"") {
-            DebugLogger.shared.log("Subscription confirmed", emoji: "✅", color: .green)
-            pendingSubscriptionUpdate = false
-            return
-        }
-  
-        guard let data = text.data(using: .utf8) else {
-            throw NSError(domain: "WebSocket", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert to data"])
-        }
+    // Handle subscription confirmation
+    if text.contains("\"status\":\"subscribed\"") {
+        DebugLogger.shared.log("Subscription confirmed", emoji: "✅", color: .green)
+        pendingSubscriptionUpdate = false
+        return
+    }
+
+    guard let data = text.data(using: .utf8) else {
+        throw NSError(domain: "WebSocket", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert to data"])
+    }
+    
+    // ✅ CRITICAL: Parse as Event first (backend sends cameras wrapped in Event)
+    guard let event = try? JSONDecoder().decode(Event.self, from: data) else {
+        throw NSError(domain: "WebSocket", code: -2, userInfo: [NSLocalizedDescriptionKey: "Failed to decode as Event"])
+    }
+    
+    // ✅ Check if this is a camera-list event (type == "camera-list")
+    if let eventType = event.type, eventType == "camera-list" {
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print("📹 CAMERA LIST EVENT DETECTED")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print("   Event ID: \(event.id ?? "nil")")
+        print("   Event Type: \(eventType)")
+        print("   Source: \(event.source ?? "nil")")
         
-        // ✅ CRITICAL: Parse as Event first (backend sends cameras wrapped in Event)
-        guard let event = try? JSONDecoder().decode(Event.self, from: data) else {
-            throw NSError(domain: "WebSocket", code: -2, userInfo: [NSLocalizedDescriptionKey: "Failed to decode as Event"])
-        }
-        
-        // ✅ Check if this is a camera-list event (type == "camera-list")
-        if let eventType = event.type, eventType == "camera-list" {
-            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            print("📹 CAMERA LIST EVENT DETECTED")
-            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            print("   Event ID: \(event.id ?? "nil")")
-            print("   Event Type: \(eventType)")
-            print("   Source: \(event.source ?? "nil")")
+        // Extract _raw_camera_json from event.data
+        if let eventData = event.data,
+           let rawCameraJSON = eventData["_raw_camera_json"] {
             
-            // Extract _raw_camera_json from event.data
-            if let eventData = event.data,
-               let rawCameraJSON = eventData["_raw_camera_json"] {
+            // ✅ FIX: Handle AnyCodableValue properly
+            var cameraJSONString: String?
+            
+            // Try to extract string from the AnyCodableValue
+            switch rawCameraJSON {
+            case .string(let str):
+                cameraJSONString = str
+                print("   Found _raw_camera_json as STRING")
                 
-                // Handle the JSON value which could be a string or direct object
-                var cameraJSONString: String?
-                
-                switch rawCameraJSON {
-                case .string(let str):
-                    cameraJSONString = str
-                    print("   Found _raw_camera_json as STRING")
-                    
-                case .object(let dict):
-                    // If it's already a dictionary, convert back to JSON string
-                    if let jsonData = try? JSONSerialization.data(withJSONObject: dict),
-                       let jsonStr = String(data: jsonData, encoding: .utf8) {
-                        cameraJSONString = jsonStr
-                        print("   Found _raw_camera_json as OBJECT, converted to string")
-                    }
-                    
-                default:
-                    print("   ❌ _raw_camera_json is neither string nor object")
+            case .dictionary(let dict):
+                // If it's already a dictionary, convert back to JSON string
+                if let jsonData = try? JSONSerialization.data(withJSONObject: dict),
+                   let jsonStr = String(data: jsonData, encoding: .utf8) {
+                    cameraJSONString = jsonStr
+                    print("   Found _raw_camera_json as DICTIONARY, converted to string")
                 }
                 
-                if let cameraJSON = cameraJSONString {
-                    print("   Camera JSON length: \(cameraJSON.count) characters")
-                    print("   First 200 chars: \(String(cameraJSON.prefix(200)))")
+            default:
+                // Try to get the raw value directly
+                // Use JSONSerialization to handle any type
+                if let jsonData = try? JSONSerialization.data(withJSONObject: ["temp": rawCameraJSON]),
+                   let tempDict = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                   let value = tempDict["temp"] {
                     
-                    // Parse the camera JSON
-                    if let cameraData = cameraJSON.data(using: .utf8) {
-                        do {
-                            let cameraResponse = try JSONDecoder().decode(CameraListResponse.self, from: cameraData)
-                            print("   ✅ Successfully decoded \(cameraResponse.cameras.count) cameras")
-                            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                            
-                            handleCameraList(cameraResponse)
-                            return
-                            
-                        } catch {
-                            print("   ❌ Failed to decode CameraListResponse: \(error)")
-                            print("   Error details: \(error.localizedDescription)")
-                            if let decodingError = error as? DecodingError {
-                                switch decodingError {
-                                case .keyNotFound(let key, let context):
-                                    print("   Missing key: \(key.stringValue)")
-                                    print("   Context: \(context.debugDescription)")
-                                case .typeMismatch(let type, let context):
-                                    print("   Type mismatch for type: \(type)")
-                                    print("   Context: \(context.debugDescription)")
-                                case .valueNotFound(let type, let context):
-                                    print("   Value not found for type: \(type)")
-                                    print("   Context: \(context.debugDescription)")
-                                case .dataCorrupted(let context):
-                                    print("   Data corrupted")
-                                    print("   Context: \(context.debugDescription)")
-                                @unknown default:
-                                    print("   Unknown decoding error")
-                                }
-                            }
-                            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                    if let stringValue = value as? String {
+                        cameraJSONString = stringValue
+                        print("   Extracted _raw_camera_json as string from raw value")
+                    } else if let dictValue = value as? [String: Any] {
+                        if let jsonData = try? JSONSerialization.data(withJSONObject: dictValue),
+                           let jsonStr = String(data: jsonData, encoding: .utf8) {
+                            cameraJSONString = jsonStr
+                            print("   Converted _raw_camera_json dictionary to string")
                         }
                     }
-                } else {
-                    print("   ❌ Could not extract camera JSON string")
-                    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                 }
-            } else {
-                print("   ❌ No _raw_camera_json found in event.data")
-                if let eventData = event.data {
-                    print("   Available keys: \(eventData.keys)")
-                }
-                print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
             }
             
-            // Don't process as regular event
-            return
+            if let cameraJSON = cameraJSONString {
+                print("   Camera JSON length: \(cameraJSON.count) characters")
+                print("   First 200 chars: \(String(cameraJSON.prefix(200)))")
+                
+                // Parse the camera JSON
+                if let cameraData = cameraJSON.data(using: .utf8) {
+                    do {
+                        let cameraResponse = try JSONDecoder().decode(CameraListResponse.self, from: cameraData)
+                        print("   ✅ Successfully decoded \(cameraResponse.cameras.count) cameras")
+                        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                        
+                        handleCameraList(cameraResponse)
+                        return
+                        
+                    } catch {
+                        print("   ❌ Failed to decode CameraListResponse: \(error)")
+                        print("   Error details: \(error.localizedDescription)")
+                        if let decodingError = error as? DecodingError {
+                            switch decodingError {
+                            case .keyNotFound(let key, let context):
+                                print("   Missing key: \(key.stringValue)")
+                                print("   Context: \(context.debugDescription)")
+                            case .typeMismatch(let type, let context):
+                                print("   Type mismatch for type: \(type)")
+                                print("   Context: \(context.debugDescription)")
+                            case .valueNotFound(let type, let context):
+                                print("   Value not found for type: \(type)")
+                                print("   Context: \(context.debugDescription)")
+                            case .dataCorrupted(let context):
+                                print("   Data corrupted")
+                                print("   Context: \(context.debugDescription)")
+                            @unknown default:
+                                print("   Unknown decoding error")
+                            }
+                        }
+                        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                    }
+                }
+            } else {
+                print("   ❌ Could not extract camera JSON string")
+                print("   rawCameraJSON type: \(type(of: rawCameraJSON))")
+                print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            }
+        } else {
+            print("   ❌ No _raw_camera_json found in event.data")
+            if let eventData = event.data {
+                print("   Available keys: \(eventData.keys)")
+            }
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         }
         
-        // Handle regular event
-        handleEvent(event)
+        // Don't process as regular event
+        return
     }
+    
+    // Handle regular event
+    handleEvent(event)
+}
     
     // ✅ Handle camera list updates
     private func handleCameraList(_ response: CameraListResponse) {
