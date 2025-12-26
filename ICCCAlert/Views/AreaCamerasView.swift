@@ -256,74 +256,22 @@ struct CameraCard: View {
     
     var cardHeight: CGFloat {
         switch layout {
-        case .list: return 120
-        case .grid2x2: return 100
-        case .grid3x3: return 80
-        }
-    }
-    
-    var iconSize: CGFloat {
-        switch layout {
-        case .list: return 40
-        case .grid2x2: return 30
-        case .grid3x3: return 24
+        case .list: return 180
+        case .grid2x2: return 140
+        case .grid3x3: return 100
         }
     }
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Camera thumbnail/preview
-            ZStack {
-                if camera.isOnline {
-                    LinearGradient(
-                        gradient: Gradient(colors: [
-                            Color.blue.opacity(0.6),
-                            Color.purple.opacity(0.6)
-                        ]),
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                } else {
-                    LinearGradient(
-                        gradient: Gradient(colors: [
-                            Color.gray.opacity(0.3),
-                            Color.gray.opacity(0.1)
-                        ]),
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                }
-                
-                VStack(spacing: layout == .grid3x3 ? 6 : 12) {
-                    Image(systemName: camera.isOnline ? "video.fill" : "video.slash.fill")
-                        .font(.system(size: iconSize))
-                        .foregroundColor(.white)
-                    
-                    if camera.isOnline {
-                        Text("LIVE")
-                            .font(.system(size: layout == .grid3x3 ? 8 : 10, weight: .bold))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, layout == .grid3x3 ? 6 : 8)
-                            .padding(.vertical, layout == .grid3x3 ? 2 : 4)
-                            .background(Color.red)
-                            .cornerRadius(4)
-                    } else {
-                        Text("OFFLINE")
-                            .font(.system(size: layout == .grid3x3 ? 8 : 10, weight: .bold))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, layout == .grid3x3 ? 6 : 8)
-                            .padding(.vertical, layout == .grid3x3 ? 2 : 4)
-                            .background(Color.gray)
-                            .cornerRadius(4)
-                    }
-                }
-            }
-            .frame(height: cardHeight)
-            .cornerRadius(12)
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(camera.isOnline ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
-            )
+            // Camera thumbnail with live preview
+            CameraThumbnail(camera: camera)
+                .frame(height: cardHeight)
+                .cornerRadius(12)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(camera.isOnline ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
+                )
 
             // Camera info
             VStack(alignment: .leading, spacing: 4) {

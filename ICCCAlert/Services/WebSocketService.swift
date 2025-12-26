@@ -134,21 +134,25 @@ class WebSocketService: ObservableObject {
     }
 
     private func startHealthMonitor() {
-        Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+        Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             
+            // Only check if we're supposed to be connected
+            guard self.isConnected else { return }
+            
             let now = Date().timeIntervalSince1970
-            if self.lastProcessedTimestamp > 0 && (now - self.lastProcessedTimestamp) > 10 {
-                DebugLogger.shared.log("⚠️ Processing stalled, reconnecting", emoji: "🔄", color: .orange)
+            
+            // Check for processing stall (no messages for 30 seconds)
+            if self.lastProcessedTimestamp > 0 && (now - self.lastProcessedTimestamp) > 30 {
+                DebugLogger.shared.log("⚠️ Processing stalled (30s), reconnecting", emoji: "🔄", color: .orange)
                 self.reconnect()
+                return
             }
             
+            // Check message queue overflow
             if self.queuedMessageCount > self.maxQueuedMessages {
-                DebugLogger.shared.log("⚠️ Message queue overflow, clearing old messages", emoji: "🧹", color: .orange)
+                DebugLogger.shared.log("⚠️ Message queue overflow, clearing", emoji: "🧹", color: .orange)
                 self.queuedMessageCount = 0
-                self.messageProcessingQueue.async {
-                    // Queue will naturally drain
-                }
             }
         }
     }
@@ -203,12 +207,19 @@ class WebSocketService: ObservableObject {
     private func reconnect() {
         DebugLogger.shared.log("Attempting reconnect...", emoji: "🔄", color: .orange)
         
+        // Prevent multiple simultaneous reconnects
+        guard webSocketTask?.state != .running else {
+            DebugLogger.shared.log("Already connected, skipping reconnect", emoji: "⚠️", color: .orange)
+            return
+        }
+        
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         webSocketTask = nil
         isConnected = false
         hasSubscribed = false
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+        // Wait longer before reconnecting
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             self.connect()
         }
     }
@@ -679,18 +690,21 @@ class WebSocketService: ObservableObject {
     
     private func startPing() {
         pingTimer?.invalidate()
-        pingTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+        pingTimer = Timer.scheduledTimer(withTimeInterval: 25, repeats: true) { [weak self] _ in
             guard let self = self else { return }
+            
+            // Only ping if connected
+            guard self.isConnected else { return }
             
             if self.webSocketTask?.state == .running {
                 self.webSocketTask?.sendPing { error in
                     if let error = error {
                         DebugLogger.shared.log("Ping failed: \(error.localizedDescription)", emoji: "❌", color: .red)
-                        self.reconnect()
+                        // Don't immediately reconnect on single ping failure
                     }
                 }
             } else {
-                DebugLogger.shared.log("Connection lost during ping", emoji: "🔄", color: .orange)
+                DebugLogger.shared.log("WebSocket not running, reconnecting", emoji: "🔄", color: .orange)
                 self.reconnect()
             }
         }
