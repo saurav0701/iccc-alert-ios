@@ -9,10 +9,6 @@ struct AreaCamerasView: View {
     @State private var selectedCamera: Camera? = nil
     @State private var gridLayout: GridLayout = .grid2x2
     @State private var refreshID = UUID()
-    @State private var showingPlayer = false
-    
-    // CRITICAL: Prevent accidental dismissal
-    @State private var isPlayerActive = false
     
     enum GridLayout: String, CaseIterable, Identifiable {
         case list = "List"
@@ -91,16 +87,8 @@ struct AreaCamerasView: View {
                 }
             }
         }
-        // CRITICAL: Use fullScreenCover instead of sheet for better stability
-        .fullScreenCover(isPresented: $showingPlayer, onDismiss: {
-            // Reset player state on dismissal
-            isPlayerActive = false
-            selectedCamera = nil
-            DebugLogger.shared.log("👋 Player dismissed", emoji: "👋", color: .gray)
-        }) {
-            if let camera = selectedCamera {
-                FullscreenPlayerView(camera: camera, isPresented: $showingPlayer)
-            }
+        .fullScreenCover(item: $selectedCamera) { camera in
+            HLSPlayerView(camera: camera)
         }
         .id(refreshID)
         .onAppear {
@@ -108,18 +96,9 @@ struct AreaCamerasView: View {
             DebugLogger.shared.log("   Total cameras: \(totalCount)", emoji: "📊", color: .gray)
             DebugLogger.shared.log("   Online: \(onlineCount)", emoji: "🟢", color: .green)
         }
-        .onDisappear {
-            // CRITICAL: Clean up on view disappear
-            if !isPlayerActive {
-                DebugLogger.shared.log("👋 AreaCamerasView disappeared", emoji: "👋", color: .gray)
-            }
-        }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("CamerasUpdated"))) { _ in
-            // Only refresh if not actively playing
-            if !isPlayerActive {
-                DebugLogger.shared.log("🔄 AreaCamerasView: Cameras updated", emoji: "🔄", color: .blue)
-                refreshID = UUID()
-            }
+            DebugLogger.shared.log("🔄 AreaCamerasView: Cameras updated", emoji: "🔄", color: .blue)
+            refreshID = UUID()
         }
     }
 
@@ -207,51 +186,17 @@ struct AreaCamerasView: View {
                 ForEach(cameras) { camera in
                     CameraCard(camera: camera, layout: gridLayout)
                         .onTapGesture {
-                            // Prevent multiple taps
-                            guard !isPlayerActive else { return }
-                            handleCameraTap(camera)
+                            if camera.isOnline {
+                                selectedCamera = camera
+                            } else {
+                                DebugLogger.shared.log("⚠️ Cannot play offline camera: \(camera.displayName)", emoji: "⚠️", color: .orange)
+                            }
                         }
                 }
             }
             .padding()
         }
         .background(Color(.systemGroupedBackground))
-    }
-    
-    private func handleCameraTap(_ camera: Camera) {
-        // CRITICAL: Prevent tap handling if player is already active
-        guard !isPlayerActive else {
-            DebugLogger.shared.log("⚠️ Player already active, ignoring tap", emoji: "⚠️", color: .orange)
-            return
-        }
-        
-        guard camera.isOnline else {
-            DebugLogger.shared.log("⚠️ Cannot play offline camera: \(camera.displayName)", emoji: "⚠️", color: .orange)
-            return
-        }
-        
-        DebugLogger.shared.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", emoji: "📹", color: .blue)
-        DebugLogger.shared.log("👆 Camera tapped: \(camera.displayName)", emoji: "👆", color: .blue)
-        DebugLogger.shared.log("   ID: \(camera.id)", emoji: "🆔", color: .gray)
-        DebugLogger.shared.log("   Area: \(camera.area)", emoji: "📍", color: .gray)
-        
-        if let url = camera.streamURL {
-            DebugLogger.shared.log("   Stream URL: \(url)", emoji: "🔗", color: .gray)
-        } else {
-            DebugLogger.shared.log("   ⚠️ NO STREAM URL!", emoji: "⚠️", color: .red)
-            return
-        }
-        
-        // Set player state BEFORE showing
-        selectedCamera = camera
-        isPlayerActive = true
-        
-        // Small delay to ensure state is set
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            DebugLogger.shared.log("🎬 Showing fullscreen player", emoji: "🎬", color: .green)
-            showingPlayer = true
-        }
-        DebugLogger.shared.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", emoji: "📹", color: .blue)
     }
 
     private var emptyView: some View {
@@ -305,39 +250,6 @@ struct AreaCamerasView: View {
     }
 }
 
-// CRITICAL: Simplified fullscreen player wrapper
-struct FullscreenPlayerView: View {
-    let camera: Camera
-    @Binding var isPresented: Bool
-    
-    var body: some View {
-        ZStack {
-            // Player takes full screen
-            HLSPlayerView(camera: camera)
-                .edgesIgnoringSafeArea(.all)
-            
-            // Close button overlay
-            VStack {
-                HStack {
-                    Spacer()
-                    Button(action: {
-                        DebugLogger.shared.log("👆 Close button tapped", emoji: "👆", color: .blue)
-                        isPresented = false
-                    }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 36))
-                            .foregroundColor(.white)
-                            .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 2)
-                            .padding()
-                    }
-                }
-                Spacer()
-            }
-        }
-        .statusBar(hidden: false)
-    }
-}
-
 struct CameraCard: View {
     let camera: Camera
     let layout: AreaCamerasView.GridLayout
@@ -352,6 +264,7 @@ struct CameraCard: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // Camera thumbnail with live preview
             CameraThumbnail(camera: camera)
                 .frame(height: cardHeight)
                 .cornerRadius(12)
@@ -360,6 +273,7 @@ struct CameraCard: View {
                         .stroke(camera.isOnline ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
                 )
 
+            // Camera info
             VStack(alignment: .leading, spacing: 4) {
                 Text(camera.displayName)
                     .font(layout == .list ? .body : (layout == .grid2x2 ? .caption : .caption2))
@@ -387,6 +301,7 @@ struct CameraCard: View {
     }
 }
 
+// MARK: - Preview Provider
 struct AreaCamerasView_Previews: PreviewProvider {
     static var previews: some View {
         NavigationView {
