@@ -15,7 +15,7 @@ struct WebViewHLSPlayer: UIViewRepresentable {
         configuration.mediaTypesRequiringUserActionForPlayback = []
         configuration.allowsPictureInPictureMediaPlayback = false
         
-        // Enable JavaScript (no deprecation warning on iOS 14+)
+        // Enable JavaScript
         if #available(iOS 14.0, *) {
             configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         }
@@ -25,6 +25,10 @@ struct WebViewHLSPlayer: UIViewRepresentable {
         webView.scrollView.isScrollEnabled = false
         webView.isOpaque = false
         webView.backgroundColor = .black
+        
+        // ✅ CRITICAL: Prevent WebView from interfering with navigation
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.scrollView.bounces = false
         
         // Add message handlers
         webView.configuration.userContentController.add(context.coordinator, name: "streamReady")
@@ -59,7 +63,13 @@ struct WebViewHLSPlayer: UIViewRepresentable {
         <head>
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
             <style>
-                * { margin: 0; padding: 0; box-sizing: border-box; }
+                * { 
+                    margin: 0; 
+                    padding: 0; 
+                    box-sizing: border-box;
+                    -webkit-touch-callout: none;
+                    -webkit-user-select: none;
+                }
                 body { 
                     background: #000;
                     display: flex;
@@ -69,6 +79,7 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                     width: 100vw;
                     overflow: hidden;
                     position: fixed;
+                    touch-action: none;
                 }
                 #player {
                     width: 100%;
@@ -93,6 +104,7 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                 let playbackStallTimer = null;
                 let lastPlaybackTime = 0;
                 let stallCheckCount = 0;
+                let loadStartTime = Date.now();
                 
                 function log(msg) {
                     console.log(msg);
@@ -100,6 +112,13 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                         window.webkit.messageHandlers.streamLog.postMessage(msg);
                     } catch(e) {}
                 }
+                
+                // ✅ Prevent page from interfering with navigation
+                document.addEventListener('touchmove', function(e) {
+                    if (!isFullscreen) {
+                        e.preventDefault();
+                    }
+                }, { passive: false });
                 
                 function cleanup() {
                     if (playbackStallTimer) clearInterval(playbackStallTimer);
@@ -149,6 +168,7 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                     cleanup();
                     
                     log('🎬 Initializing player: ' + videoSrc);
+                    loadStartTime = Date.now();
                     
                     if (Hls.isSupported()) {
                         hls = new Hls({
@@ -184,12 +204,13 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                         });
                         
                         hls.on(Hls.Events.MANIFEST_PARSED, function(event, data) {
-                            log('✅ Manifest parsed');
+                            const loadTime = Date.now() - loadStartTime;
+                            log('✅ Manifest parsed in ' + loadTime + 'ms');
                             startStallDetection();
                             
                             video.play()
                                 .then(() => {
-                                    log('▶️ Playing');
+                                    log('▶️ Playing successfully');
                                     window.webkit.messageHandlers.streamReady.postMessage('ready');
                                     retryCount = 0;
                                 })
@@ -214,6 +235,7 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                                     if (retryCount < maxRetries) {
                                         retryCount++;
                                         const delay = Math.min(1000 * retryCount, 5000);
+                                        log('🔄 Retrying in ' + delay + 'ms (attempt ' + retryCount + ')');
                                         setTimeout(() => {
                                             if (hls && !isDestroyed) {
                                                 hls.startLoad(-1);
@@ -226,6 +248,7 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                                 } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
                                     if (retryCount < maxRetries) {
                                         retryCount++;
+                                        log('🔄 Recovering from media error (attempt ' + retryCount + ')');
                                         hls.recoverMediaError();
                                     } else {
                                         window.webkit.messageHandlers.streamError.postMessage('Media error');
@@ -234,21 +257,36 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                             }
                         });
                         
+                        // ✅ Add loading progress tracking
+                        hls.on(Hls.Events.FRAG_LOADED, function() {
+                            log('📦 Fragment loaded');
+                        });
+                        
                         hls.loadSource(videoSrc);
                         hls.attachMedia(video);
                         
                     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                        log('📱 Using native HLS support');
                         video.src = videoSrc;
                         video.addEventListener('loadedmetadata', function() {
+                            log('✅ Metadata loaded');
                             video.play()
-                                .then(() => window.webkit.messageHandlers.streamReady.postMessage('ready'))
-                                .catch(e => window.webkit.messageHandlers.streamError.postMessage('Play error'));
+                                .then(() => {
+                                    log('▶️ Playing (native)');
+                                    window.webkit.messageHandlers.streamReady.postMessage('ready');
+                                })
+                                .catch(e => {
+                                    log('❌ Play error: ' + e.message);
+                                    window.webkit.messageHandlers.streamError.postMessage('Play error');
+                                });
                         });
                         video.load();
                     }
                 }
                 
+                // Video event listeners
                 video.addEventListener('stalled', function() {
+                    log('⚠️ Video stalled');
                     if (hls && !isDestroyed) {
                         setTimeout(() => {
                             hls.stopLoad();
@@ -257,8 +295,21 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                     }
                 });
                 
+                video.addEventListener('waiting', function() {
+                    log('⏳ Video waiting for data');
+                });
+                
+                video.addEventListener('playing', function() {
+                    log('▶️ Video playing event fired');
+                });
+                
+                video.addEventListener('error', function(e) {
+                    log('❌ Video error: ' + (video.error ? video.error.message : 'unknown'));
+                });
+                
                 initPlayer();
                 
+                // Keep-alive mechanism
                 const keepAliveInterval = isFullscreen ? 2000 : 5000;
                 let keepAlive = setInterval(() => {
                     if (isDestroyed) {
@@ -266,15 +317,29 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                         return;
                     }
                     if (video.paused && !video.ended && video.readyState >= 2) {
-                        video.play().catch(e => log('Resume failed'));
+                        log('🔄 Resuming paused video');
+                        video.play().catch(e => log('Resume failed: ' + e.message));
                     }
                 }, keepAliveInterval);
                 
                 window.addEventListener('beforeunload', function() {
+                    log('🛑 Page unloading');
                     isDestroyed = true;
                     if (playbackStallTimer) clearInterval(playbackStallTimer);
                     if (keepAlive) clearInterval(keepAlive);
                     cleanup();
+                });
+                
+                // ✅ Add visibility change handling
+                document.addEventListener('visibilitychange', function() {
+                    if (document.hidden) {
+                        log('👁️ Page hidden');
+                    } else {
+                        log('👁️ Page visible');
+                        if (video.paused && !isDestroyed) {
+                            video.play().catch(e => log('Resume after visibility: ' + e.message));
+                        }
+                    }
                 });
             </script>
         </body>
@@ -320,25 +385,35 @@ struct WebViewHLSPlayer: UIViewRepresentable {
         
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             DispatchQueue.main.async {
-                self.parent.errorMessage = "Navigation failed"
+                self.parent.errorMessage = "Navigation failed: \(error.localizedDescription)"
                 self.parent.isLoading = false
+            }
+        }
+        
+        // ✅ CRITICAL: Prevent WebView navigation that could cause dismissal
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            // Only allow the initial HTML load
+            if navigationAction.navigationType == .other {
+                decisionHandler(.allow)
+            } else {
+                // Block all other navigation attempts
+                decisionHandler(.cancel)
             }
         }
     }
 }
 
-// MARK: - Camera Thumbnail (Grid Preview) - MEMORY SAFE
+// MARK: - Camera Thumbnail (Grid Preview)
 struct CameraThumbnail: View {
     let camera: Camera
     @State private var isLoading = true
     @State private var errorMessage: String? = nil
     @State private var retryCount = 0
     @State private var loadTimer: Timer? = nil
-    @State private var isActive = false
     
     var body: some View {
         ZStack {
-            if let streamURL = camera.streamURL, camera.isOnline, isActive {
+            if let streamURL = camera.streamURL, camera.isOnline {
                 WebViewHLSPlayer(
                     streamURL: streamURL,
                     cameraName: camera.displayName,
@@ -348,17 +423,14 @@ struct CameraThumbnail: View {
                 )
                 .id("\(camera.id)-\(retryCount)")
                 .onAppear {
-                    isActive = true
-                    loadTimer = Timer.scheduledTimer(withTimeInterval: 8.0, repeats: false) { _ in
+                    loadTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
                         if isLoading && errorMessage == nil {
                             isLoading = false
                         }
                     }
                 }
                 .onDisappear {
-                    isActive = false
                     loadTimer?.invalidate()
-                    loadTimer = nil
                 }
                 
                 if isLoading {
@@ -421,13 +493,13 @@ struct CameraThumbnail: View {
                     Image(systemName: "video.slash.fill")
                         .font(.system(size: 24))
                         .foregroundColor(.gray)
-                    Text(camera.isOnline ? "No Stream" : "Offline")
+                    Text("Offline")
                         .font(.caption)
                         .foregroundColor(.gray)
                 }
             }
             
-            if camera.isOnline && !isLoading && errorMessage == nil && isActive {
+            if camera.isOnline && !isLoading && errorMessage == nil {
                 VStack {
                     HStack {
                         Spacer()
@@ -452,7 +524,7 @@ struct CameraThumbnail: View {
     }
 }
 
-// MARK: - Fullscreen HLS Player View - SAFE VERSION
+// MARK: - Fullscreen HLS Player View
 struct HLSPlayerView: View {
     let camera: Camera
     @State private var isLoading = true
@@ -460,14 +532,13 @@ struct HLSPlayerView: View {
     @State private var retryCount = 0
     @State private var showControls = true
     @State private var autoHideTimer: Timer? = nil
-    @State private var isPlayerActive = false
     @Environment(\.presentationMode) var presentationMode
     
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             
-            if let streamURL = camera.streamURL, isPlayerActive {
+            if let streamURL = camera.streamURL {
                 WebViewHLSPlayer(
                     streamURL: streamURL,
                     cameraName: camera.displayName,
@@ -478,7 +549,7 @@ struct HLSPlayerView: View {
                 .id("fullscreen-\(camera.id)-\(retryCount)")
                 .ignoresSafeArea()
                 .onAppear {
-                    isPlayerActive = true
+                    print("🎬 Fullscreen player appeared for: \(camera.displayName)")
                     autoHideTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
                         withAnimation {
                             showControls = false
@@ -486,9 +557,8 @@ struct HLSPlayerView: View {
                     }
                 }
                 .onDisappear {
-                    isPlayerActive = false
+                    print("🛑 Fullscreen player disappeared")
                     autoHideTimer?.invalidate()
-                    autoHideTimer = nil
                 }
                 .onTapGesture {
                     withAnimation {
@@ -540,7 +610,7 @@ struct HLSPlayerView: View {
                         Spacer()
                         
                         Button(action: {
-                            isPlayerActive = false
+                            print("👆 Close button tapped")
                             presentationMode.wrappedValue.dismiss()
                         }) {
                             Image(systemName: "xmark.circle.fill")
@@ -562,12 +632,6 @@ struct HLSPlayerView: View {
         }
         .navigationBarHidden(true)
         .statusBar(hidden: !showControls)
-        .onAppear {
-            isPlayerActive = true
-        }
-        .onDisappear {
-            isPlayerActive = false
-        }
     }
     
     private var loadingView: some View {
@@ -624,12 +688,12 @@ struct HLSPlayerView: View {
                 }
                 
                 Button(action: {
-                    isPlayerActive = false
+                    print("👆 Back button tapped from error")
                     presentationMode.wrappedValue.dismiss()
                 }) {
                     HStack {
-                        Image(systemName: "xmark")
-                        Text("Close")
+                        Image(systemName: "chevron.left")
+                        Text("Back")
                     }
                     .font(.headline)
                     .foregroundColor(.white)

@@ -9,7 +9,7 @@ struct AreaCamerasView: View {
     @State private var selectedCamera: Camera? = nil
     @State private var gridLayout: GridLayout = .grid2x2
     @State private var refreshID = UUID()
-    @State private var isNavigationActive = true
+    @State private var showingFullscreen = false
     
     enum GridLayout: String, CaseIterable, Identifiable {
         case list = "List"
@@ -36,8 +36,6 @@ struct AreaCamerasView: View {
     }
     
     var cameras: [Camera] {
-        guard isNavigationActive else { return [] }
-        
         var result = cameraManager.getCameras(forArea: area)
         
         if showOnlineOnly {
@@ -90,22 +88,23 @@ struct AreaCamerasView: View {
                 }
             }
         }
-        .fullScreenCover(item: $selectedCamera) { camera in
-            HLSPlayerView(camera: camera)
+        // ✅ CRITICAL: Use sheet instead of fullScreenCover to prevent navigation issues
+        .sheet(isPresented: $showingFullscreen) {
+            if let camera = selectedCamera {
+                NavigationView {
+                    HLSPlayerView(camera: camera)
+                        .navigationBarHidden(true)
+                }
+                .navigationViewStyle(StackNavigationViewStyle())
+            }
         }
         .id(refreshID)
         .onAppear {
-            isNavigationActive = true
             DebugLogger.shared.log("📹 AreaCamerasView appeared for \(area)", emoji: "📹", color: .blue)
             DebugLogger.shared.log("   Total cameras: \(totalCount)", emoji: "📊", color: .gray)
             DebugLogger.shared.log("   Online: \(onlineCount)", emoji: "🟢", color: .green)
         }
-        .onDisappear {
-            isNavigationActive = false
-            DebugLogger.shared.log("📹 AreaCamerasView disappeared for \(area)", emoji: "📹", color: .gray)
-        }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("CamerasUpdated"))) { _ in
-            guard isNavigationActive else { return }
             DebugLogger.shared.log("🔄 AreaCamerasView: Cameras updated", emoji: "🔄", color: .blue)
             refreshID = UUID()
         }
@@ -156,8 +155,6 @@ struct AreaCamerasView: View {
                 
                 TextField("Search cameras...", text: $searchText)
                     .textFieldStyle(PlainTextFieldStyle())
-                    .autocapitalization(.none)
-                    .disableAutocorrection(true)
                 
                 if !searchText.isEmpty {
                     Button(action: { searchText = "" }) {
@@ -197,19 +194,27 @@ struct AreaCamerasView: View {
                 ForEach(cameras) { camera in
                     CameraCard(camera: camera, layout: gridLayout)
                         .onTapGesture {
-                            guard isNavigationActive else { return }
-                            
-                            if camera.isOnline {
-                                selectedCamera = camera
-                            } else {
-                                DebugLogger.shared.log("⚠️ Cannot play offline camera: \(camera.displayName)", emoji: "⚠️", color: .orange)
-                            }
+                            handleCameraTap(camera)
                         }
                 }
             }
             .padding()
         }
         .background(Color(.systemGroupedBackground))
+    }
+    
+    // ✅ CRITICAL: Separate tap handler to prevent navigation conflicts
+    private func handleCameraTap(_ camera: Camera) {
+        if camera.isOnline {
+            print("👆 Camera tapped: \(camera.displayName)")
+            selectedCamera = camera
+            // Use a slight delay to ensure state is properly set
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                showingFullscreen = true
+            }
+        } else {
+            DebugLogger.shared.log("⚠️ Cannot play offline camera: \(camera.displayName)", emoji: "⚠️", color: .orange)
+        }
     }
 
     private var emptyView: some View {
@@ -266,7 +271,6 @@ struct AreaCamerasView: View {
 struct CameraCard: View {
     let camera: Camera
     let layout: AreaCamerasView.GridLayout
-    @State private var cardIsActive = true
     
     var cardHeight: CGFloat {
         switch layout {
@@ -278,21 +282,16 @@ struct CameraCard: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if cardIsActive {
-                CameraThumbnail(camera: camera)
-                    .frame(height: cardHeight)
-                    .cornerRadius(12)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(camera.isOnline ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
-                    )
-            } else {
-                Rectangle()
-                    .fill(Color.gray.opacity(0.2))
-                    .frame(height: cardHeight)
-                    .cornerRadius(12)
-            }
+            // Camera thumbnail with live preview
+            CameraThumbnail(camera: camera)
+                .frame(height: cardHeight)
+                .cornerRadius(12)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(camera.isOnline ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
+                )
 
+            // Camera info
             VStack(alignment: .leading, spacing: 4) {
                 Text(camera.displayName)
                     .font(layout == .list ? .body : (layout == .grid2x2 ? .caption : .caption2))
@@ -317,15 +316,10 @@ struct CameraCard: View {
         .cornerRadius(16)
         .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
         .opacity(camera.isOnline ? 1 : 0.6)
-        .onAppear {
-            cardIsActive = true
-        }
-        .onDisappear {
-            cardIsActive = false
-        }
     }
 }
 
+// MARK: - Preview Provider
 struct AreaCamerasView_Previews: PreviewProvider {
     static var previews: some View {
         NavigationView {
