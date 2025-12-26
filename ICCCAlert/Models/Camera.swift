@@ -107,8 +107,7 @@ struct Camera: Codable, Identifiable, Equatable {
     var streamURL: String? {
         return getStreamURL(for: groupId, cameraId: id)
     }
-    
-    // Server URL mapping based on groupId
+
     private func getStreamURL(for groupId: Int, cameraId: String) -> String? {
         let serverURLs: [Int: String] = [
             5: "http://103.208.173.131:8888",
@@ -138,11 +137,8 @@ struct Camera: Codable, Identifiable, Equatable {
     }
 }
 
-// MARK: - ✅ NEW: Camera Extension for Status Updates
 
 extension Camera {
-    /// Creates a new Camera instance with updated status
-    /// Used by CameraManager for efficient status-only updates
     func withUpdatedStatus(_ newStatus: String) -> Camera {
         return Camera(
             category: self.category,
@@ -162,9 +158,7 @@ extension Camera {
             lastUpdate: self.lastUpdate
         )
     }
-    
-    /// Creates a new Camera instance with all fields updated
-    /// Used for full camera updates
+
     func updated(
         category: String? = nil,
         ip: String? = nil,
