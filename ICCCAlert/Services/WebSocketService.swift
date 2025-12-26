@@ -32,10 +32,6 @@ class WebSocketService: ObservableObject {
     private var _droppedCount = 0
     private var _ackedCount = 0
     
-    // MARK: - Camera Update Throttling
-    private var lastCameraUpdate: TimeInterval = 0
-    private let cameraUpdateInterval: TimeInterval = 300 // 5 minutes
-    
     private var receivedCount: Int {
         get {
             statsLock.lock()
@@ -265,13 +261,17 @@ class WebSocketService: ObservableObject {
         }
     }
     
+    // MARK: - Updated Message Handling (with Camera Support)
+    
     private func handleIncomingMessage(_ text: String) {
         receivedCount += 1
         lastProcessedTimestamp = Date().timeIntervalSince1970
         
-        // Log messages containing "camera" for debugging
-        if text.contains("camera") || text.contains("Camera") {
-            DebugLogger.shared.log("📥 RAW MESSAGE (contains camera): \(text.prefix(200))...", emoji: "📥", color: .blue)
+        // Check for camera-related messages (for debugging)
+        let containsCamera = text.contains("camera") || text.contains("Camera")
+        
+        if containsCamera {
+            DebugLogger.shared.log("📥 Received message with camera data (length: \(text.count))", emoji: "📥", color: .blue)
         }
         
         guard queuedMessageCount < maxQueuedMessages else {
@@ -284,29 +284,29 @@ class WebSocketService: ObservableObject {
         
         messageProcessingQueue.async { [weak self] in
             autoreleasepool {
-                self?.handleMessage(text)
+                self?.processMessage(text)
                 self?.queuedMessageCount -= 1
             }
         }
     }
-
-    private func handleMessage(_ text: String) {
+    
+    private func processMessage(_ text: String) {
         do {
-            try _handleMessageInternal(text)
+            try _processMessageInternal(text)
         } catch {
-            DebugLogger.shared.log("❌ Error handling message: \(error)", emoji: "❌", color: .red)
+            DebugLogger.shared.log("❌ Error processing message: \(error)", emoji: "❌", color: .red)
             droppedCount += 1
         }
     }
-
-    private func _handleMessageInternal(_ text: String) throws {
+    
+    private func _processMessageInternal(_ text: String) throws {
         // Handle subscription confirmation
         if text.contains("\"status\":\"subscribed\"") {
             DebugLogger.shared.log("✅ Subscription confirmed", emoji: "✅", color: .green)
             pendingSubscriptionUpdate = false
             return
         }
-
+        
         guard let data = text.data(using: .utf8) else {
             throw NSError(domain: "WebSocket", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert to data"])
         }
@@ -314,7 +314,7 @@ class WebSocketService: ObservableObject {
         // Parse as dictionary first to inspect structure
         if let jsonDict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             
-            // Check if this looks like a camera list event
+            // Check if this is a camera list event
             if let type = jsonDict["type"] as? String, type == "camera-list" {
                 DebugLogger.shared.log("📹 CAMERA LIST DETECTED (type=camera-list)", emoji: "📹", color: .green)
                 
@@ -364,48 +364,36 @@ class WebSocketService: ObservableObject {
             }
         }
         
-        // Now try to decode as Event (for regular events)
+        // Try to decode as Event (for regular events)
         let decoder = JSONDecoder()
         
         guard let event = try? decoder.decode(Event.self, from: data) else {
-            DebugLogger.shared.log("⚠️ Could not decode as Event", emoji: "⚠️", color: .orange)
-            throw NSError(domain: "WebSocket", code: -2, userInfo: [NSLocalizedDescriptionKey: "Failed to decode as Event"])
+            // Not an event, not a camera list - ignore silently
+            return
         }
         
         // Handle regular event
         handleEvent(event)
     }
-
-    // MARK: - Handle Camera List Updates (with Throttling)
+    
+    // MARK: - Handle Camera List Updates (Smart Caching)
     
     private func handleCameraList(_ response: CameraListResponse) {
-        let now = Date().timeIntervalSince1970
-        
-        // Throttle camera updates - only process every 5 minutes
-        if lastCameraUpdate > 0 && (now - lastCameraUpdate) < cameraUpdateInterval {
-            let timeSinceLastUpdate = Int(now - lastCameraUpdate)
-            let timeUntilNext = Int(cameraUpdateInterval) - timeSinceLastUpdate
-            DebugLogger.shared.log("⏭️ Skipping camera update (last update \(timeSinceLastUpdate)s ago, next in \(timeUntilNext)s)", emoji: "⏭️", color: .gray)
-            return
-        }
-        
-        lastCameraUpdate = now
-        
         let onlineCount = response.cameras.filter { $0.isOnline }.count
         let areas = Set(response.cameras.map { $0.area })
         
         DebugLogger.shared.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", emoji: "📹", color: .blue)
-        DebugLogger.shared.log("📹 Processing camera list", emoji: "📹", color: .blue)
+        DebugLogger.shared.log("📹 Received camera list update", emoji: "📹", color: .blue)
         DebugLogger.shared.log("   Total: \(response.cameras.count)", emoji: "📊", color: .blue)
         DebugLogger.shared.log("   Online: \(onlineCount)", emoji: "🟢", color: .green)
         DebugLogger.shared.log("   Offline: \(response.cameras.count - onlineCount)", emoji: "⚫️", color: .gray)
         DebugLogger.shared.log("   Areas: \(areas.count) - \(areas.sorted().joined(separator: ", "))", emoji: "📍", color: .blue)
         
-        // Print first 3 cameras only (reduce log spam)
+        // Log sample cameras (first 3 only to reduce spam)
         let sampleCount = min(3, response.cameras.count)
         for (index, camera) in response.cameras.prefix(sampleCount).enumerated() {
             let status = camera.isOnline ? "🟢" : "⚫️"
-            DebugLogger.shared.log("   \(index+1). \(status) \(camera.name) - \(camera.area)", emoji: "📷", color: .gray)
+            DebugLogger.shared.log("   \(index+1). \(status) \(camera.displayName) (\(camera.id))", emoji: "📷", color: .gray)
         }
         
         if response.cameras.count > 3 {
@@ -414,14 +402,14 @@ class WebSocketService: ObservableObject {
         
         DebugLogger.shared.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", emoji: "📹", color: .blue)
         
-        // Update on main thread
+        // Update camera manager (it handles smart caching internally)
         DispatchQueue.main.async {
             CameraManager.shared.updateCameras(response.cameras)
-            
-            DebugLogger.shared.log("✅ CameraManager updated", emoji: "✅", color: .green)
-            DebugLogger.shared.log("   Next camera update in \(Int(self.cameraUpdateInterval))s", emoji: "⏰", color: .gray)
+            DebugLogger.shared.log("✅ Camera update processed by CameraManager", emoji: "✅", color: .green)
         }
     }
+    
+    // MARK: - Handle Regular Events
     
     private func handleEvent(_ event: Event) {
         guard let eventId = event.id,
@@ -508,6 +496,8 @@ class WebSocketService: ObservableObject {
         }
     }
 
+    // MARK: - ACK Management
+    
     private func sendAck(eventId: String) {
         ackLock.lock()
         pendingAcks.append(eventId)
@@ -607,6 +597,8 @@ class WebSocketService: ObservableObject {
         DebugLogger.shared.log("Flushed \(allAcks.count) ACKs on shutdown", emoji: "💾", color: .blue)
     }
 
+    // MARK: - Subscription Management
+    
     func sendSubscriptionV2() {
         guard isConnected, webSocketTask?.state == .running else {
             DebugLogger.shared.log("Cannot subscribe - not connected", emoji: "⚠️", color: .orange)
@@ -716,6 +708,8 @@ class WebSocketService: ObservableObject {
         }
     }
 }
+
+// MARK: - Extensions
 
 extension Notification.Name {
     static let newEventReceived = Notification.Name("newEventReceived")
