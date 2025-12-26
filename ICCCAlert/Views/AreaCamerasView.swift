@@ -1,8 +1,6 @@
 import SwiftUI
 
-// MARK: - Optimized AreaCamerasView with Better Stream Management
-
-struct AreaCamerasViewOptimized: View {
+struct AreaCamerasView: View {
     let area: String
     @StateObject private var cameraManager = CameraManager.shared
     
@@ -11,7 +9,6 @@ struct AreaCamerasViewOptimized: View {
     @State private var selectedCamera: Camera? = nil
     @State private var gridLayout: GridLayout = .grid2x2
     @State private var refreshID = UUID()
-    @State private var visibleCameras: Set<String> = []
     
     enum GridLayout: String, CaseIterable, Identifiable {
         case list = "List"
@@ -91,7 +88,7 @@ struct AreaCamerasViewOptimized: View {
             }
         }
         .fullScreenCover(item: $selectedCamera) { camera in
-            HLSPlayerViewEnhanced(camera: camera)
+            HLSPlayerView(camera: camera)
         }
         .id(refreshID)
         .onAppear {
@@ -187,24 +184,14 @@ struct AreaCamerasViewOptimized: View {
                 spacing: 12
             ) {
                 ForEach(cameras) { camera in
-                    CameraCardOptimized(
-                        camera: camera, 
-                        layout: gridLayout,
-                        isVisible: visibleCameras.contains(camera.id)
-                    )
-                    .onAppear {
-                        visibleCameras.insert(camera.id)
-                    }
-                    .onDisappear {
-                        visibleCameras.remove(camera.id)
-                    }
-                    .onTapGesture {
-                        if camera.isOnline {
-                            selectedCamera = camera
-                        } else {
-                            DebugLogger.shared.log("⚠️ Cannot play offline camera: \(camera.displayName)", emoji: "⚠️", color: .orange)
+                    CameraCard(camera: camera, layout: gridLayout)
+                        .onTapGesture {
+                            if camera.isOnline {
+                                selectedCamera = camera
+                            } else {
+                                DebugLogger.shared.log("⚠️ Cannot play offline camera: \(camera.displayName)", emoji: "⚠️", color: .orange)
+                            }
                         }
-                    }
                 }
             }
             .padding()
@@ -263,12 +250,9 @@ struct AreaCamerasViewOptimized: View {
     }
 }
 
-// MARK: - Optimized Camera Card (Only Loads Stream When Visible)
-
-struct CameraCardOptimized: View {
+struct CameraCard: View {
     let camera: Camera
-    let layout: AreaCamerasViewOptimized.GridLayout
-    let isVisible: Bool
+    let layout: AreaCamerasView.GridLayout
     
     var cardHeight: CGFloat {
         switch layout {
@@ -280,41 +264,14 @@ struct CameraCardOptimized: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Camera thumbnail with lazy loading
-            if isVisible && camera.isOnline {
-                CameraThumbnail(camera: camera)
-                    .frame(height: cardHeight)
-                    .cornerRadius(12)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.blue.opacity(0.3), lineWidth: 1)
-                    )
-            } else {
-                // Placeholder when not visible or offline
-                ZStack {
-                    LinearGradient(
-                        gradient: Gradient(colors: [
-                            Color.gray.opacity(0.3),
-                            Color.gray.opacity(0.1)
-                        ]),
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                    
-                    if !camera.isOnline {
-                        VStack(spacing: 8) {
-                            Image(systemName: "video.slash.fill")
-                                .font(.system(size: 24))
-                                .foregroundColor(.gray)
-                            Text("Offline")
-                                .font(.caption)
-                                .foregroundColor(.gray)
-                        }
-                    }
-                }
+            // Camera thumbnail with live preview
+            CameraThumbnail(camera: camera)
                 .frame(height: cardHeight)
                 .cornerRadius(12)
-            }
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(camera.isOnline ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
+                )
 
             // Camera info
             VStack(alignment: .leading, spacing: 4) {
@@ -344,189 +301,11 @@ struct CameraCardOptimized: View {
     }
 }
 
-// MARK: - Enhanced Fullscreen Player with Better Recovery
-
-struct HLSPlayerViewEnhanced: View {
-    let camera: Camera
-    @State private var isLoading = true
-    @State private var errorMessage: String? = nil
-    @State private var retryCount = 0
-    @State private var showControls = true
-    @State private var autoHideTimer: Timer? = nil
-    @State private var connectionAttempt = 0
-    @Environment(\.presentationMode) var presentationMode
-    
-    var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            
-            if let streamURL = camera.streamURL {
-                WebViewHLSPlayer(
-                    streamURL: streamURL,
-                    cameraName: camera.displayName,
-                    isLoading: $isLoading,
-                    errorMessage: $errorMessage,
-                    isFullscreen: true
-                )
-                .id("fullscreen-\(camera.id)-\(retryCount)-\(connectionAttempt)")
-                .ignoresSafeArea()
-                .onAppear {
-                    print("🎬 Opening fullscreen player for: \(camera.displayName)")
-                    print("   Stream URL: \(streamURL)")
-                    connectionAttempt += 1
-                    
-                    // Auto-hide controls after 3 seconds
-                    resetAutoHideTimer()
-                }
-                .onDisappear {
-                    autoHideTimer?.invalidate()
-                    print("🚪 Closing fullscreen player for: \(camera.displayName)")
-                }
-                .onTapGesture {
-                    withAnimation {
-                        showControls.toggle()
-                    }
-                    if showControls {
-                        resetAutoHideTimer()
-                    }
-                }
-            } else {
-                errorView("Stream URL not available")
-            }
-            
-            if isLoading {
-                loadingView
-            }
-            
-            if showControls {
-                VStack {
-                    headerOverlay
-                    Spacer()
-                }
-                .transition(.move(edge: .top))
-            }
-            
-            if let error = errorMessage {
-                errorView(error)
-            }
-        }
-        .navigationBarHidden(true)
-        .statusBar(hidden: !showControls)
-    }
-    
-    private var headerOverlay: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(camera.displayName)
-                    .font(.headline)
-                    .foregroundColor(.white)
-                
-                HStack(spacing: 8) {
-                    Text(camera.area)
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.8))
-                    
-                    Circle()
-                        .fill(camera.isOnline ? Color.green : Color.red)
-                        .frame(width: 8, height: 8)
-                    
-                    Text(camera.isOnline ? "Live" : "Offline")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.8))
-                }
-            }
-            .padding()
-            .background(Color.black.opacity(0.7))
-            .cornerRadius(10)
-            
-            Spacer()
-            
-            Button(action: {
-                presentationMode.wrappedValue.dismiss()
-            }) {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 32))
-                    .foregroundColor(.white)
-                    .padding()
-            }
-        }
-        .padding()
-    }
-    
-    private var loadingView: some View {
-        VStack(spacing: 20) {
-            ProgressView()
-                .scaleEffect(1.5)
-                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-            
-            Text("Connecting to stream...")
-                .font(.headline)
-                .foregroundColor(.white)
-            
-            Text(camera.displayName)
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.7))
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black.opacity(0.8))
-    }
-    
-    private func errorView(_ message: String) -> some View {
-        VStack(spacing: 20) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 60))
-                .foregroundColor(.orange)
-            
-            Text("Stream Error")
-                .font(.title2)
-                .fontWeight(.bold)
-                .foregroundColor(.white)
-            
-            Text(message)
-                .font(.body)
-                .foregroundColor(.white.opacity(0.8))
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-            
-            Button(action: {
-                print("🔄 Retrying fullscreen stream (attempt \(retryCount + 1))")
-                errorMessage = nil
-                isLoading = true
-                retryCount += 1
-                connectionAttempt += 1
-            }) {
-                HStack {
-                    Image(systemName: "arrow.clockwise")
-                    Text("Retry Connection")
-                }
-                .font(.headline)
-                .foregroundColor(.white)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 12)
-                .background(Color.blue)
-                .cornerRadius(10)
-            }
-            
-            Button(action: {
-                presentationMode.wrappedValue.dismiss()
-            }) {
-                Text("Close")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.8))
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 8)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black.opacity(0.9))
-    }
-    
-    private func resetAutoHideTimer() {
-        autoHideTimer?.invalidate()
-        autoHideTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
-            withAnimation {
-                showControls = false
-            }
+// MARK: - Preview Provider
+struct AreaCamerasView_Previews: PreviewProvider {
+    static var previews: some View {
+        NavigationView {
+            AreaCamerasView(area: "barora")
         }
     }
 }

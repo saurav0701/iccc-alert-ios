@@ -10,14 +10,10 @@ class CameraManager: ObservableObject {
     @Published var lastUpdateTime: Date?
     
     private let userDefaults = UserDefaults.standard
-    private let cameraListKey = "complete_camera_list"
-    private let lastUpdateKey = "cameras_last_full_update"
-    private let lastPartialUpdateKey = "cameras_last_partial_update"
+    private let camerasKey = "cached_cameras"
+    private let cameraListKey = "camera_list_cache"
+    private let lastUpdateKey = "cameras_last_update"
     private let saveQueue = DispatchQueue(label: "com.iccc.camerasSaveQueue", qos: .background)
-    
-    // Camera ID to Camera mapping for fast lookups
-    private var cameraDict: [String: Camera] = [:]
-    private let dictLock = NSLock()
     
     var groupedCameras: [String: [Camera]] {
         Dictionary(grouping: cameras, by: { $0.area })
@@ -33,131 +29,74 @@ class CameraManager: ObservableObject {
     
     private init() {
         loadCachedCameras()
-        DebugLogger.shared.log("📹 CameraManager initialized with \(cameras.count) cameras", emoji: "📹", color: .blue)
+        DebugLogger.shared.log("📹 CameraManager initialized", emoji: "📹", color: .blue)
     }
     
-    // MARK: - Update Cameras (FIXED: Only updates on structural changes or first load)
+    // MARK: - Update Cameras (Smart Update - Only Status Changes)
     
     func updateCameras(_ newCameras: [Camera]) {
         DebugLogger.shared.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", emoji: "📹", color: .blue)
         DebugLogger.shared.log("📹 CameraManager.updateCameras() called", emoji: "📹", color: .blue)
         DebugLogger.shared.log("   Received: \(newCameras.count) cameras", emoji: "📊", color: .blue)
         
-        let now = Date()
-        
-        // Build new camera dictionary for fast lookup
-        let newCameraDict = Dictionary(uniqueKeysWithValues: newCameras.map { ($0.id, $0) })
-        
         DispatchQueue.main.async {
-            let isFirstLoad = self.cameras.isEmpty
-            let hasStructuralChanges = self.detectStructuralChanges(newCameraDict: newCameraDict)
+            let oldCount = self.cameras.count
             
-            if isFirstLoad {
-                // First load - accept all cameras
-                DebugLogger.shared.log("   ✨ First load - storing \(newCameras.count) cameras", emoji: "✨", color: .green)
+            // If first load or camera list structure changed, full update
+            if self.cameras.isEmpty || self.hasStructuralChanges(newCameras) {
+                DebugLogger.shared.log("   Full camera list update", emoji: "🔄", color: .orange)
                 self.cameras = newCameras
-                self.rebuildDictionary()
-                self.lastUpdateTime = now
-                self.saveCompleteCameraList()
-                
-            } else if hasStructuralChanges {
-                // Structural changes detected - merge new cameras with existing
-                DebugLogger.shared.log("   🔄 Structural changes detected - merging cameras", emoji: "🔄", color: .orange)
-                self.mergeCameras(newCameraDict: newCameraDict)
-                self.lastUpdateTime = now
-                self.saveCompleteCameraList()
-                
+                self.saveCameraList() // Save complete list
             } else {
-                // No structural changes - just update statuses of cameras we received
-                DebugLogger.shared.log("   ⚡ Status-only update for \(newCameras.count) cameras", emoji: "⚡", color: .blue)
-                self.updateCameraStatuses(newCameraDict: newCameraDict)
-                self.saveStatusesOnly()
-                
-                // Update last partial update time
-                self.userDefaults.set(now.timeIntervalSince1970, forKey: self.lastPartialUpdateKey)
+                // Only update status for existing cameras (faster)
+                DebugLogger.shared.log("   Status-only update", emoji: "⚡", color: .green)
+                self.updateCameraStatuses(newCameras)
             }
             
-            let onlineCount = self.onlineCamerasCount
-            let areas = self.availableAreas
+            self.lastUpdateTime = Date()
             
-            DebugLogger.shared.log("   Total cameras: \(self.cameras.count)", emoji: "📊", color: .blue)
-            DebugLogger.shared.log("   Online: \(onlineCount)", emoji: "🟢", color: .green)
-            DebugLogger.shared.log("   Areas: \(areas.count)", emoji: "📍", color: .blue)
+            DebugLogger.shared.log("   Updated: \(oldCount) → \(newCameras.count)", emoji: "🔄", color: .blue)
+            DebugLogger.shared.log("   Online: \(self.onlineCamerasCount)", emoji: "🟢", color: .green)
+            DebugLogger.shared.log("   Areas: \(self.availableAreas.count)", emoji: "📍", color: .blue)
+            
+            // Log per-area breakdown
+            for area in self.availableAreas.prefix(3) {
+                let areaCameras = self.getCameras(forArea: area)
+                let areaOnline = areaCameras.filter { $0.isOnline }.count
+                DebugLogger.shared.log("      \(area): \(areaCameras.count) total, \(areaOnline) online", emoji: "📍", color: .gray)
+            }
+            
             DebugLogger.shared.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", emoji: "📹", color: .blue)
             
-            // Notify UI
+            // Force UI refresh
             NotificationCenter.default.post(name: NSNotification.Name("CamerasUpdated"), object: nil)
         }
+        
+        saveCameraStatuses()
     }
     
-    // MARK: - Smart Update Logic
+    // MARK: - Smart Update Helpers
     
-    private func detectStructuralChanges(newCameraDict: [String: Camera]) -> Bool {
-        dictLock.lock()
-        defer { dictLock.unlock() }
-        
-        // Check if we received new camera IDs that we don't have
-        for cameraId in newCameraDict.keys {
-            if cameraDict[cameraId] == nil {
-                DebugLogger.shared.log("   Found new camera: \(cameraId)", emoji: "🆕", color: .green)
-                return true
-            }
-        }
-        
-        // No new cameras found
-        return false
+    private func hasStructuralChanges(_ newCameras: [Camera]) -> Bool {
+        // Check if camera IDs have changed
+        let oldIds = Set(cameras.map { $0.id })
+        let newIds = Set(newCameras.map { $0.id })
+        return oldIds != newIds
     }
     
-    private func mergeCameras(newCameraDict: [String: Camera]) {
-        dictLock.lock()
+    private func updateCameraStatuses(_ newCameras: [Camera]) {
+        // Create lookup dictionary for fast status updates
+        let statusMap = Dictionary(uniqueKeysWithValues: newCameras.map { ($0.id, $0.status) })
         
-        // Add new cameras
-        for (cameraId, newCamera) in newCameraDict {
-            if cameraDict[cameraId] == nil {
-                // New camera - add it
-                cameraDict[cameraId] = newCamera
-                DebugLogger.shared.log("   ✅ Added new camera: \(newCamera.displayName)", emoji: "✅", color: .green)
-            } else {
-                // Existing camera - update all fields
-                cameraDict[cameraId] = newCamera
-            }
-        }
-        
-        // Rebuild cameras array from dictionary
-        cameras = Array(cameraDict.values).sorted { $0.id < $1.id }
-        
-        dictLock.unlock()
-    }
-    
-    private func updateCameraStatuses(newCameraDict: [String: Camera]) {
-        dictLock.lock()
-        
-        var updatedCount = 0
-        
-        // Only update statuses for cameras we received
-        for (cameraId, newCamera) in newCameraDict {
-            if let existingCamera = cameraDict[cameraId] {
-                if existingCamera.status != newCamera.status {
-                    // Status changed - update it
-                    cameraDict[cameraId] = existingCamera.withUpdatedStatus(newCamera.status)
-                    updatedCount += 1
+        // Update only status field (using efficient helper method)
+        for i in 0..<cameras.count {
+            if let newStatus = statusMap[cameras[i].id] {
+                if cameras[i].status != newStatus {
+                    // Use the new helper method for clean status updates
+                    cameras[i] = cameras[i].withUpdatedStatus(newStatus)
                 }
             }
         }
-        
-        // Rebuild cameras array if anything changed
-        if updatedCount > 0 {
-            cameras = Array(cameraDict.values).sorted { $0.id < $1.id }
-            DebugLogger.shared.log("   Updated \(updatedCount) camera statuses", emoji: "📝", color: .blue)
-        }
-        
-        dictLock.unlock()
-    }
-    
-    private func rebuildDictionary() {
-        dictLock.lock()
-        cameraDict = Dictionary(uniqueKeysWithValues: cameras.map { ($0.id, $0) })
-        dictLock.unlock()
     }
     
     // MARK: - Get Cameras by Area
@@ -170,40 +109,34 @@ class CameraManager: ObservableObject {
         return cameras.filter { $0.area == area && $0.isOnline }
     }
     
-    func getCamera(byId cameraId: String) -> Camera? {
-        dictLock.lock()
-        defer { dictLock.unlock() }
-        return cameraDict[cameraId]
-    }
+    // MARK: - Persistence (Separate Cache for List vs Status)
     
-    // MARK: - Persistence (Complete List + Status Cache)
-    
-    private func saveCompleteCameraList() {
+    private func saveCameraList() {
         saveQueue.async {
             if let data = try? JSONEncoder().encode(self.cameras) {
                 self.userDefaults.set(data, forKey: self.cameraListKey)
                 self.userDefaults.set(Date().timeIntervalSince1970, forKey: self.lastUpdateKey)
-                DebugLogger.shared.log("💾 Saved complete camera list (\(self.cameras.count) cameras)", emoji: "💾", color: .blue)
+                DebugLogger.shared.log("💾 Saved camera list (\(self.cameras.count) cameras)", emoji: "💾", color: .blue)
             }
         }
     }
     
-    private func saveStatusesOnly() {
-        // Lightweight status-only save (faster)
+    private func saveCameraStatuses() {
         saveQueue.async {
-            let statusData = self.cameras.map { ["id": $0.id, "status": $0.status, "area": $0.area] }
+            // Only save status data (lighter)
+            let statusData = self.cameras.map { ["id": $0.id, "status": $0.status] }
             if let data = try? JSONEncoder().encode(statusData) {
-                self.userDefaults.set(data, forKey: "camera_statuses_cache")
+                self.userDefaults.set(data, forKey: self.camerasKey)
+                DebugLogger.shared.log("💾 Saved camera statuses", emoji: "💾", color: .gray)
             }
         }
     }
     
     private func loadCachedCameras() {
-        // Load complete camera list
+        // Load full camera list
         if let data = userDefaults.data(forKey: cameraListKey),
            let cached = try? JSONDecoder().decode([Camera].self, from: data) {
             cameras = cached
-            rebuildDictionary()
             
             if let lastUpdate = userDefaults.object(forKey: lastUpdateKey) as? TimeInterval {
                 lastUpdateTime = Date(timeIntervalSince1970: lastUpdate)
@@ -215,15 +148,8 @@ class CameraManager: ObservableObject {
             
             if let lastUpdate = lastUpdateTime {
                 let formatter = DateFormatter()
-                formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-                DebugLogger.shared.log("   Last full update: \(formatter.string(from: lastUpdate))", emoji: "🕐", color: .gray)
-            }
-            
-            if let lastPartial = userDefaults.object(forKey: lastPartialUpdateKey) as? TimeInterval {
-                let partialDate = Date(timeIntervalSince1970: lastPartial)
-                let formatter = DateFormatter()
                 formatter.dateFormat = "HH:mm:ss"
-                DebugLogger.shared.log("   Last partial update: \(formatter.string(from: partialDate))", emoji: "🕐", color: .gray)
+                DebugLogger.shared.log("   Last update: \(formatter.string(from: lastUpdate))", emoji: "🕐", color: .gray)
             }
         } else {
             DebugLogger.shared.log("⚠️ No cached cameras found", emoji: "⚠️", color: .orange)
@@ -232,30 +158,11 @@ class CameraManager: ObservableObject {
     
     func clearCache() {
         cameras.removeAll()
-        dictLock.lock()
-        cameraDict.removeAll()
-        dictLock.unlock()
-        
+        userDefaults.removeObject(forKey: camerasKey)
         userDefaults.removeObject(forKey: cameraListKey)
-        userDefaults.removeObject(forKey: "camera_statuses_cache")
         userDefaults.removeObject(forKey: lastUpdateKey)
-        userDefaults.removeObject(forKey: lastPartialUpdateKey)
         lastUpdateTime = nil
-        
         DebugLogger.shared.log("🗑️ Camera cache cleared", emoji: "🗑️", color: .red)
     }
     
-    // MARK: - Manual Refresh (for pull-to-refresh)
-    
-    func requestFullRefresh() {
-        DebugLogger.shared.log("🔄 Requesting full camera refresh from server...", emoji: "🔄", color: .blue)
-        isLoading = true
-        
-        // This will be called by WebSocketService when it receives the camera list
-        // Just set the flag and let the websocket service know we want a refresh
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
-            self.isLoading = false
-        }
-    }
 }

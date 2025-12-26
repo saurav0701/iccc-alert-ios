@@ -121,51 +121,29 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                 function startStallDetection() {
                     if (playbackStallTimer) clearInterval(playbackStallTimer);
                     
-                    // Different monitoring frequency for fullscreen vs thumbnails
-                    const checkInterval = isFullscreen ? 5000 : 10000;
-                    const stallThreshold = isFullscreen ? 8 : 15; // seconds without progress
-                    
                     playbackStallTimer = setInterval(() => {
                         if (isDestroyed || !video || video.paused) return;
                         
                         const currentTime = video.currentTime;
                         
-                        // If playback hasn't progressed, something is wrong
+                        // If playback hasn't progressed in 10 seconds, something is wrong
                         if (currentTime > 0 && currentTime === lastPlaybackTime) {
-                            log('⚠️ PLAYBACK STALLED! Last position: ' + currentTime.toFixed(2));
+                            log('⚠️ PLAYBACK STALLED! Attempting recovery...');
                             
                             if (hls) {
-                                log('Attempting aggressive recovery...');
-                                
-                                // More aggressive recovery for fullscreen
-                                if (isFullscreen) {
-                                    hls.stopLoad();
-                                    setTimeout(() => {
-                                        if (hls && !isDestroyed) {
-                                            log('Reloading from live edge...');
-                                            hls.startLoad(-1);
-                                            video.play().catch(e => log('Stall recovery play failed: ' + e.message));
-                                        }
-                                    }, 200);
-                                } else {
-                                    // Less aggressive for thumbnails
-                                    hls.stopLoad();
-                                    setTimeout(() => {
-                                        if (hls && !isDestroyed) {
-                                            hls.startLoad();
-                                        }
-                                    }, 500);
-                                }
-                            } else {
-                                // If HLS is not available, try native recovery
-                                log('Attempting native recovery...');
-                                video.load();
-                                video.play().catch(e => log('Native recovery failed: ' + e.message));
+                                // Try to recover by reloading
+                                hls.stopLoad();
+                                setTimeout(() => {
+                                    if (hls && !isDestroyed) {
+                                        hls.startLoad(-1);
+                                        video.play().catch(e => log('Stall recovery play failed: ' + e.message));
+                                    }
+                                }, 500);
                             }
                         }
                         
                         lastPlaybackTime = currentTime;
-                    }, checkInterval);
+                    }, 10000); // Check every 10 seconds
                 }
                 
                 function initPlayer() {
@@ -410,48 +388,17 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                         return;
                     }
                     
-                    // More aggressive monitoring in fullscreen
-                    if (isFullscreen) {
-                        // Check if video is paused unexpectedly
-                        if (video.paused && !video.ended && video.readyState >= 2) {
-                            log('⚠️ Fullscreen video paused unexpectedly, resuming...');
-                            video.play().catch(e => log('Resume play failed: ' + e.message));
-                        }
-                        
-                        // Check if we're stuck buffering
-                        if (video.readyState < 3 && !video.paused) {
-                            log('⚠️ Video stuck in buffering state (readyState: ' + video.readyState + ')');
-                            
-                            // Force recovery if stuck buffering
-                            if (hls) {
-                                hls.stopLoad();
-                                setTimeout(() => {
-                                    if (hls && !isDestroyed) {
-                                        hls.startLoad(-1);
-                                    }
-                                }, 300);
-                            }
-                        }
-                        
-                        // Check network state
-                        if (video.networkState === 2) { // NETWORK_LOADING stuck
-                            log('⚠️ Network loading stuck, attempting recovery');
-                            if (hls) {
-                                hls.stopLoad();
-                                setTimeout(() => {
-                                    if (hls && !isDestroyed) {
-                                        hls.startLoad(-1);
-                                    }
-                                }, 200);
-                            }
-                        }
-                    } else {
-                        // Lighter checks for thumbnails
-                        if (video.paused && !video.ended && video.readyState >= 2) {
-                            video.play().catch(e => {});
-                        }
+                    // Check if video is paused unexpectedly
+                    if (video.paused && !video.ended && video.readyState >= 2) {
+                        log('⚠️ Video paused unexpectedly, attempting to resume');
+                        video.play().catch(e => log('Resume play failed: ' + e.message));
                     }
-                }, isFullscreen ? 2000 : 5000); // Much more frequent checks in fullscreen
+                    
+                    // Check if we're stuck buffering
+                    if (video.readyState < 3 && !video.paused) {
+                        log('⚠️ Video stuck in buffering state');
+                    }
+                }, isFullscreen ? 3000 : 5000); // More frequent checks in fullscreen
                 
                 // Handle visibility changes
                 document.addEventListener('visibilitychange', function() {

@@ -142,7 +142,7 @@ struct CameraStreamsView: View {
     private var areasList: some View {
         List {
             ForEach(filteredAreas, id: \.self) { area in
-                NavigationLink(destination: AreaCamerasViewOptimized(area: area)) {
+                NavigationLink(destination: AreaCamerasView(area: area)) {
                     AreaRow(
                         area: area,
                         cameras: getCameras(for: area)
