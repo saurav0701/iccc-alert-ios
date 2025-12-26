@@ -9,7 +9,6 @@ struct AreaCamerasView: View {
     @State private var selectedCamera: Camera? = nil
     @State private var gridLayout: GridLayout = .grid2x2
     @State private var refreshID = UUID()
-    @State private var showingPlayer = false
     
     enum GridLayout: String, CaseIterable, Identifiable {
         case list = "List"
@@ -88,19 +87,14 @@ struct AreaCamerasView: View {
                 }
             }
         }
-        .sheet(isPresented: $showingPlayer) {
-            if let camera = selectedCamera {
-                FullscreenPlayerWrapper(camera: camera, isPresented: $showingPlayer)
-            }
+        .fullScreenCover(item: $selectedCamera) { camera in
+            HLSPlayerView(camera: camera)
         }
         .id(refreshID)
         .onAppear {
             DebugLogger.shared.log("📹 AreaCamerasView appeared for \(area)", emoji: "📹", color: .blue)
             DebugLogger.shared.log("   Total cameras: \(totalCount)", emoji: "📊", color: .gray)
             DebugLogger.shared.log("   Online: \(onlineCount)", emoji: "🟢", color: .green)
-        }
-        .onDisappear {
-            DebugLogger.shared.log("👋 AreaCamerasView disappeared", emoji: "👋", color: .gray)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("CamerasUpdated"))) { _ in
             DebugLogger.shared.log("🔄 AreaCamerasView: Cameras updated", emoji: "🔄", color: .blue)
@@ -192,40 +186,17 @@ struct AreaCamerasView: View {
                 ForEach(cameras) { camera in
                     CameraCard(camera: camera, layout: gridLayout)
                         .onTapGesture {
-                            handleCameraTap(camera)
+                            if camera.isOnline {
+                                selectedCamera = camera
+                            } else {
+                                DebugLogger.shared.log("⚠️ Cannot play offline camera: \(camera.displayName)", emoji: "⚠️", color: .orange)
+                            }
                         }
                 }
             }
             .padding()
         }
         .background(Color(.systemGroupedBackground))
-    }
-    
-    private func handleCameraTap(_ camera: Camera) {
-        if camera.isOnline {
-            DebugLogger.shared.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", emoji: "📹", color: .blue)
-            DebugLogger.shared.log("👆 Camera tapped: \(camera.displayName)", emoji: "👆", color: .blue)
-            DebugLogger.shared.log("   ID: \(camera.id)", emoji: "🆔", color: .gray)
-            DebugLogger.shared.log("   Area: \(camera.area)", emoji: "📍", color: .gray)
-            DebugLogger.shared.log("   Status: \(camera.status)", emoji: camera.isOnline ? "🟢" : "🔴", color: camera.isOnline ? .green : .red)
-            
-            if let url = camera.streamURL {
-                DebugLogger.shared.log("   Stream URL: \(url)", emoji: "🔗", color: .gray)
-            } else {
-                DebugLogger.shared.log("   ⚠️ NO STREAM URL!", emoji: "⚠️", color: .red)
-            }
-            
-            selectedCamera = camera
-            
-            // Delay to ensure state is set
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                DebugLogger.shared.log("🎬 Showing fullscreen player", emoji: "🎬", color: .green)
-                showingPlayer = true
-            }
-            DebugLogger.shared.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", emoji: "📹", color: .blue)
-        } else {
-            DebugLogger.shared.log("⚠️ Cannot play offline camera: \(camera.displayName)", emoji: "⚠️", color: .orange)
-        }
     }
 
     private var emptyView: some View {
@@ -279,37 +250,6 @@ struct AreaCamerasView: View {
     }
 }
 
-// ✅ CRITICAL: Wrapper to prevent sheet dismissal issues
-struct FullscreenPlayerWrapper: View {
-    let camera: Camera
-    @Binding var isPresented: Bool
-    
-    var body: some View {
-        ZStack {
-            HLSPlayerView(camera: camera)
-                .edgesIgnoringSafeArea(.all)
-            
-            // Manual close button overlay (top-right)
-            VStack {
-                HStack {
-                    Spacer()
-                    Button(action: {
-                        DebugLogger.shared.log("👆 Manual close button tapped", emoji: "👆", color: .blue)
-                        isPresented = false
-                    }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 36))
-                            .foregroundColor(.white)
-                            .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 2)
-                            .padding()
-                    }
-                }
-                Spacer()
-            }
-        }
-    }
-}
-
 struct CameraCard: View {
     let camera: Camera
     let layout: AreaCamerasView.GridLayout
@@ -324,6 +264,7 @@ struct CameraCard: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // Camera thumbnail with live preview
             CameraThumbnail(camera: camera)
                 .frame(height: cardHeight)
                 .cornerRadius(12)
@@ -332,6 +273,7 @@ struct CameraCard: View {
                         .stroke(camera.isOnline ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
                 )
 
+            // Camera info
             VStack(alignment: .leading, spacing: 4) {
                 Text(camera.displayName)
                     .font(layout == .list ? .body : (layout == .grid2x2 ? .caption : .caption2))
@@ -359,6 +301,7 @@ struct CameraCard: View {
     }
 }
 
+// MARK: - Preview Provider
 struct AreaCamerasView_Previews: PreviewProvider {
     static var previews: some View {
         NavigationView {
