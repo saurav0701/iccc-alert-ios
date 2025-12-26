@@ -49,7 +49,7 @@ struct Camera: Codable, Identifiable, Equatable {
         lastUpdate = try container.decodeIfPresent(String.self, forKey: .lastUpdate) ?? ""
     }
     
-    // ✅ NEW: Memberwise initializer for manual camera creation
+    // ✅ Memberwise initializer for manual camera creation
     init(category: String, id: String, ip: String, Id: Int, deviceId: Int,
          Name: String, name: String, latitude: String, longitude: String,
          status: String, groupId: Int, area: String, transporter: String,
@@ -132,13 +132,15 @@ struct Camera: Codable, Identifiable, Equatable {
         return "\(serverURL)/\(cameraId)/index.m3u8"
     }
     
+    // ✅ CORRECTED: Compare both ID and status for proper change detection
     static func == (lhs: Camera, rhs: Camera) -> Bool {
-        return lhs.id == rhs.id
+        return lhs.id == rhs.id && lhs.status == rhs.status
     }
 }
 
 
 extension Camera {
+    // ✅ Efficient status update without recreating entire object
     func withUpdatedStatus(_ newStatus: String) -> Camera {
         return Camera(
             category: self.category,
@@ -159,6 +161,7 @@ extension Camera {
         )
     }
 
+    // ✅ Flexible update method for any field changes
     func updated(
         category: String? = nil,
         ip: String? = nil,

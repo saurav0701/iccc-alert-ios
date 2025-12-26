@@ -90,6 +90,12 @@ struct AreaCamerasView: View {
         .onAppear {
             DebugLogger.shared.log("📹 AreaCamerasView appeared for \(area)", emoji: "📹", color: .blue)
         }
+        .onDisappear {
+            // Clean up inactive WebViews when leaving area view
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                WebViewStore.shared.clearInactive()
+            }
+        }
     }
 
     private var statsBar: some View {
@@ -174,9 +180,10 @@ struct AreaCamerasView: View {
                 spacing: 12
             ) {
                 ForEach(cameras) { camera in
-                    // ✅ CRITICAL: Use stable ID to prevent recreation
+                    // ✅ CRITICAL: Use camera.id as stable identifier
                     CameraCard(camera: camera, layout: gridLayout)
-                        .id(camera.id) // Use camera ID, not object reference
+                        .id(camera.id) // ✅ Stable ID prevents recreation
+                        .equatable() // ✅ Only update when camera actually changes
                         .onTapGesture {
                             if camera.isOnline {
                                 selectedCamera = camera
@@ -242,10 +249,18 @@ struct AreaCamerasView: View {
     }
 }
 
-// MARK: - CameraCard (Optimized to prevent re-renders)
-struct CameraCard: View {
+// MARK: - CameraCard (Optimized with Equatable to prevent re-renders)
+struct CameraCard: View, Equatable {
     let camera: Camera
     let layout: AreaCamerasView.GridLayout
+    
+    // ✅ CRITICAL: Only update when these values actually change
+    static func == (lhs: CameraCard, rhs: CameraCard) -> Bool {
+        return lhs.camera.id == rhs.camera.id &&
+               lhs.camera.status == rhs.camera.status &&
+               lhs.camera.streamURL == rhs.camera.streamURL &&
+               lhs.layout == rhs.layout
+    }
     
     var cardHeight: CGFloat {
         switch layout {
@@ -257,7 +272,7 @@ struct CameraCard: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // ✅ CRITICAL: Stable ID prevents WebView recreation
+            // ✅ CRITICAL: CameraThumbnail has stable internal ID
             CameraThumbnail(camera: camera)
                 .frame(height: cardHeight)
                 .cornerRadius(12)
