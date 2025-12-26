@@ -208,9 +208,15 @@ struct HLSPlayerView: View {
     
     private var loadingView: some View {
         VStack(spacing: 20) {
-            ProgressView()
-                .scaleEffect(1.5)
-                .tint(.white)
+            if #available(iOS 15.0, *) {
+                ProgressView()
+                    .scaleEffect(1.5)
+                    .tint(.white)
+            } else {
+                ProgressView()
+                    .scaleEffect(1.5)
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+            }
             
             Text("Loading stream...")
                 .font(.headline)
