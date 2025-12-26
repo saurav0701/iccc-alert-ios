@@ -1,7 +1,7 @@
 import SwiftUI
 import WebKit
 
-// MARK: - Enhanced Stable WebView HLS Player
+// MARK: - Fixed Stable WebView HLS Player
 struct WebViewHLSPlayer: UIViewRepresentable {
     let streamURL: String
     let cameraName: String
@@ -15,8 +15,10 @@ struct WebViewHLSPlayer: UIViewRepresentable {
         configuration.mediaTypesRequiringUserActionForPlayback = []
         configuration.allowsPictureInPictureMediaPlayback = false
         
-        // Enable optimizations
-        configuration.preferences.javaScriptEnabled = true
+        // Enable JavaScript (no deprecation warning on iOS 14+)
+        if #available(iOS 14.0, *) {
+            configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+        }
         
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -42,15 +44,12 @@ struct WebViewHLSPlayer: UIViewRepresentable {
     }
     
     private func generateHTML() -> String {
-        // For thumbnail view, we want autoplay but muted
-        // For fullscreen, we want controls and sound
         let autoplayAttr = "autoplay"
         let mutedAttr = isFullscreen ? "" : "muted"
         let controlsAttr = isFullscreen ? "controls" : ""
         let playsinlineAttr = "playsinline"
         let preloadAttr = "preload=\"auto\""
         
-        // Shorter timeout for fullscreen (better responsiveness)
         let manifestTimeout = isFullscreen ? "8000" : "15000"
         let fragTimeout = isFullscreen ? "15000" : "30000"
         
@@ -60,11 +59,7 @@ struct WebViewHLSPlayer: UIViewRepresentable {
         <head>
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
             <style>
-                * { 
-                    margin: 0; 
-                    padding: 0; 
-                    box-sizing: border-box;
-                }
+                * { margin: 0; padding: 0; box-sizing: border-box; }
                 body { 
                     background: #000;
                     display: flex;
@@ -121,25 +116,17 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                 
                 function startStallDetection() {
                     if (playbackStallTimer) clearInterval(playbackStallTimer);
-                    
-                    // More aggressive stall detection in fullscreen
                     const checkInterval = isFullscreen ? 5000 : 10000;
                     
                     playbackStallTimer = setInterval(() => {
                         if (isDestroyed || !video || video.paused) return;
                         
                         const currentTime = video.currentTime;
-                        
-                        // If playback hasn't progressed
                         if (currentTime > 0 && currentTime === lastPlaybackTime) {
                             stallCheckCount++;
-                            
-                            // If stalled for 2 consecutive checks (10 seconds), recover
                             if (stallCheckCount >= 2) {
                                 log('⚠️ PLAYBACK STALLED! Attempting recovery...');
-                                
                                 if (hls) {
-                                    // Try to recover by reloading
                                     hls.stopLoad();
                                     setTimeout(() => {
                                         if (hls && !isDestroyed) {
@@ -148,27 +135,22 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                                         }
                                     }, 500);
                                 }
-                                
                                 stallCheckCount = 0;
                             }
                         } else {
                             stallCheckCount = 0;
                         }
-                        
                         lastPlaybackTime = currentTime;
                     }, checkInterval);
                 }
                 
                 function initPlayer() {
                     if (isDestroyed) return;
-                    
                     cleanup();
                     
-                    log('🎬 Initializing player: ' + videoSrc + ' (fullscreen=' + isFullscreen + ')');
+                    log('🎬 Initializing player: ' + videoSrc);
                     
                     if (Hls.isSupported()) {
-                        log('✅ HLS.js is supported');
-                        
                         hls = new Hls({
                             debug: false,
                             enableWorker: true,
@@ -201,20 +183,13 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                             testBandwidth: true,
                         });
                         
-                        hls.on(Hls.Events.MEDIA_ATTACHED, function() {
-                            log('📎 Media attached');
-                        });
-                        
                         hls.on(Hls.Events.MANIFEST_PARSED, function(event, data) {
-                            log('✅ Manifest parsed, levels: ' + data.levels.length);
-                            
-                            // Start stall detection
+                            log('✅ Manifest parsed');
                             startStallDetection();
                             
-                            // Try to play
                             video.play()
                                 .then(() => {
-                                    log('▶️ Video playing successfully');
+                                    log('▶️ Playing');
                                     window.webkit.messageHandlers.streamReady.postMessage('ready');
                                     retryCount = 0;
                                 })
@@ -223,222 +198,79 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                                     if (retryCount < maxRetries) {
                                         retryCount++;
                                         setTimeout(() => {
-                                            video.play().catch(err => log('Retry play failed: ' + err.message));
+                                            video.play().catch(err => log('Retry failed: ' + err.message));
                                         }, 1500);
                                     } else {
-                                        window.webkit.messageHandlers.streamError.postMessage('Failed to start playback: ' + e.message);
+                                        window.webkit.messageHandlers.streamError.postMessage('Failed to start: ' + e.message);
                                     }
                                 });
                         });
                         
                         hls.on(Hls.Events.ERROR, function(event, data) {
-                            log('❌ HLS Error: ' + data.type + ' - ' + data.details + (data.fatal ? ' [FATAL]' : ''));
-                            
                             if (data.fatal) {
-                                switch(data.type) {
-                                    case Hls.ErrorTypes.NETWORK_ERROR:
-                                        log('🔴 Fatal network error, attempting recovery...');
-                                        if (retryCount < maxRetries) {
-                                            retryCount++;
-                                            const delay = Math.min(1000 * retryCount, 5000);
-                                            log('🔄 Retrying in ' + delay + 'ms (attempt ' + retryCount + '/' + maxRetries + ')');
-                                            setTimeout(() => {
-                                                if (hls && !isDestroyed) {
-                                                    try {
-                                                        hls.startLoad(-1);
-                                                        video.play().catch(e => log('Recovery play failed: ' + e.message));
-                                                    } catch(e) {
-                                                        log('startLoad failed: ' + e.message);
-                                                    }
-                                                }
-                                            }, delay);
-                                        } else {
-                                            log('❌ Max retries reached for network error');
-                                            window.webkit.messageHandlers.streamError.postMessage('Network error: ' + data.details);
-                                        }
-                                        break;
-                                        
-                                    case Hls.ErrorTypes.MEDIA_ERROR:
-                                        log('🔴 Fatal media error, attempting recovery...');
-                                        if (retryCount < maxRetries) {
-                                            retryCount++;
+                                log('❌ Fatal error: ' + data.type + ' - ' + data.details);
+                                
+                                if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                                    if (retryCount < maxRetries) {
+                                        retryCount++;
+                                        const delay = Math.min(1000 * retryCount, 5000);
+                                        setTimeout(() => {
                                             if (hls && !isDestroyed) {
-                                                try {
-                                                    hls.recoverMediaError();
-                                                    setTimeout(() => {
-                                                        video.play().catch(e => log('Media recovery play failed: ' + e.message));
-                                                    }, 500);
-                                                } catch(e) {
-                                                    log('recoverMediaError failed: ' + e.message);
-                                                }
+                                                hls.startLoad(-1);
+                                                video.play().catch(e => log('Recovery failed: ' + e.message));
                                             }
-                                        } else {
-                                            log('❌ Max retries reached for media error');
-                                            window.webkit.messageHandlers.streamError.postMessage('Media error: ' + data.details);
-                                        }
-                                        break;
-                                        
-                                    default:
-                                        log('❌ Fatal error, cannot recover: ' + data.details);
-                                        window.webkit.messageHandlers.streamError.postMessage('Fatal error: ' + data.details);
-                                        break;
-                                }
-                            } else {
-                                // Non-fatal errors - just log them
-                                if (isFullscreen) {
-                                    log('⚠️ Non-fatal error: ' + data.details);
+                                        }, delay);
+                                    } else {
+                                        window.webkit.messageHandlers.streamError.postMessage('Network error');
+                                    }
+                                } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                                    if (retryCount < maxRetries) {
+                                        retryCount++;
+                                        hls.recoverMediaError();
+                                    } else {
+                                        window.webkit.messageHandlers.streamError.postMessage('Media error');
+                                    }
                                 }
                             }
                         });
                         
-                        hls.on(Hls.Events.FRAG_LOADED, function(event, data) {
-                            if (isFullscreen) {
-                                log('📦 Fragment #' + data.frag.sn + ' loaded');
-                            }
-                        });
-                        
-                        hls.on(Hls.Events.BUFFER_APPENDED, function() {
-                            if (isFullscreen) {
-                                log('✅ Buffer appended');
-                            }
-                        });
-                        
-                        hls.on(Hls.Events.BUFFER_EOS, function() {
-                            log('⚠️ Buffer End Of Stream');
-                        });
-                        
-                        // Load and attach
                         hls.loadSource(videoSrc);
                         hls.attachMedia(video);
                         
                     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                        // Native HLS support (Safari)
-                        log('🍎 Using native HLS support');
-                        
                         video.src = videoSrc;
-                        
                         video.addEventListener('loadedmetadata', function() {
-                            log('✅ Native HLS: metadata loaded');
                             video.play()
-                                .then(() => {
-                                    log('▶️ Native HLS: playing');
-                                    window.webkit.messageHandlers.streamReady.postMessage('ready');
-                                })
-                                .catch(e => {
-                                    log('❌ Native HLS play error: ' + e.message);
-                                    window.webkit.messageHandlers.streamError.postMessage('Playback error: ' + e.message);
-                                });
+                                .then(() => window.webkit.messageHandlers.streamReady.postMessage('ready'))
+                                .catch(e => window.webkit.messageHandlers.streamError.postMessage('Play error'));
                         });
-                        
-                        video.addEventListener('error', function(e) {
-                            log('❌ Native HLS error: ' + (video.error ? video.error.message : 'unknown'));
-                            window.webkit.messageHandlers.streamError.postMessage('Native playback error');
-                        });
-                        
                         video.load();
-                    } else {
-                        log('❌ HLS not supported on this device');
-                        window.webkit.messageHandlers.streamError.postMessage('HLS not supported');
                     }
                 }
                 
-                // Handle video events
-                video.addEventListener('waiting', function() {
-                    log('⏳ Video is buffering...');
-                });
-                
-                video.addEventListener('playing', function() {
-                    log('▶️ Video is playing');
-                    lastPlaybackTime = video.currentTime;
-                });
-                
-                video.addEventListener('pause', function() {
-                    log('⏸️ Video paused');
-                });
-                
-                video.addEventListener('ended', function() {
-                    log('🏁 Video ended');
-                });
-                
                 video.addEventListener('stalled', function() {
-                    log('⚠️ Video stalled - network issue');
-                    
-                    // Try to recover from stall
                     if (hls && !isDestroyed) {
                         setTimeout(() => {
-                            log('🔄 Attempting stall recovery...');
                             hls.stopLoad();
-                            setTimeout(() => {
-                                if (hls && !isDestroyed) {
-                                    hls.startLoad(-1);
-                                }
-                            }, 500);
+                            setTimeout(() => { if (hls) hls.startLoad(-1); }, 500);
                         }, 2000);
                     }
                 });
                 
-                video.addEventListener('error', function() {
-                    if (video.error) {
-                        const errorCodes = ['', 'ABORTED', 'NETWORK', 'DECODE', 'SRC_NOT_SUPPORTED'];
-                        const errorCode = errorCodes[video.error.code] || 'UNKNOWN';
-                        log('❌ Video element error: ' + errorCode + ' - ' + video.error.message);
-                    }
-                });
-                
-                video.addEventListener('canplay', function() {
-                    log('✅ Video can start playing');
-                });
-                
-                video.addEventListener('loadeddata', function() {
-                    log('📊 Video data loaded');
-                });
-                
-                // Start player
                 initPlayer();
                 
-                // Keep stream alive - aggressive recovery for fullscreen
                 const keepAliveInterval = isFullscreen ? 2000 : 5000;
                 let keepAlive = setInterval(() => {
                     if (isDestroyed) {
                         clearInterval(keepAlive);
                         return;
                     }
-                    
-                    // Check if video is paused unexpectedly
                     if (video.paused && !video.ended && video.readyState >= 2) {
-                        log('⚠️ Video paused unexpectedly, resuming...');
-                        video.play().catch(e => log('Resume play failed: ' + e.message));
-                    }
-                    
-                    // Check if we're stuck buffering
-                    if (video.readyState < 3 && !video.paused) {
-                        log('⚠️ Video stuck in buffering state');
+                        video.play().catch(e => log('Resume failed'));
                     }
                 }, keepAliveInterval);
                 
-                // Handle visibility changes
-                document.addEventListener('visibilitychange', function() {
-                    if (document.hidden) {
-                        log('📱 Page hidden');
-                        if (!isFullscreen && hls) {
-                            hls.stopLoad();
-                        }
-                    } else {
-                        log('📱 Page visible');
-                        if (hls && !isDestroyed) {
-                            setTimeout(() => {
-                                if (hls) {
-                                    hls.startLoad(-1);
-                                    video.play().catch(e => log('Resume after visibility failed: ' + e.message));
-                                }
-                            }, 500);
-                        }
-                    }
-                });
-                
-                // Cleanup on unload
                 window.addEventListener('beforeunload', function() {
-                    log('🧹 Cleaning up before unload');
                     isDestroyed = true;
                     if (playbackStallTimer) clearInterval(playbackStallTimer);
                     if (keepAlive) clearInterval(keepAlive);
@@ -466,23 +298,16 @@ struct WebViewHLSPlayer: UIViewRepresentable {
             DispatchQueue.main.async {
                 switch message.name {
                 case "streamReady":
-                    print("✅ Stream ready: \(self.parent.cameraName)")
                     self.parent.isLoading = false
                     self.parent.errorMessage = nil
-                    
                 case "streamError":
                     let error = message.body as? String ?? "Stream error"
-                    print("❌ Stream error for \(self.parent.cameraName): \(error)")
                     self.parent.isLoading = false
                     self.parent.errorMessage = error
-                    
                 case "streamLog":
-                    if let log = message.body as? String {
-                        if self.parent.isFullscreen {
-                            print("📹 [\(self.parent.cameraName)] \(log)")
-                        }
+                    if self.parent.isFullscreen, let log = message.body as? String {
+                        print("📹 [\(self.parent.cameraName)] \(log)")
                     }
-                    
                 default:
                     break
                 }
@@ -494,11 +319,295 @@ struct WebViewHLSPlayer: UIViewRepresentable {
         }
         
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            print("❌ WebView navigation failed: \(error.localizedDescription)")
             DispatchQueue.main.async {
-                self.parent.errorMessage = "Navigation failed: \(error.localizedDescription)"
+                self.parent.errorMessage = "Navigation failed"
                 self.parent.isLoading = false
             }
         }
+    }
+}
+
+// MARK: - Camera Thumbnail (Grid Preview)
+struct CameraThumbnail: View {
+    let camera: Camera
+    @State private var isLoading = true
+    @State private var errorMessage: String? = nil
+    @State private var retryCount = 0
+    @State private var loadTimer: Timer? = nil
+    
+    var body: some View {
+        ZStack {
+            if let streamURL = camera.streamURL, camera.isOnline {
+                WebViewHLSPlayer(
+                    streamURL: streamURL,
+                    cameraName: camera.displayName,
+                    isLoading: $isLoading,
+                    errorMessage: $errorMessage,
+                    isFullscreen: false
+                )
+                .id("\(camera.id)-\(retryCount)")
+                .onAppear {
+                    loadTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
+                        if isLoading && errorMessage == nil {
+                            isLoading = false
+                        }
+                    }
+                }
+                .onDisappear {
+                    loadTimer?.invalidate()
+                }
+                
+                if isLoading {
+                    ZStack {
+                        Color.black.opacity(0.7)
+                        VStack(spacing: 8) {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            Text("Loading...")
+                                .font(.caption2)
+                                .foregroundColor(.white)
+                        }
+                    }
+                }
+                
+                if let error = errorMessage {
+                    ZStack {
+                        Color.black.opacity(0.9)
+                        VStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 18))
+                                .foregroundColor(.orange)
+                            
+                            Text("Stream Error")
+                                .font(.caption2)
+                                .foregroundColor(.white)
+                            
+                            Button(action: {
+                                errorMessage = nil
+                                isLoading = true
+                                retryCount += 1
+                            }) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "arrow.clockwise")
+                                        .font(.system(size: 10))
+                                    Text("Retry")
+                                }
+                                .font(.caption2)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.blue)
+                                .cornerRadius(6)
+                            }
+                        }
+                        .padding(8)
+                    }
+                }
+            } else {
+                LinearGradient(
+                    gradient: Gradient(colors: [
+                        Color.gray.opacity(0.3),
+                        Color.gray.opacity(0.1)
+                    ]),
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                
+                VStack(spacing: 8) {
+                    Image(systemName: "video.slash.fill")
+                        .font(.system(size: 24))
+                        .foregroundColor(.gray)
+                    Text("Offline")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+            }
+            
+            if camera.isOnline && !isLoading && errorMessage == nil {
+                VStack {
+                    HStack {
+                        Spacer()
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(Color.red)
+                                .frame(width: 6, height: 6)
+                            Text("LIVE")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundColor(.white)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Color.black.opacity(0.7))
+                        .cornerRadius(4)
+                        .padding(6)
+                    }
+                    Spacer()
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Fullscreen HLS Player View
+struct HLSPlayerView: View {
+    let camera: Camera
+    @State private var isLoading = true
+    @State private var errorMessage: String? = nil
+    @State private var retryCount = 0
+    @State private var showControls = true
+    @State private var autoHideTimer: Timer? = nil
+    @Environment(\.presentationMode) var presentationMode
+    
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            
+            if let streamURL = camera.streamURL {
+                WebViewHLSPlayer(
+                    streamURL: streamURL,
+                    cameraName: camera.displayName,
+                    isLoading: $isLoading,
+                    errorMessage: $errorMessage,
+                    isFullscreen: true
+                )
+                .id("fullscreen-\(camera.id)-\(retryCount)")
+                .ignoresSafeArea()
+                .onAppear {
+                    autoHideTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+                        withAnimation {
+                            showControls = false
+                        }
+                    }
+                }
+                .onDisappear {
+                    autoHideTimer?.invalidate()
+                }
+                .onTapGesture {
+                    withAnimation {
+                        showControls.toggle()
+                    }
+                    autoHideTimer?.invalidate()
+                    if showControls {
+                        autoHideTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+                            withAnimation {
+                                showControls = false
+                            }
+                        }
+                    }
+                }
+            } else {
+                errorView("Stream URL not available")
+            }
+            
+            if isLoading {
+                loadingView
+            }
+            
+            if showControls {
+                VStack {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(camera.displayName)
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            
+                            HStack(spacing: 8) {
+                                Text(camera.area)
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.8))
+                                
+                                Circle()
+                                    .fill(camera.isOnline ? Color.green : Color.red)
+                                    .frame(width: 8, height: 8)
+                                
+                                Text(camera.isOnline ? "Live" : "Offline")
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.8))
+                            }
+                        }
+                        .padding()
+                        .background(Color.black.opacity(0.7))
+                        .cornerRadius(10)
+                        
+                        Spacer()
+                        
+                        Button(action: {
+                            presentationMode.wrappedValue.dismiss()
+                        }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 32))
+                                .foregroundColor(.white)
+                                .padding()
+                        }
+                    }
+                    .padding()
+                    .transition(.move(edge: .top))
+                    
+                    Spacer()
+                }
+            }
+            
+            if let error = errorMessage {
+                errorView(error)
+            }
+        }
+        .navigationBarHidden(true)
+        .statusBar(hidden: !showControls)
+    }
+    
+    private var loadingView: some View {
+        VStack(spacing: 20) {
+            ProgressView()
+                .scaleEffect(1.5)
+                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+            
+            Text("Connecting to stream...")
+                .font(.headline)
+                .foregroundColor(.white)
+            
+            Text(camera.displayName)
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.7))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black.opacity(0.8))
+    }
+    
+    private func errorView(_ message: String) -> some View {
+        VStack(spacing: 20) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 60))
+                .foregroundColor(.orange)
+            
+            Text("Stream Error")
+                .font(.title2)
+                .fontWeight(.bold)
+                .foregroundColor(.white)
+            
+            Text(message)
+                .font(.body)
+                .foregroundColor(.white.opacity(0.8))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+            
+            Button(action: {
+                errorMessage = nil
+                isLoading = true
+                retryCount += 1
+            }) {
+                HStack {
+                    Image(systemName: "arrow.clockwise")
+                    Text("Retry")
+                }
+                .font(.headline)
+                .foregroundColor(.white)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+                .background(Color.blue)
+                .cornerRadius(10)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black.opacity(0.8))
     }
 }
