@@ -32,10 +32,6 @@ class WebSocketService: ObservableObject {
     private var _droppedCount = 0
     private var _ackedCount = 0
     
-    // REMOVED: Camera update throttling variables
-    // private var lastCameraUpdate: TimeInterval = 0
-    // private let cameraUpdateInterval: TimeInterval = 300
-    
     private var receivedCount: Int {
         get {
             statsLock.lock()
@@ -96,6 +92,9 @@ class WebSocketService: ObservableObject {
     private let maxQueuedMessages = 1000
     private var queuedMessageCount = 0
     
+    // CRITICAL: Track if user is actively viewing cameras to prevent updates
+    private var isViewingCameras = false
+    
     private var clientId: String {
         if let uuid = UIDevice.current.identifierForVendor?.uuidString {
             return "ios-\(String(uuid.prefix(8)))"
@@ -112,6 +111,21 @@ class WebSocketService: ObservableObject {
         startAckFlusher()
         startHealthMonitor()
         setupMemoryWarningHandler()
+        
+        // Listen for player state changes
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handlePlayerStateChange),
+            name: NSNotification.Name("PlayerStateChanged"),
+            object: nil
+        )
+    }
+    
+    @objc private func handlePlayerStateChange(_ notification: Notification) {
+        if let isActive = notification.userInfo?["isActive"] as? Bool {
+            isViewingCameras = isActive
+            DebugLogger.shared.log("📹 Camera viewing state: \(isActive ? "ACTIVE" : "INACTIVE")", emoji: "📹", color: .blue)
+        }
     }
     
     private func setupMemoryWarningHandler() {
@@ -137,19 +151,16 @@ class WebSocketService: ObservableObject {
         Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             
-            // Only check if we're supposed to be connected
             guard self.isConnected else { return }
             
             let now = Date().timeIntervalSince1970
             
-            // Check for processing stall (no messages for 30 seconds)
             if self.lastProcessedTimestamp > 0 && (now - self.lastProcessedTimestamp) > 30 {
                 DebugLogger.shared.log("⚠️ Processing stalled (30s), reconnecting", emoji: "🔄", color: .orange)
                 self.reconnect()
                 return
             }
             
-            // Check message queue overflow
             if self.queuedMessageCount > self.maxQueuedMessages {
                 DebugLogger.shared.log("⚠️ Message queue overflow, clearing", emoji: "🧹", color: .orange)
                 self.queuedMessageCount = 0
@@ -207,7 +218,6 @@ class WebSocketService: ObservableObject {
     private func reconnect() {
         DebugLogger.shared.log("Attempting reconnect...", emoji: "🔄", color: .orange)
         
-        // Prevent multiple simultaneous reconnects
         guard webSocketTask?.state != .running else {
             DebugLogger.shared.log("Already connected, skipping reconnect", emoji: "⚠️", color: .orange)
             return
@@ -218,7 +228,6 @@ class WebSocketService: ObservableObject {
         isConnected = false
         hasSubscribed = false
         
-        // Wait longer before reconnecting
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             self.connect()
         }
@@ -269,14 +278,8 @@ class WebSocketService: ObservableObject {
         receivedCount += 1
         lastProcessedTimestamp = Date().timeIntervalSince1970
         
-        // Log messages containing "camera" for debugging
-        if text.contains("camera") || text.contains("Camera") {
-            DebugLogger.shared.log("📥 RAW MESSAGE (contains camera): \(text.prefix(200))...", emoji: "📥", color: .blue)
-        }
-        
         guard queuedMessageCount < maxQueuedMessages else {
             droppedCount += 1
-            DebugLogger.shared.log("⚠️ Dropped message - queue full", emoji: "🗑️", color: .red)
             return
         }
         
@@ -300,7 +303,6 @@ class WebSocketService: ObservableObject {
     }
 
     private func _handleMessageInternal(_ text: String) throws {
-        // Handle subscription confirmation
         if text.contains("\"status\":\"subscribed\"") {
             DebugLogger.shared.log("✅ Subscription confirmed", emoji: "✅", color: .green)
             pendingSubscriptionUpdate = false
@@ -311,99 +313,63 @@ class WebSocketService: ObservableObject {
             throw NSError(domain: "WebSocket", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert to data"])
         }
         
-        // Parse as dictionary first to inspect structure
         if let jsonDict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             
-            // Check if this looks like a camera list event
             if let type = jsonDict["type"] as? String, type == "camera-list" {
-                DebugLogger.shared.log("📹 CAMERA LIST DETECTED (type=camera-list)", emoji: "📹", color: .green)
+                // CRITICAL: Only process camera updates if NOT actively viewing cameras
+                guard !isViewingCameras else {
+                    DebugLogger.shared.log("⏸️ Skipping camera update (user viewing cameras)", emoji: "⏸️", color: .orange)
+                    return
+                }
                 
-                // Extract the camera JSON directly from dictionary
+                DebugLogger.shared.log("📹 CAMERA LIST DETECTED", emoji: "📹", color: .green)
+                
                 if let dataDict = jsonDict["data"] as? [String: Any],
                    let rawCameraJSON = dataDict["_raw_camera_json"] as? String {
                     
-                    DebugLogger.shared.log("   Found _raw_camera_json string, length: \(rawCameraJSON.count)", emoji: "📦", color: .blue)
-                    
-                    // Parse the camera JSON
                     if let cameraData = rawCameraJSON.data(using: .utf8) {
                         do {
                             let cameraResponse = try JSONDecoder().decode(CameraListResponse.self, from: cameraData)
-                            DebugLogger.shared.log("✅ Decoded \(cameraResponse.cameras.count) cameras!", emoji: "✅", color: .green)
+                            DebugLogger.shared.log("✅ Decoded \(cameraResponse.cameras.count) cameras", emoji: "✅", color: .green)
                             
                             handleCameraList(cameraResponse)
                             return
                             
                         } catch {
                             DebugLogger.shared.log("❌ Failed to decode cameras: \(error)", emoji: "❌", color: .red)
-                            
-                            if let decodingError = error as? DecodingError {
-                                switch decodingError {
-                                case .keyNotFound(let key, _):
-                                    DebugLogger.shared.log("   Missing key: \(key.stringValue)", emoji: "🔑", color: .orange)
-                                case .typeMismatch(let type, let context):
-                                    DebugLogger.shared.log("   Type mismatch: \(type) at \(context.codingPath)", emoji: "⚠️", color: .orange)
-                                case .valueNotFound(let type, let context):
-                                    DebugLogger.shared.log("   Value not found: \(type) at \(context.codingPath)", emoji: "⚠️", color: .orange)
-                                case .dataCorrupted(let context):
-                                    DebugLogger.shared.log("   Data corrupted at: \(context.codingPath)", emoji: "⚠️", color: .orange)
-                                @unknown default:
-                                    break
-                                }
-                            }
                         }
-                    }
-                } else {
-                    DebugLogger.shared.log("❌ No _raw_camera_json string found in data", emoji: "❌", color: .red)
-                    if let dataDict = jsonDict["data"] as? [String: Any] {
-                        DebugLogger.shared.log("   Data keys: \(dataDict.keys.joined(separator: ", "))", emoji: "🔑", color: .gray)
                     }
                 }
                 
-                // Don't process as regular event
                 return
             }
         }
         
-        // Now try to decode as Event (for regular events)
         let decoder = JSONDecoder()
         
         guard let event = try? decoder.decode(Event.self, from: data) else {
-            DebugLogger.shared.log("⚠️ Could not decode as Event", emoji: "⚠️", color: .orange)
             throw NSError(domain: "WebSocket", code: -2, userInfo: [NSLocalizedDescriptionKey: "Failed to decode as Event"])
         }
         
-        // Handle regular event
         handleEvent(event)
     }
 
-    // MARK: - Handle Camera List Updates (NO THROTTLING - IMMEDIATE PROCESSING)
-    
     private func handleCameraList(_ response: CameraListResponse) {
         let onlineCount = response.cameras.filter { $0.isOnline }.count
-        let areas = Set(response.cameras.map { $0.area })
         
         DebugLogger.shared.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", emoji: "📹", color: .blue)
         DebugLogger.shared.log("📹 Processing camera list", emoji: "📹", color: .blue)
         DebugLogger.shared.log("   Total: \(response.cameras.count)", emoji: "📊", color: .blue)
         DebugLogger.shared.log("   Online: \(onlineCount)", emoji: "🟢", color: .green)
-        DebugLogger.shared.log("   Offline: \(response.cameras.count - onlineCount)", emoji: "⚫️", color: .gray)
-        DebugLogger.shared.log("   Areas: \(areas.count) - \(areas.sorted().joined(separator: ", "))", emoji: "📍", color: .blue)
-        
-        // Print first 3 cameras only (reduce log spam)
-        let sampleCount = min(3, response.cameras.count)
-        for (index, camera) in response.cameras.prefix(sampleCount).enumerated() {
-            let status = camera.isOnline ? "🟢" : "⚫️"
-            DebugLogger.shared.log("   \(index+1). \(status) \(camera.name) - \(camera.area)", emoji: "📷", color: .gray)
-        }
-        
-        if response.cameras.count > 3 {
-            DebugLogger.shared.log("   ... and \(response.cameras.count - 3) more cameras", emoji: "📷", color: .gray)
-        }
-        
         DebugLogger.shared.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", emoji: "📹", color: .blue)
         
-        // Update on main thread - NO THROTTLING, IMMEDIATE PROCESSING
-        DispatchQueue.main.async {
+        // CRITICAL: Delay camera update if user might be in transition
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            guard !self.isViewingCameras else {
+                DebugLogger.shared.log("⏸️ Still viewing cameras, deferring update", emoji: "⏸️", color: .orange)
+                return
+            }
+            
             CameraManager.shared.updateCameras(response.cameras)
             DebugLogger.shared.log("✅ CameraManager updated", emoji: "✅", color: .green)
         }
@@ -552,16 +518,11 @@ class WebSocketService: ObservableObject {
             
             self.webSocketTask?.send(.string(str)) { error in
                 if let error = error {
-                    DebugLogger.shared.log("ACK failed: \(error.localizedDescription)", emoji: "❌", color: .red)
                     self.ackLock.lock()
                     self.pendingAcks.insert(contentsOf: acksToSend, at: 0)
                     self.ackLock.unlock()
                 } else {
                     self.ackedCount += acksToSend.count
-                    
-                    if acksToSend.count > 50 {
-                        DebugLogger.shared.log("Sent BULK ACK: \(acksToSend.count) events", emoji: "✅", color: .green)
-                    }
                 }
             }
         }
@@ -589,8 +550,6 @@ class WebSocketService: ObservableObject {
             semaphore.signal()
         }
         _ = semaphore.wait(timeout: .now() + 2)
-        
-        DebugLogger.shared.log("Flushed \(allAcks.count) ACKs on shutdown", emoji: "💾", color: .blue)
     }
 
     func sendSubscriptionV2() {
@@ -603,7 +562,6 @@ class WebSocketService: ObservableObject {
         
         let now = Date().timeIntervalSince1970
         if hasSubscribed && (now - lastSubscriptionTime) < 5 {
-            DebugLogger.shared.log("Skipping duplicate subscription", emoji: "⚠️", color: .orange)
             return
         }
         
@@ -643,7 +601,6 @@ class WebSocketService: ObservableObject {
         
         guard let data = try? JSONSerialization.data(withJSONObject: request),
               let str = String(data: data, encoding: .utf8) else {
-            DebugLogger.shared.log("Failed to serialize subscription", emoji: "❌", color: .red)
             return
         }
         
@@ -652,12 +609,11 @@ class WebSocketService: ObservableObject {
         
         if !resetConsumers {
             catchUpMode = true
-            DebugLogger.shared.log("⚡ CATCH-UP MODE ENABLED", emoji: "🚀", color: .orange)
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
                 if self.catchUpMode {
                     self.catchUpMode = false
-                    DebugLogger.shared.log("✅ CATCH-UP MODE AUTO-DISABLED", emoji: "🎯", color: .green)
+                    DebugLogger.shared.log("✅ CATCH-UP MODE DISABLED", emoji: "🎯", color: .green)
                 }
             }
         }
@@ -669,7 +625,6 @@ class WebSocketService: ObservableObject {
             } else {
                 self.hasSubscribed = true
                 self.lastSubscriptionTime = now
-                DebugLogger.shared.log("Subscription sent (reset=\(resetConsumers))", emoji: "✅", color: .green)
             }
         }
     }
@@ -679,18 +634,15 @@ class WebSocketService: ObservableObject {
         pingTimer = Timer.scheduledTimer(withTimeInterval: 25, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             
-            // Only ping if connected
             guard self.isConnected else { return }
             
             if self.webSocketTask?.state == .running {
                 self.webSocketTask?.sendPing { error in
-                    if let error = error {
-                        DebugLogger.shared.log("Ping failed: \(error.localizedDescription)", emoji: "❌", color: .red)
+                    if error != nil {
                         // Don't immediately reconnect on single ping failure
                     }
                 }
             } else {
-                DebugLogger.shared.log("WebSocket not running, reconnecting", emoji: "🔄", color: .orange)
                 self.reconnect()
             }
         }
@@ -705,10 +657,4 @@ class WebSocketService: ObservableObject {
 
 extension Notification.Name {
     static let newEventReceived = Notification.Name("newEventReceived")
-}
-
-extension Comparable {
-    func clamped(to limits: ClosedRange<Self>) -> Self {
-        return min(max(self, limits.lowerBound), limits.upperBound)
-    }
 }
