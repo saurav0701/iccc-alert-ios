@@ -2,74 +2,57 @@ import SwiftUI
 import WebKit
 import AVFoundation
 
-// ✅ CRITICAL FIX: Stable WebView caching with proper lifecycle management
+// ✅ CRITICAL FIX: Unified WebView caching with proper lifecycle
 class WebViewStore {
     static let shared = WebViewStore()
     
     private struct CachedWebView {
         let webView: WKWebView
         let createdAt: Date
-        let streamURL: String
+        let cameraId: String
         var lastAccessTime: Date
+        var isActive: Bool
     }
     
     private var cache: [String: CachedWebView] = [:]
-    private let cacheExpiration: TimeInterval = 600 // 10 minutes (increased from 5)
-    private let maxCacheSize = 15 // Increased from 10
+    private let cacheExpiration: TimeInterval = 600
+    private let maxCacheSize = 12
     private let lock = NSLock()
     
-    // ✅ CRITICAL: Track which WebViews are currently in use
-    private var activeWebViews: Set<String> = []
-    
-    func markActive(_ key: String) {
-        lock.lock()
-        activeWebViews.insert(key)
-        lock.unlock()
-    }
-    
-    func markInactive(_ key: String) {
-        lock.lock()
-        activeWebViews.remove(key)
-        lock.unlock()
-    }
-    
-    func getWebView(for key: String, streamURL: String) -> WKWebView? {
+    // ✅ Use cameraId as the ONLY key (no fullscreen/thumbnail distinction)
+    func getWebView(for cameraId: String, streamURL: String) -> WKWebView? {
         lock.lock()
         defer { lock.unlock() }
         
-        guard var cached = cache[key] else { return nil }
+        guard var cached = cache[cameraId] else { return nil }
         
-        // Check if expired or URL changed
         let age = Date().timeIntervalSince1970 - cached.createdAt.timeIntervalSince1970
-        if age > cacheExpiration || cached.streamURL != streamURL {
-            print("♻️ Cache expired or URL changed for: \(key)")
+        if age > cacheExpiration {
+            print("♻️ Cache expired for: \(cameraId)")
             cleanupWebView(cached.webView)
-            cache.removeValue(forKey: key)
+            cache.removeValue(forKey: cameraId)
             return nil
         }
         
-        // Update last access time
         cached.lastAccessTime = Date()
-        cache[key] = cached
+        cached.isActive = true
+        cache[cameraId] = cached
         
-        print("✅ Reusing cached WebView for: \(key) (age: \(Int(age))s)")
+        print("✅ Reusing cached WebView for: \(cameraId) (age: \(Int(age))s)")
         return cached.webView
     }
     
-    func cacheWebView(_ webView: WKWebView, for key: String, streamURL: String) {
+    func cacheWebView(_ webView: WKWebView, for cameraId: String) {
         lock.lock()
         defer { lock.unlock() }
         
-        // Don't cache if already exists
-        if cache[key] != nil {
-            print("⚠️ WebView already cached for: \(key)")
+        if cache[cameraId] != nil {
+            print("⚠️ WebView already cached for: \(cameraId)")
             return
         }
         
-        // Remove oldest INACTIVE entries if at capacity
         if cache.count >= maxCacheSize {
-            // Find inactive entries sorted by last access time
-            let inactiveEntries = cache.filter { !activeWebViews.contains($0.key) }
+            let inactiveEntries = cache.filter { !$0.value.isActive }
                 .sorted { $0.value.lastAccessTime < $1.value.lastAccessTime }
             
             if let oldestKey = inactiveEntries.first?.key {
@@ -77,33 +60,28 @@ class WebViewStore {
                     print("🗑️ Removing old inactive cache: \(oldestKey)")
                     cleanupWebView(old.webView)
                 }
-            } else if let oldestKey = cache.min(by: { $0.value.lastAccessTime < $1.value.lastAccessTime })?.key {
-                // If all are active, remove oldest by access time
-                if let old = cache.removeValue(forKey: oldestKey) {
-                    print("🗑️ Removing oldest cache (all active): \(oldestKey)")
-                    cleanupWebView(old.webView)
-                }
             }
         }
         
-        cache[key] = CachedWebView(
+        cache[cameraId] = CachedWebView(
             webView: webView,
             createdAt: Date(),
-            streamURL: streamURL,
-            lastAccessTime: Date()
+            cameraId: cameraId,
+            lastAccessTime: Date(),
+            isActive: true
         )
-        print("💾 Cached new WebView for: \(key) (total: \(cache.count))")
+        print("💾 Cached new WebView for: \(cameraId) (total: \(cache.count))")
     }
     
-    func removeWebView(for key: String) {
+    func markInactive(_ cameraId: String) {
         lock.lock()
         defer { lock.unlock() }
         
-        activeWebViews.remove(key)
-        
-        // Don't immediately remove - let it stay in cache for reuse
-        // Only mark as inactive
-        print("📤 Marked WebView as inactive: \(key)")
+        if var cached = cache[cameraId] {
+            cached.isActive = false
+            cache[cameraId] = cached
+            print("📤 Marked WebView as inactive: \(cameraId)")
+        }
     }
     
     private func cleanupWebView(_ webView: WKWebView) {
@@ -118,7 +96,6 @@ class WebViewStore {
         
         cache.values.forEach { cleanupWebView($0.webView) }
         cache.removeAll()
-        activeWebViews.removeAll()
         print("🧹 Cleared all cached WebViews")
     }
     
@@ -126,7 +103,7 @@ class WebViewStore {
         lock.lock()
         defer { lock.unlock() }
         
-        let inactive = cache.filter { !activeWebViews.contains($0.key) }
+        let inactive = cache.filter { !$0.value.isActive }
         inactive.forEach { key, cached in
             cleanupWebView(cached.webView)
             cache.removeValue(forKey: key)
@@ -135,7 +112,6 @@ class WebViewStore {
     }
 }
 
-// ✅ Audio session configuration
 class AudioSessionManager {
     static let shared = AudioSessionManager()
     
@@ -150,35 +126,24 @@ class AudioSessionManager {
     }
 }
 
-// MARK: - WebView HLS Player (STABILITY FIXED)
+// MARK: - WebView HLS Player (FIXED)
 struct WebViewHLSPlayer: UIViewRepresentable {
     let streamURL: String
+    let cameraId: String
     let cameraName: String
     @Binding var isLoading: Bool
     @Binding var errorMessage: String?
     let isFullscreen: Bool
     
-    // ✅ CRITICAL: Use @State to maintain stable identity across updates
-    @State private var webViewIdentifier = UUID()
-    
     func makeUIView(context: Context) -> WKWebView {
-        let cacheKey = "\(cameraName)_\(isFullscreen ? "full" : "thumb")"
-        
-        // Mark as active
-        WebViewStore.shared.markActive(cacheKey)
-        
-        // Try to reuse cached WebView
-        if let cached = WebViewStore.shared.getWebView(for: cacheKey, streamURL: streamURL) {
+        // ✅ Use cameraId as the ONLY cache key
+        if let cached = WebViewStore.shared.getWebView(for: cameraId, streamURL: streamURL) {
             print("♻️ Reusing cached WebView for: \(cameraName)")
             cached.navigationDelegate = context.coordinator
-            
-            // Re-add message handlers if needed
             setupMessageHandlers(for: cached, coordinator: context.coordinator)
-            
             return cached
         }
         
-        // Create new WebView
         let configuration = WKWebViewConfiguration()
         configuration.allowsInlineMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = []
@@ -194,47 +159,38 @@ struct WebViewHLSPlayer: UIViewRepresentable {
         webView.isOpaque = false
         webView.backgroundColor = .black
         
-        // Add message handlers
         setupMessageHandlers(for: webView, coordinator: context.coordinator)
-        
-        // Cache it
-        WebViewStore.shared.cacheWebView(webView, for: cacheKey, streamURL: streamURL)
-        
+        WebViewStore.shared.cacheWebView(webView, for: cameraId)
         AudioSessionManager.shared.configure()
         
         print("🆕 Created new WebView for: \(cameraName)")
-        
         return webView
     }
     
     private func setupMessageHandlers(for webView: WKWebView, coordinator: Coordinator) {
         let controller = webView.configuration.userContentController
         
-        // Remove existing handlers first to prevent duplicates
         controller.removeScriptMessageHandler(forName: "streamReady")
         controller.removeScriptMessageHandler(forName: "streamError")
         controller.removeScriptMessageHandler(forName: "streamLog")
         
-        // Add handlers
         controller.add(coordinator, name: "streamReady")
         controller.add(coordinator, name: "streamError")
         controller.add(coordinator, name: "streamLog")
     }
     
     func updateUIView(_ webView: WKWebView, context: Context) {
-        // ✅ CRITICAL: Only reload if URL actually changed AND sufficient time has passed
+        // ✅ Only reload if URL changed AND sufficient time passed
         guard context.coordinator.lastLoadedURL != streamURL else {
             return
         }
         
-        // ✅ CRITICAL: Prevent rapid reloads (increased to 3 seconds)
         let now = Date().timeIntervalSince1970
-        if now - context.coordinator.lastLoadTime < 3.0 {
-            print("⚠️ Preventing rapid reload for: \(cameraName) (last load: \(Int(now - context.coordinator.lastLoadTime))s ago)")
+        if now - context.coordinator.lastLoadTime < 5.0 {
+            print("⚠️ Preventing rapid reload for: \(cameraName)")
             return
         }
         
-        // ✅ Only reload if not currently loading
         if webView.isLoading {
             print("⚠️ WebView still loading, skipping reload for: \(cameraName)")
             return
@@ -249,12 +205,7 @@ struct WebViewHLSPlayer: UIViewRepresentable {
     }
     
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
-        // ✅ Don't destroy WebView immediately - let cache manage it
-        let cacheKey = "\(coordinator.parent.cameraName)_\(coordinator.parent.isFullscreen ? "full" : "thumb")"
-        
-        // Just mark as inactive
-        WebViewStore.shared.markInactive(cacheKey)
-        
+        WebViewStore.shared.markInactive(coordinator.parent.cameraId)
         print("📤 WebView dismantled (kept in cache): \(coordinator.parent.cameraName)")
     }
     
@@ -322,11 +273,6 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                         }
                         hls = null;
                     }
-                    if (video) {
-                        video.pause();
-                        video.removeAttribute('src');
-                        video.load();
-                    }
                 }
                 
                 function initPlayer() {
@@ -341,33 +287,35 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                             enableWorker: true,
                             lowLatencyMode: false,
                             
-                            maxBufferLength: isFullscreen ? 20 : 5,
-                            maxMaxBufferLength: isFullscreen ? 30 : 10,
-                            maxBufferSize: 40 * 1000 * 1000,
-                            maxBufferHole: 0.5,
-                            backBufferLength: 10,
+                            // ✅ FIXED: More conservative buffering for thumbnails
+                            maxBufferLength: isFullscreen ? 30 : 15,
+                            maxMaxBufferLength: isFullscreen ? 60 : 30,
+                            maxBufferSize: 60 * 1000 * 1000,
+                            maxBufferHole: 1.0,
+                            backBufferLength: isFullscreen ? 20 : 0,
                             
-                            manifestLoadingTimeOut: 10000,
-                            manifestLoadingMaxRetry: 3,
-                            manifestLoadingRetryDelay: 500,
+                            // ✅ FIXED: Longer timeouts
+                            manifestLoadingTimeOut: 20000,
+                            manifestLoadingMaxRetry: 4,
+                            manifestLoadingRetryDelay: 1000,
                             
-                            levelLoadingTimeOut: 10000,
-                            levelLoadingMaxRetry: 3,
-                            levelLoadingRetryDelay: 500,
+                            levelLoadingTimeOut: 20000,
+                            levelLoadingMaxRetry: 4,
+                            levelLoadingRetryDelay: 1000,
                             
-                            fragLoadingTimeOut: 15000,
-                            fragLoadingMaxRetry: 3,
-                            fragLoadingRetryDelay: 500,
+                            fragLoadingTimeOut: 20000,
+                            fragLoadingMaxRetry: 4,
+                            fragLoadingRetryDelay: 1000,
                             
-                            startLevel: 0,
+                            startLevel: -1,
                             autoStartLoad: true,
-                            capLevelToPlayerSize: true,
+                            capLevelToPlayerSize: !isFullscreen,
                             
                             liveSyncDurationCount: 3,
                             liveMaxLatencyDurationCount: 10,
                             
-                            startFragPrefetch: isFullscreen,
-                            testBandwidth: isFullscreen,
+                            startFragPrefetch: true,
+                            testBandwidth: true,
                         });
                         
                         hls.on(Hls.Events.ERROR, function(event, data) {
@@ -376,36 +324,31 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                                 
                                 switch(data.type) {
                                     case Hls.ErrorTypes.NETWORK_ERROR:
-                                        log('⚠️ Network error - attempting recovery');
                                         if (retryCount < maxRetries) {
                                             retryCount++;
+                                            log('🔄 Network retry ' + retryCount + '/' + maxRetries);
                                             setTimeout(() => {
                                                 if (hls && !isDestroyed) {
-                                                    log('🔄 Retry ' + retryCount + '/' + maxRetries);
                                                     hls.startLoad();
                                                 }
-                                            }, 1000 * retryCount);
+                                            }, 2000 * retryCount);
                                         } else {
                                             window.webkit.messageHandlers.streamError.postMessage('Network connection failed');
-                                            cleanup();
                                         }
                                         break;
                                         
                                     case Hls.ErrorTypes.MEDIA_ERROR:
-                                        log('⚠️ Media error - attempting recovery');
                                         if (retryCount < maxRetries) {
                                             retryCount++;
+                                            log('🔄 Media retry ' + retryCount + '/' + maxRetries);
                                             hls.recoverMediaError();
                                         } else {
                                             window.webkit.messageHandlers.streamError.postMessage('Media playback failed');
-                                            cleanup();
                                         }
                                         break;
                                         
                                     default:
-                                        log('❌ Unrecoverable error: ' + data.details);
                                         window.webkit.messageHandlers.streamError.postMessage('Stream failed: ' + data.details);
-                                        cleanup();
                                         break;
                                 }
                             }
@@ -421,6 +364,15 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                                     .then(() => log('▶️ Playing'))
                                     .catch(e => log('⚠️ Play error: ' + e.message));
                             }
+                        });
+                        
+                        // ✅ FIXED: Monitor stalls and buffer underruns
+                        hls.on(Hls.Events.BUFFER_APPENDING, function() {
+                            log('📦 Buffer appending');
+                        });
+                        
+                        hls.on(Hls.Events.BUFFER_EOS, function() {
+                            log('✅ Buffer end of stream');
                         });
                         
                         hls.loadSource(videoSrc);
@@ -482,7 +434,7 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                     self.parent.errorMessage = error
                     print("❌ Stream error for \(self.parent.cameraName): \(error)")
                 case "streamLog":
-                    if self.parent.isFullscreen, let log = message.body as? String {
+                    if let log = message.body as? String {
                         print("📹 [\(self.parent.cameraName)] \(log)")
                     }
                 default:
@@ -505,37 +457,29 @@ struct WebViewHLSPlayer: UIViewRepresentable {
     }
 }
 
-// MARK: - Camera Thumbnail (Grid Preview) - STABILITY IMPROVED
+// MARK: - Camera Thumbnail (FIXED)
 struct CameraThumbnail: View {
     let camera: Camera
     @State private var isLoading = true
     @State private var errorMessage: String? = nil
-    @State private var loadTimer: Timer? = nil
     
-    // ✅ CRITICAL: Stable identifier prevents recreation
-    private let viewId = UUID()
+    // ✅ CRITICAL: Stable identifier based on camera ID only
+    private var viewId: String {
+        "thumbnail_\(camera.id)"
+    }
     
     var body: some View {
         ZStack {
             if let streamURL = camera.streamURL, camera.isOnline {
                 WebViewHLSPlayer(
                     streamURL: streamURL,
+                    cameraId: camera.id,
                     cameraName: camera.displayName,
                     isLoading: $isLoading,
                     errorMessage: $errorMessage,
                     isFullscreen: false
                 )
-                .id(viewId) // ✅ CRITICAL: Stable ID prevents recreation
-                .onAppear {
-                    loadTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: false) { _ in
-                        if isLoading && errorMessage == nil {
-                            isLoading = false
-                        }
-                    }
-                }
-                .onDisappear {
-                    loadTimer?.invalidate()
-                }
+                .id(viewId)
                 
                 if isLoading {
                     ZStack {
@@ -616,7 +560,7 @@ struct CameraThumbnail: View {
     }
 }
 
-// MARK: - Fullscreen HLS Player View
+// MARK: - Fullscreen HLS Player View (FIXED)
 struct HLSPlayerView: View {
     let camera: Camera
     @State private var isLoading = true
@@ -632,6 +576,7 @@ struct HLSPlayerView: View {
             if let streamURL = camera.streamURL {
                 WebViewHLSPlayer(
                     streamURL: streamURL,
+                    cameraId: camera.id,
                     cameraName: camera.displayName,
                     isLoading: $isLoading,
                     errorMessage: $errorMessage,
@@ -674,7 +619,8 @@ struct HLSPlayerView: View {
     private func resetAutoHideTimer() {
         autoHideTimer?.invalidate()
         if showControls {
-            autoHideTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+            // ✅ FIXED: Increased to 5 seconds to avoid interference
+            autoHideTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
                 withAnimation {
                     showControls = false
                 }

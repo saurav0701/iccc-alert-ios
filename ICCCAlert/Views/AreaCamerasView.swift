@@ -92,7 +92,7 @@ struct AreaCamerasView: View {
         }
         .onDisappear {
             // Clean up inactive WebViews when leaving area view
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
                 WebViewStore.shared.clearInactive()
             }
         }
@@ -174,35 +174,34 @@ struct AreaCamerasView: View {
     }
 
     private var cameraGridView: some View {
-    ScrollView {
-        LazyVGrid(
-            columns: Array(
-                repeating: GridItem(.flexible(), spacing: 12),
-                count: gridLayout.columns
-            ),
-            spacing: 12
-        ) {
-            ForEach(cameras) { camera in
-                CameraCard(camera: camera, layout: gridLayout)
-                    .id(camera.id) // Stable identity
-                    .onTapGesture {
-                        if camera.isOnline {
-                            selectedCamera = camera
-                        } else {
-                            DebugLogger.shared.log(
-                                "⚠️ Cannot play offline camera: \(camera.displayName)",
-                                emoji: "⚠️",
-                                color: .orange
-                            )
+        ScrollView {
+            LazyVGrid(
+                columns: Array(
+                    repeating: GridItem(.flexible(), spacing: 12),
+                    count: gridLayout.columns
+                ),
+                spacing: 12
+            ) {
+                // ✅ FIXED: Use camera.id as stable identifier
+                ForEach(cameras, id: \.id) { camera in
+                    CameraCard(camera: camera, layout: gridLayout)
+                        .onTapGesture {
+                            if camera.isOnline {
+                                selectedCamera = camera
+                            } else {
+                                DebugLogger.shared.log(
+                                    "⚠️ Cannot play offline camera: \(camera.displayName)",
+                                    emoji: "⚠️",
+                                    color: .orange
+                                )
+                            }
                         }
-                    }
+                }
             }
+            .padding()
         }
-        .padding()
+        .background(Color(.systemGroupedBackground))
     }
-    .background(Color(.systemGroupedBackground))
-}
-
 
     private var emptyView: some View {
         VStack(spacing: 20) {
@@ -255,18 +254,10 @@ struct AreaCamerasView: View {
     }
 }
 
-// MARK: - CameraCard (Optimized with Equatable to prevent re-renders)
-struct CameraCard: View, Equatable {
+// MARK: - CameraCard (FIXED - Removed Equatable)
+struct CameraCard: View {
     let camera: Camera
     let layout: AreaCamerasView.GridLayout
-    
-    // ✅ CRITICAL: Only update when these values actually change
-    static func == (lhs: CameraCard, rhs: CameraCard) -> Bool {
-        return lhs.camera.id == rhs.camera.id &&
-               lhs.camera.status == rhs.camera.status &&
-               lhs.camera.streamURL == rhs.camera.streamURL &&
-               lhs.layout == rhs.layout
-    }
     
     var cardHeight: CGFloat {
         switch layout {
@@ -278,7 +269,7 @@ struct CameraCard: View, Equatable {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // ✅ CRITICAL: CameraThumbnail has stable internal ID
+            // ✅ FIXED: Camera thumbnail with proper ID handling
             CameraThumbnail(camera: camera)
                 .frame(height: cardHeight)
                 .cornerRadius(12)
