@@ -140,13 +140,23 @@ struct WebViewHLSPlayer: UIViewRepresentable {
     }
     
     func updateUIView(_ webView: WKWebView, context: Context) {
-        // Always reload for fullscreen (fresh stream)
-        if isFullscreen || context.coordinator.lastLoadedURL != streamURL {
-            context.coordinator.lastLoadedURL = streamURL
-            let html = generateHTML()
-            webView.loadHTMLString(html, baseURL: nil)
-            print("📹 Loading stream for: \(cameraName) (fullscreen: \(isFullscreen))")
+        // Only reload if URL actually changed AND we're not already loading
+        guard context.coordinator.lastLoadedURL != streamURL else {
+            return
         }
+        
+        // Prevent rapid reloads
+        let now = Date().timeIntervalSince1970
+        if now - context.coordinator.lastLoadTime < 1.0 {
+            print("⚠️ Preventing rapid reload for: \(cameraName)")
+            return
+        }
+        
+        context.coordinator.lastLoadedURL = streamURL
+        context.coordinator.lastLoadTime = now
+        let html = generateHTML()
+        webView.loadHTMLString(html, baseURL: nil)
+        print("📹 Loading stream for: \(cameraName) (fullscreen: \(isFullscreen))")
     }
     
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -426,6 +436,7 @@ struct WebViewHLSPlayer: UIViewRepresentable {
     class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var parent: WebViewHLSPlayer
         var lastLoadedURL: String = ""
+        var lastLoadTime: TimeInterval = 0
         
         init(_ parent: WebViewHLSPlayer) {
             self.parent = parent

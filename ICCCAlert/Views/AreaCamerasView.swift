@@ -8,7 +8,6 @@ struct AreaCamerasView: View {
     @State private var showOnlineOnly = false
     @State private var gridLayout: GridLayout = .grid2x2
     
-    // ✅ FIXED: Receive binding from parent instead of local state
     @Binding var selectedCamera: Camera?
     
     enum GridLayout: String, CaseIterable, Identifiable {
@@ -88,14 +87,9 @@ struct AreaCamerasView: View {
                 }
             }
         }
-        // ❌ REMOVED: .id(refreshID) - This was destroying the view!
-        // ❌ REMOVED: .fullScreenCover - Now handled at parent level
         .onAppear {
             DebugLogger.shared.log("📹 AreaCamerasView appeared for \(area)", emoji: "📹", color: .blue)
-            DebugLogger.shared.log("   Total cameras: \(totalCount)", emoji: "📊", color: .gray)
-            DebugLogger.shared.log("   Online: \(onlineCount)", emoji: "🟢", color: .green)
         }
-        // ❌ REMOVED: Notification-based refresh
     }
 
     private var statsBar: some View {
@@ -180,10 +174,11 @@ struct AreaCamerasView: View {
                 spacing: 12
             ) {
                 ForEach(cameras) { camera in
+                    // ✅ CRITICAL: Use stable ID to prevent recreation
                     CameraCard(camera: camera, layout: gridLayout)
+                        .id(camera.id) // Use camera ID, not object reference
                         .onTapGesture {
                             if camera.isOnline {
-                                // ✅ FIXED: Update parent's binding instead of local state
                                 selectedCamera = camera
                             } else {
                                 DebugLogger.shared.log("⚠️ Cannot play offline camera: \(camera.displayName)", emoji: "⚠️", color: .orange)
@@ -247,6 +242,7 @@ struct AreaCamerasView: View {
     }
 }
 
+// MARK: - CameraCard (Optimized to prevent re-renders)
 struct CameraCard: View {
     let camera: Camera
     let layout: AreaCamerasView.GridLayout
@@ -261,7 +257,7 @@ struct CameraCard: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // ✅ FIXED: Thumbnail now uses stable WebView (no .id())
+            // ✅ CRITICAL: Stable ID prevents WebView recreation
             CameraThumbnail(camera: camera)
                 .frame(height: cardHeight)
                 .cornerRadius(12)
@@ -294,5 +290,12 @@ struct CameraCard: View {
         .cornerRadius(16)
         .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
         .opacity(camera.isOnline ? 1 : 0.6)
+    }
+}
+
+// ✅ CRITICAL: Make Camera equatable by ID only to prevent unnecessary updates
+extension Camera {
+    static func == (lhs: Camera, rhs: Camera) -> Bool {
+        return lhs.id == rhs.id && lhs.status == rhs.status
     }
 }

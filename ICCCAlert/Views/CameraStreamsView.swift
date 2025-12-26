@@ -1,5 +1,6 @@
 import SwiftUI
 
+// MARK: - CameraStreamsView
 struct CameraStreamsView: View {
     @StateObject private var cameraManager = CameraManager.shared
     @StateObject private var webSocketService = WebSocketService.shared
@@ -7,8 +8,6 @@ struct CameraStreamsView: View {
     @State private var searchText = ""
     @State private var showOnlineOnly = false
     @State private var selectedArea: String? = nil
-    
-    // ✅ FIXED: Moved selectedCamera to root level for stability
     @State private var selectedCamera: Camera? = nil
     
     var filteredAreas: [String] {
@@ -33,7 +32,6 @@ struct CameraStreamsView: View {
         NavigationView {
             VStack(spacing: 0) {
                 statsHeader
-
                 filterBar
 
                 if cameraManager.cameras.isEmpty {
@@ -56,17 +54,12 @@ struct CameraStreamsView: View {
             }
         }
         .navigationViewStyle(StackNavigationViewStyle())
-        // ❌ REMOVED: .id(refreshID) - This was destroying the entire view!
         .fullScreenCover(item: $selectedCamera) { camera in
             HLSPlayerView(camera: camera)
         }
         .onAppear {
             DebugLogger.shared.log("📹 CameraStreamsView appeared", emoji: "📹", color: .blue)
-            DebugLogger.shared.log("   Cameras: \(cameraManager.cameras.count)", emoji: "📊", color: .gray)
-            DebugLogger.shared.log("   Areas: \(cameraManager.availableAreas.count)", emoji: "📍", color: .gray)
-            DebugLogger.shared.log("   WebSocket: \(webSocketService.isConnected ? "Connected" : "Disconnected")", emoji: webSocketService.isConnected ? "🟢" : "🔴", color: webSocketService.isConnected ? .green : .red)
         }
-        // ❌ REMOVED: Notification-based refresh - Let SwiftUI handle updates naturally
     }
 
     private var statsHeader: some View {
