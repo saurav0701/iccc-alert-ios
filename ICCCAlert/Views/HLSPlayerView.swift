@@ -1,7 +1,35 @@
 import SwiftUI
 import WebKit
+import AVFoundation
 
-// MARK: - Fixed Stable WebView HLS Player
+// ✅ FIXED: WebView caching to prevent destruction
+class WebViewStore {
+    static let shared = WebViewStore()
+    var webViews: [String: WKWebView] = [:]
+    
+    func clearCache() {
+        webViews.removeAll()
+    }
+}
+
+// ✅ FIXED: Audio session configuration (iOS needs this even for silent videos)
+class AudioSessionManager {
+    static let shared = AudioSessionManager()
+    
+    func configure() {
+        do {
+            let audioSession = AVAudioSession.sharedInstance()
+            // ✅ Allows video playback without audio
+            try audioSession.setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers])
+            try audioSession.setActive(true)
+            print("✅ Audio session configured for video playback")
+        } catch {
+            print("❌ Failed to configure audio session: \(error)")
+        }
+    }
+}
+
+// MARK: - WebView HLS Player (Fixed + Optimized)
 struct WebViewHLSPlayer: UIViewRepresentable {
     let streamURL: String
     let cameraName: String
@@ -10,12 +38,18 @@ struct WebViewHLSPlayer: UIViewRepresentable {
     let isFullscreen: Bool
     
     func makeUIView(context: Context) -> WKWebView {
+        // ✅ FIXED: Check cache first
+        if let cached = WebViewStore.shared.webViews[streamURL] {
+            print("♻️ Reusing cached WebView for: \(cameraName)")
+            cached.navigationDelegate = context.coordinator
+            return cached
+        }
+        
         let configuration = WKWebViewConfiguration()
         configuration.allowsInlineMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = []
         configuration.allowsPictureInPictureMediaPlayback = false
         
-        // Enable JavaScript (no deprecation warning on iOS 14+)
         if #available(iOS 14.0, *) {
             configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         }
@@ -31,27 +65,35 @@ struct WebViewHLSPlayer: UIViewRepresentable {
         webView.configuration.userContentController.add(context.coordinator, name: "streamError")
         webView.configuration.userContentController.add(context.coordinator, name: "streamLog")
         
+        // ✅ FIXED: Cache the WebView
+        WebViewStore.shared.webViews[streamURL] = webView
+        
+        // ✅ Configure audio session
+        AudioSessionManager.shared.configure()
+        
         return webView
     }
     
     func updateUIView(_ webView: WKWebView, context: Context) {
-        // Only load if URL changed or not loaded yet
+        // ✅ FIXED: Only load if URL changed
         if context.coordinator.lastLoadedURL != streamURL {
             context.coordinator.lastLoadedURL = streamURL
             let html = generateHTML()
             webView.loadHTMLString(html, baseURL: nil)
+            print("📹 Loading stream for: \(cameraName)")
         }
     }
     
     private func generateHTML() -> String {
-        let autoplayAttr = "autoplay"
-        let mutedAttr = isFullscreen ? "" : "muted"
+        // ✅ Simplified: No autoplay in thumbnails, only in fullscreen
+        let autoplayAttr = isFullscreen ? "autoplay" : ""
+        let mutedAttr = "muted" // ✅ Always muted (no audio in streams)
         let controlsAttr = isFullscreen ? "controls" : ""
         let playsinlineAttr = "playsinline"
-        let preloadAttr = "preload=\"auto\""
+        let preloadAttr = isFullscreen ? "preload=\"auto\"" : "preload=\"none\""
         
-        let manifestTimeout = isFullscreen ? "8000" : "15000"
-        let fragTimeout = isFullscreen ? "15000" : "30000"
+        let manifestTimeout = isFullscreen ? "8000" : "20000"
+        let fragTimeout = isFullscreen ? "15000" : "40000"
         
         return """
         <!DOCTYPE html>
@@ -115,8 +157,8 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                 }
                 
                 function startStallDetection() {
+                    if (!isFullscreen) return; // Only monitor fullscreen playback
                     if (playbackStallTimer) clearInterval(playbackStallTimer);
-                    const checkInterval = isFullscreen ? 5000 : 10000;
                     
                     playbackStallTimer = setInterval(() => {
                         if (isDestroyed || !video || video.paused) return;
@@ -131,7 +173,7 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                                     setTimeout(() => {
                                         if (hls && !isDestroyed) {
                                             hls.startLoad(-1);
-                                            video.play().catch(e => log('Stall recovery play failed: ' + e.message));
+                                            video.play().catch(e => log('Stall recovery failed: ' + e.message));
                                         }
                                     }, 500);
                                 }
@@ -141,7 +183,7 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                             stallCheckCount = 0;
                         }
                         lastPlaybackTime = currentTime;
-                    }, checkInterval);
+                    }, 5000);
                 }
                 
                 function initPlayer() {
@@ -156,8 +198,8 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                             enableWorker: true,
                             lowLatencyMode: false,
                             backBufferLength: 90,
-                            maxBufferLength: isFullscreen ? 40 : 20,
-                            maxMaxBufferLength: isFullscreen ? 80 : 40,
+                            maxBufferLength: isFullscreen ? 40 : 10,
+                            maxMaxBufferLength: isFullscreen ? 80 : 20,
                             maxBufferSize: 80 * 1000 * 1000,
                             maxBufferHole: 0.5,
                             highBufferWatchdogPeriod: 3,
@@ -165,7 +207,7 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                             nudgeMaxRetry: 10,
                             maxFragLookUpTolerance: 0.25,
                             liveSyncDurationCount: 3,
-                            liveMaxLatencyDurationCount: isFullscreen ? 15 : 5,
+                            liveMaxLatencyDurationCount: isFullscreen ? 15 : 10,
                             liveDurationInfinity: false,
                             startLevel: -1,
                             autoStartLoad: true,
@@ -187,23 +229,28 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                             log('✅ Manifest parsed');
                             startStallDetection();
                             
-                            video.play()
-                                .then(() => {
-                                    log('▶️ Playing');
-                                    window.webkit.messageHandlers.streamReady.postMessage('ready');
-                                    retryCount = 0;
-                                })
-                                .catch(e => {
-                                    log('⚠️ Play error: ' + e.message);
-                                    if (retryCount < maxRetries) {
-                                        retryCount++;
-                                        setTimeout(() => {
-                                            video.play().catch(err => log('Retry failed: ' + err.message));
-                                        }, 1500);
-                                    } else {
-                                        window.webkit.messageHandlers.streamError.postMessage('Failed to start: ' + e.message);
-                                    }
-                                });
+                            if (isFullscreen) {
+                                video.play()
+                                    .then(() => {
+                                        log('▶️ Playing');
+                                        window.webkit.messageHandlers.streamReady.postMessage('ready');
+                                        retryCount = 0;
+                                    })
+                                    .catch(e => {
+                                        log('⚠️ Play error: ' + e.message);
+                                        if (retryCount < maxRetries) {
+                                            retryCount++;
+                                            setTimeout(() => {
+                                                video.play().catch(err => log('Retry failed: ' + err.message));
+                                            }, 1500);
+                                        } else {
+                                            window.webkit.messageHandlers.streamError.postMessage('Failed to start: ' + e.message);
+                                        }
+                                    });
+                            } else {
+                                // Thumbnail loaded, notify ready
+                                window.webkit.messageHandlers.streamReady.postMessage('ready');
+                            }
                         });
                         
                         hls.on(Hls.Events.ERROR, function(event, data) {
@@ -217,7 +264,9 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                                         setTimeout(() => {
                                             if (hls && !isDestroyed) {
                                                 hls.startLoad(-1);
-                                                video.play().catch(e => log('Recovery failed: ' + e.message));
+                                                if (isFullscreen) {
+                                                    video.play().catch(e => log('Recovery failed: ' + e.message));
+                                                }
                                             }
                                         }, delay);
                                     } else {
@@ -240,16 +289,19 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
                         video.src = videoSrc;
                         video.addEventListener('loadedmetadata', function() {
-                            video.play()
-                                .then(() => window.webkit.messageHandlers.streamReady.postMessage('ready'))
-                                .catch(e => window.webkit.messageHandlers.streamError.postMessage('Play error'));
+                            window.webkit.messageHandlers.streamReady.postMessage('ready');
+                            if (isFullscreen) {
+                                video.play().catch(e => 
+                                    window.webkit.messageHandlers.streamError.postMessage('Play error')
+                                );
+                            }
                         });
                         video.load();
                     }
                 }
                 
                 video.addEventListener('stalled', function() {
-                    if (hls && !isDestroyed) {
+                    if (hls && !isDestroyed && isFullscreen) {
                         setTimeout(() => {
                             hls.stopLoad();
                             setTimeout(() => { if (hls) hls.startLoad(-1); }, 500);
@@ -259,16 +311,19 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                 
                 initPlayer();
                 
-                const keepAliveInterval = isFullscreen ? 2000 : 5000;
-                let keepAlive = setInterval(() => {
-                    if (isDestroyed) {
-                        clearInterval(keepAlive);
-                        return;
-                    }
-                    if (video.paused && !video.ended && video.readyState >= 2) {
-                        video.play().catch(e => log('Resume failed'));
-                    }
-                }, keepAliveInterval);
+                // Only keep-alive in fullscreen
+                let keepAlive = null;
+                if (isFullscreen) {
+                    keepAlive = setInterval(() => {
+                        if (isDestroyed) {
+                            clearInterval(keepAlive);
+                            return;
+                        }
+                        if (video.paused && !video.ended && video.readyState >= 2) {
+                            video.play().catch(e => log('Resume failed'));
+                        }
+                    }, 3000);
+                }
                 
                 window.addEventListener('beforeunload', function() {
                     isDestroyed = true;
@@ -292,6 +347,12 @@ struct WebViewHLSPlayer: UIViewRepresentable {
         
         init(_ parent: WebViewHLSPlayer) {
             self.parent = parent
+        }
+        
+        // ✅ NEW: Reload function without destroying view
+        func reload(_ webView: WKWebView) {
+            let html = parent.generateHTML()
+            webView.loadHTMLString(html, baseURL: nil)
         }
         
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -332,12 +393,12 @@ struct CameraThumbnail: View {
     let camera: Camera
     @State private var isLoading = true
     @State private var errorMessage: String? = nil
-    @State private var retryCount = 0
     @State private var loadTimer: Timer? = nil
     
     var body: some View {
         ZStack {
             if let streamURL = camera.streamURL, camera.isOnline {
+                // ✅ REMOVED: .id() - Let WebView cache handle it
                 WebViewHLSPlayer(
                     streamURL: streamURL,
                     cameraName: camera.displayName,
@@ -345,9 +406,8 @@ struct CameraThumbnail: View {
                     errorMessage: $errorMessage,
                     isFullscreen: false
                 )
-                .id("\(camera.id)-\(retryCount)")
                 .onAppear {
-                    loadTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
+                    loadTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: false) { _ in
                         if isLoading && errorMessage == nil {
                             isLoading = false
                         }
@@ -382,23 +442,11 @@ struct CameraThumbnail: View {
                                 .font(.caption2)
                                 .foregroundColor(.white)
                             
-                            Button(action: {
-                                errorMessage = nil
-                                isLoading = true
-                                retryCount += 1
-                            }) {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "arrow.clockwise")
-                                        .font(.system(size: 10))
-                                    Text("Retry")
-                                }
-                                .font(.caption2)
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(Color.blue)
-                                .cornerRadius(6)
-                            }
+                            Text(error)
+                                .font(.system(size: 10))
+                                .foregroundColor(.white.opacity(0.7))
+                                .lineLimit(2)
+                                .padding(.horizontal, 4)
                         }
                         .padding(8)
                     }
@@ -453,7 +501,6 @@ struct HLSPlayerView: View {
     let camera: Camera
     @State private var isLoading = true
     @State private var errorMessage: String? = nil
-    @State private var retryCount = 0
     @State private var showControls = true
     @State private var autoHideTimer: Timer? = nil
     @Environment(\.presentationMode) var presentationMode
@@ -463,6 +510,7 @@ struct HLSPlayerView: View {
             Color.black.ignoresSafeArea()
             
             if let streamURL = camera.streamURL {
+                // ✅ REMOVED: .id() - Stable WebView, no recreation
                 WebViewHLSPlayer(
                     streamURL: streamURL,
                     cameraName: camera.displayName,
@@ -470,9 +518,9 @@ struct HLSPlayerView: View {
                     errorMessage: $errorMessage,
                     isFullscreen: true
                 )
-                .id("fullscreen-\(camera.id)-\(retryCount)")
                 .ignoresSafeArea()
                 .onAppear {
+                    AudioSessionManager.shared.configure()
                     autoHideTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
                         withAnimation {
                             showControls = false
@@ -591,13 +639,11 @@ struct HLSPlayerView: View {
                 .padding(.horizontal)
             
             Button(action: {
-                errorMessage = nil
-                isLoading = true
-                retryCount += 1
+                presentationMode.wrappedValue.dismiss()
             }) {
                 HStack {
-                    Image(systemName: "arrow.clockwise")
-                    Text("Retry")
+                    Image(systemName: "arrow.left")
+                    Text("Go Back")
                 }
                 .font(.headline)
                 .foregroundColor(.white)

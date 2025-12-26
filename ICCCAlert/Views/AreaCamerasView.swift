@@ -6,9 +6,10 @@ struct AreaCamerasView: View {
     
     @State private var searchText = ""
     @State private var showOnlineOnly = false
-    @State private var selectedCamera: Camera? = nil
     @State private var gridLayout: GridLayout = .grid2x2
-    @State private var refreshID = UUID()
+    
+    // ✅ FIXED: Receive binding from parent instead of local state
+    @Binding var selectedCamera: Camera?
     
     enum GridLayout: String, CaseIterable, Identifiable {
         case list = "List"
@@ -87,19 +88,14 @@ struct AreaCamerasView: View {
                 }
             }
         }
-        .fullScreenCover(item: $selectedCamera) { camera in
-            HLSPlayerView(camera: camera)
-        }
-        .id(refreshID)
+        // ❌ REMOVED: .id(refreshID) - This was destroying the view!
+        // ❌ REMOVED: .fullScreenCover - Now handled at parent level
         .onAppear {
             DebugLogger.shared.log("📹 AreaCamerasView appeared for \(area)", emoji: "📹", color: .blue)
             DebugLogger.shared.log("   Total cameras: \(totalCount)", emoji: "📊", color: .gray)
             DebugLogger.shared.log("   Online: \(onlineCount)", emoji: "🟢", color: .green)
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("CamerasUpdated"))) { _ in
-            DebugLogger.shared.log("🔄 AreaCamerasView: Cameras updated", emoji: "🔄", color: .blue)
-            refreshID = UUID()
-        }
+        // ❌ REMOVED: Notification-based refresh
     }
 
     private var statsBar: some View {
@@ -187,6 +183,7 @@ struct AreaCamerasView: View {
                     CameraCard(camera: camera, layout: gridLayout)
                         .onTapGesture {
                             if camera.isOnline {
+                                // ✅ FIXED: Update parent's binding instead of local state
                                 selectedCamera = camera
                             } else {
                                 DebugLogger.shared.log("⚠️ Cannot play offline camera: \(camera.displayName)", emoji: "⚠️", color: .orange)
@@ -264,7 +261,7 @@ struct CameraCard: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Camera thumbnail with live preview
+            // ✅ FIXED: Thumbnail now uses stable WebView (no .id())
             CameraThumbnail(camera: camera)
                 .frame(height: cardHeight)
                 .cornerRadius(12)
@@ -273,7 +270,6 @@ struct CameraCard: View {
                         .stroke(camera.isOnline ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
                 )
 
-            // Camera info
             VStack(alignment: .leading, spacing: 4) {
                 Text(camera.displayName)
                     .font(layout == .list ? .body : (layout == .grid2x2 ? .caption : .caption2))
@@ -298,14 +294,5 @@ struct CameraCard: View {
         .cornerRadius(16)
         .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
         .opacity(camera.isOnline ? 1 : 0.6)
-    }
-}
-
-// MARK: - Preview Provider
-struct AreaCamerasView_Previews: PreviewProvider {
-    static var previews: some View {
-        NavigationView {
-            AreaCamerasView(area: "barora")
-        }
     }
 }

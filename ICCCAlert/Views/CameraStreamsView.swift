@@ -7,7 +7,9 @@ struct CameraStreamsView: View {
     @State private var searchText = ""
     @State private var showOnlineOnly = false
     @State private var selectedArea: String? = nil
-    @State private var refreshID = UUID()
+    
+    // ✅ FIXED: Moved selectedCamera to root level for stability
+    @State private var selectedCamera: Camera? = nil
     
     var filteredAreas: [String] {
         var areas = cameraManager.availableAreas
@@ -54,17 +56,17 @@ struct CameraStreamsView: View {
             }
         }
         .navigationViewStyle(StackNavigationViewStyle())
-        .id(refreshID)
+        // ❌ REMOVED: .id(refreshID) - This was destroying the entire view!
+        .fullScreenCover(item: $selectedCamera) { camera in
+            HLSPlayerView(camera: camera)
+        }
         .onAppear {
             DebugLogger.shared.log("📹 CameraStreamsView appeared", emoji: "📹", color: .blue)
             DebugLogger.shared.log("   Cameras: \(cameraManager.cameras.count)", emoji: "📊", color: .gray)
             DebugLogger.shared.log("   Areas: \(cameraManager.availableAreas.count)", emoji: "📍", color: .gray)
             DebugLogger.shared.log("   WebSocket: \(webSocketService.isConnected ? "Connected" : "Disconnected")", emoji: webSocketService.isConnected ? "🟢" : "🔴", color: webSocketService.isConnected ? .green : .red)
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("CamerasUpdated"))) { _ in
-            DebugLogger.shared.log("🔄 CameraStreamsView: Received CamerasUpdated notification", emoji: "🔄", color: .blue)
-            refreshID = UUID()
-        }
+        // ❌ REMOVED: Notification-based refresh - Let SwiftUI handle updates naturally
     }
 
     private var statsHeader: some View {
@@ -142,7 +144,12 @@ struct CameraStreamsView: View {
     private var areasList: some View {
         List {
             ForEach(filteredAreas, id: \.self) { area in
-                NavigationLink(destination: AreaCamerasView(area: area)) {
+                NavigationLink(
+                    destination: AreaCamerasView(
+                        area: area,
+                        selectedCamera: $selectedCamera
+                    )
+                ) {
                     AreaRow(
                         area: area,
                         cameras: getCameras(for: area)
@@ -188,7 +195,6 @@ struct CameraStreamsView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 40)
                 
-                // Debug info
                 Text("WebSocket: \(webSocketService.isConnected ? "Connected ✅" : "Disconnected ❌")")
                     .font(.caption)
                     .foregroundColor(webSocketService.isConnected ? .green : .red)
