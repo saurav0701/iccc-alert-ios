@@ -8,11 +8,14 @@ struct AreaCamerasView: View {
     @State private var showOnlineOnly = false
     @State private var selectedCamera: Camera? = nil
     @State private var gridLayout: GridLayout = .grid2x2
+    @State private var refreshID = UUID()
     
-    enum GridLayout: String, CaseIterable {
+    enum GridLayout: String, CaseIterable, Identifiable {
         case list = "List"
-        case grid2x2 = "2×2"
-        case grid3x3 = "3×3"
+        case grid2x2 = "2×2 Grid"
+        case grid3x3 = "3×3 Grid"
+        
+        var id: String { rawValue }
         
         var columns: Int {
             switch self {
@@ -52,12 +55,15 @@ struct AreaCamerasView: View {
         cameras.filter { $0.isOnline }.count
     }
     
+    var totalCount: Int {
+        cameraManager.getCameras(forArea: area).count
+    }
+    
     var body: some View {
         VStack(spacing: 0) {
             statsBar
-
             filterBar
-
+            
             if cameras.isEmpty {
                 emptyView
             } else {
@@ -69,14 +75,10 @@ struct AreaCamerasView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
-                    ForEach(GridLayout.allCases, id: \.self) { layout in
-                        Button(action: { gridLayout = layout }) {
-                            HStack {
-                                Text(layout.rawValue)
-                                if gridLayout == layout {
-                                    Image(systemName: "checkmark")
-                                }
-                            }
+                    Picker("Layout", selection: $gridLayout) {
+                        ForEach(GridLayout.allCases) { layout in
+                            Label(layout.rawValue, systemImage: layout.icon)
+                                .tag(layout)
                         }
                     }
                 } label: {
@@ -88,6 +90,16 @@ struct AreaCamerasView: View {
         .fullScreenCover(item: $selectedCamera) { camera in
             HLSPlayerView(camera: camera)
         }
+        .id(refreshID)
+        .onAppear {
+            DebugLogger.shared.log("📹 AreaCamerasView appeared for \(area)", emoji: "📹", color: .blue)
+            DebugLogger.shared.log("   Total cameras: \(totalCount)", emoji: "📊", color: .gray)
+            DebugLogger.shared.log("   Online: \(onlineCount)", emoji: "🟢", color: .green)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("CamerasUpdated"))) { _ in
+            DebugLogger.shared.log("🔄 AreaCamerasView: Cameras updated", emoji: "🔄", color: .blue)
+            refreshID = UUID()
+        }
     }
 
     private var statsBar: some View {
@@ -95,7 +107,7 @@ struct AreaCamerasView: View {
             HStack(spacing: 8) {
                 Image(systemName: "video.fill")
                     .foregroundColor(.blue)
-                Text("\(cameras.count) cameras")
+                Text("\(cameras.count) \(cameras.count == 1 ? "camera" : "cameras")")
                     .font(.subheadline)
                     .fontWeight(.medium)
             }
@@ -116,7 +128,7 @@ struct AreaCamerasView: View {
                     Circle()
                         .fill(Color.gray)
                         .frame(width: 8, height: 8)
-                    Text("\(cameras.count - onlineCount)")
+                    Text("\(totalCount - onlineCount)")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
@@ -176,6 +188,8 @@ struct AreaCamerasView: View {
                         .onTapGesture {
                             if camera.isOnline {
                                 selectedCamera = camera
+                            } else {
+                                DebugLogger.shared.log("⚠️ Cannot play offline camera: \(camera.displayName)", emoji: "⚠️", color: .orange)
                             }
                         }
                 }
@@ -189,9 +203,15 @@ struct AreaCamerasView: View {
         VStack(spacing: 20) {
             Spacer()
             
-            Image(systemName: searchText.isEmpty ? "video.slash" : "magnifyingglass")
-                .font(.system(size: 50))
-                .foregroundColor(.gray)
+            ZStack {
+                Circle()
+                    .fill(Color.gray.opacity(0.1))
+                    .frame(width: 100, height: 100)
+                
+                Image(systemName: searchText.isEmpty ? "video.slash" : "magnifyingglass")
+                    .font(.system(size: 50))
+                    .foregroundColor(.gray)
+            }
             
             Text(searchText.isEmpty ? "No Cameras" : "No Results")
                 .font(.title2)
@@ -203,19 +223,23 @@ struct AreaCamerasView: View {
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
             
             if !searchText.isEmpty || showOnlineOnly {
                 Button(action: {
                     searchText = ""
                     showOnlineOnly = false
                 }) {
-                    Text("Clear Filters")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 12)
-                        .background(Color.blue)
-                        .cornerRadius(10)
+                    HStack {
+                        Image(systemName: "xmark.circle")
+                        Text("Clear Filters")
+                    }
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
+                    .background(Color.blue)
+                    .cornerRadius(10)
                 }
             }
             
@@ -230,62 +254,110 @@ struct CameraCard: View {
     let camera: Camera
     let layout: AreaCamerasView.GridLayout
     
+    var cardHeight: CGFloat {
+        switch layout {
+        case .list: return 120
+        case .grid2x2: return 100
+        case .grid3x3: return 80
+        }
+    }
+    
+    var iconSize: CGFloat {
+        switch layout {
+        case .list: return 40
+        case .grid2x2: return 30
+        case .grid3x3: return 24
+        }
+    }
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // Camera thumbnail/preview
             ZStack {
-                Rectangle()
-                    .fill(
-                        LinearGradient(
-                            gradient: Gradient(colors: [
-                                Color.gray.opacity(0.3),
-                                Color.gray.opacity(0.1)
-                            ]),
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
+                if camera.isOnline {
+                    LinearGradient(
+                        gradient: Gradient(colors: [
+                            Color.blue.opacity(0.6),
+                            Color.purple.opacity(0.6)
+                        ]),
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
                     )
+                } else {
+                    LinearGradient(
+                        gradient: Gradient(colors: [
+                            Color.gray.opacity(0.3),
+                            Color.gray.opacity(0.1)
+                        ]),
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                }
                 
-                VStack(spacing: 12) {
+                VStack(spacing: layout == .grid3x3 ? 6 : 12) {
                     Image(systemName: camera.isOnline ? "video.fill" : "video.slash.fill")
-                        .font(.system(size: layout == .list ? 40 : 30))
-                        .foregroundColor(camera.isOnline ? .blue : .gray)
+                        .font(.system(size: iconSize))
+                        .foregroundColor(.white)
                     
-                    if !camera.isOnline {
-                        Text("Offline currently")
-                            .font(.caption)
-                            .foregroundColor(.gray)
+                    if camera.isOnline {
+                        Text("LIVE")
+                            .font(.system(size: layout == .grid3x3 ? 8 : 10, weight: .bold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, layout == .grid3x3 ? 6 : 8)
+                            .padding(.vertical, layout == .grid3x3 ? 2 : 4)
+                            .background(Color.red)
+                            .cornerRadius(4)
+                    } else {
+                        Text("OFFLINE")
+                            .font(.system(size: layout == .grid3x3 ? 8 : 10, weight: .bold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, layout == .grid3x3 ? 6 : 8)
+                            .padding(.vertical, layout == .grid3x3 ? 2 : 4)
+                            .background(Color.gray)
+                            .cornerRadius(4)
                     }
                 }
             }
-            .frame(height: layout == .list ? 120 : 100)
+            .frame(height: cardHeight)
             .cornerRadius(12)
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
                     .stroke(camera.isOnline ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
             )
 
+            // Camera info
             VStack(alignment: .leading, spacing: 4) {
                 Text(camera.displayName)
-                    .font(layout == .list ? .body : .caption)
+                    .font(layout == .list ? .body : (layout == .grid2x2 ? .caption : .caption2))
                     .fontWeight(.medium)
-                    .lineLimit(2)
+                    .lineLimit(layout == .grid3x3 ? 1 : 2)
+                    .foregroundColor(.primary)
                 
                 HStack(spacing: 4) {
                     Circle()
                         .fill(camera.isOnline ? Color.green : Color.gray)
                         .frame(width: 6, height: 6)
                     
-                    Text(camera.location)
-                        .font(.caption2)
+                    Text(camera.location.isEmpty ? camera.area : camera.location)
+                        .font(.system(size: layout == .grid3x3 ? 9 : 11))
                         .foregroundColor(.secondary)
                         .lineLimit(1)
                 }
             }
         }
-        .padding(12)
+        .padding(layout == .grid3x3 ? 8 : 12)
         .background(Color(.systemBackground))
         .cornerRadius(16)
         .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
         .opacity(camera.isOnline ? 1 : 0.6)
+    }
+}
+
+// MARK: - Preview Provider
+struct AreaCamerasView_Previews: PreviewProvider {
+    static var previews: some View {
+        NavigationView {
+            AreaCamerasView(area: "barora")
+        }
     }
 }

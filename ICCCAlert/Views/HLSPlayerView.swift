@@ -1,25 +1,162 @@
 import SwiftUI
-import AVKit
-import AVFoundation
+import WebKit
 
+// MARK: - WebView HLS Player (Replaces AVPlayer)
+struct WebViewHLSPlayer: UIViewRepresentable {
+    let streamURL: String
+    let cameraName: String
+    @Binding var isLoading: Bool
+    @Binding var errorMessage: String?
+    
+    func makeUIView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.allowsInlineMediaPlayback = true
+        configuration.mediaTypesRequiringUserActionForPlayback = []
+        
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.navigationDelegate = context.coordinator
+        webView.scrollView.isScrollEnabled = false
+        webView.isOpaque = false
+        webView.backgroundColor = .black
+        
+        return webView
+    }
+    
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        let html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+            <style>
+                * { margin: 0; padding: 0; }
+                body { 
+                    background: #000;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    height: 100vh;
+                    overflow: hidden;
+                }
+                video {
+                    width: 100%;
+                    height: 100%;
+                    object-fit: contain;
+                }
+                .error {
+                    color: white;
+                    text-align: center;
+                    padding: 20px;
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                }
+            </style>
+        </head>
+        <body>
+            <video id="player" autoplay playsinline muted controls></video>
+            <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+            <script>
+                const video = document.getElementById('player');
+                const videoSrc = '\(streamURL)';
+                
+                if (Hls.isSupported()) {
+                    const hls = new Hls({
+                        enableWorker: true,
+                        lowLatencyMode: true,
+                        backBufferLength: 90
+                    });
+                    
+                    hls.loadSource(videoSrc);
+                    hls.attachMedia(video);
+                    
+                    hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                        video.play().catch(e => console.log('Play error:', e));
+                        window.webkit.messageHandlers.streamReady.postMessage('ready');
+                    });
+                    
+                    hls.on(Hls.Events.ERROR, function(event, data) {
+                        if (data.fatal) {
+                            window.webkit.messageHandlers.streamError.postMessage(data.type + ': ' + data.details);
+                        }
+                    });
+                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                    video.src = videoSrc;
+                    video.addEventListener('loadedmetadata', function() {
+                        video.play();
+                        window.webkit.messageHandlers.streamReady.postMessage('ready');
+                    });
+                    video.addEventListener('error', function() {
+                        window.webkit.messageHandlers.streamError.postMessage('Native playback error');
+                    });
+                }
+            </script>
+        </body>
+        </html>
+        """
+        
+        webView.loadHTMLString(html, baseURL: nil)
+    }
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+        var parent: WebViewHLSPlayer
+        
+        init(_ parent: WebViewHLSPlayer) {
+            self.parent = parent
+            super.init()
+        }
+        
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            DispatchQueue.main.async {
+                if message.name == "streamReady" {
+                    self.parent.isLoading = false
+                    self.parent.errorMessage = nil
+                } else if message.name == "streamError" {
+                    self.parent.isLoading = false
+                    self.parent.errorMessage = message.body as? String ?? "Stream error"
+                }
+            }
+        }
+        
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            // Add message handlers
+            webView.configuration.userContentController.add(self, name: "streamReady")
+            webView.configuration.userContentController.add(self, name: "streamError")
+        }
+    }
+}
+
+// MARK: - Updated HLS Player View
 struct HLSPlayerView: View {
     let camera: Camera
-    @StateObject private var playerManager = HLSPlayerManager()
+    @State private var isLoading = true
+    @State private var errorMessage: String?
     @Environment(\.presentationMode) var presentationMode
     
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             
-            if playerManager.isLoading {
-                loadingView
-            } else if let error = playerManager.errorMessage {
-                errorView(error)
+            if let streamURL = camera.streamURL {
+                WebViewHLSPlayer(
+                    streamURL: streamURL,
+                    cameraName: camera.displayName,
+                    isLoading: $isLoading,
+                    errorMessage: $errorMessage
+                )
+                .ignoresSafeArea()
             } else {
-                VideoPlayer(player: playerManager.player)
-                    .ignoresSafeArea()
+                errorView("Stream URL not available")
             }
-
+            
+            // Loading overlay
+            if isLoading {
+                loadingView
+            }
+            
+            // Header overlay
             VStack {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
@@ -33,10 +170,10 @@ struct HLSPlayerView: View {
                                 .foregroundColor(.white.opacity(0.8))
                             
                             Circle()
-                                .fill(statusColor)
+                                .fill(camera.isOnline ? Color.green : Color.red)
                                 .frame(width: 8, height: 8)
                             
-                            Text(playerManager.status)
+                            Text(camera.isOnline ? "Live" : "Offline")
                                 .font(.caption)
                                 .foregroundColor(.white.opacity(0.8))
                         }
@@ -46,9 +183,8 @@ struct HLSPlayerView: View {
                     .cornerRadius(10)
                     
                     Spacer()
-
+                    
                     Button(action: {
-                        playerManager.stop()
                         presentationMode.wrappedValue.dismiss()
                     }) {
                         Image(systemName: "xmark.circle.fill")
@@ -60,48 +196,23 @@ struct HLSPlayerView: View {
                 .padding()
                 
                 Spacer()
-
-                if playerManager.errorMessage != nil {
-                    Button(action: {
-                        playerManager.reconnect(camera: camera)
-                    }) {
-                        HStack {
-                            Image(systemName: "arrow.clockwise")
-                            Text("Reconnect")
-                        }
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 12)
-                        .background(Color.blue)
-                        .cornerRadius(10)
-                    }
-                    .padding(.bottom, 40)
-                }
+            }
+            
+            // Error view
+            if let error = errorMessage {
+                errorView(error)
             }
         }
         .navigationBarHidden(true)
-        .onAppear {
-            playerManager.play(camera: camera)
-        }
-        .onDisappear {
-            playerManager.stop()
-        }
     }
     
     private var loadingView: some View {
         VStack(spacing: 20) {
-            if #available(iOS 15.0, *) {
-                ProgressView()
-                    .scaleEffect(1.5)
-                    .tint(.white)
-            } else {
-                ProgressView()
-                    .scaleEffect(1.5)
-                    .accentColor(.white)
-            }
+            ProgressView()
+                .scaleEffect(1.5)
+                .tint(.white)
             
-            Text("Connecting to stream...")
+            Text("Loading stream...")
                 .font(.headline)
                 .foregroundColor(.white)
             
@@ -109,6 +220,8 @@ struct HLSPlayerView: View {
                 .font(.subheadline)
                 .foregroundColor(.white.opacity(0.7))
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black.opacity(0.8))
     }
     
     private func errorView(_ message: String) -> some View {
@@ -127,117 +240,24 @@ struct HLSPlayerView: View {
                 .foregroundColor(.white.opacity(0.8))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
-        }
-    }
-    
-    private var statusColor: Color {
-        switch playerManager.status.lowercased() {
-        case "live": return .green
-        case "loading", "connecting": return .yellow
-        case "error", "offline": return .red
-        default: return .gray
-        }
-    }
-}
-
-class HLSPlayerManager: ObservableObject {
-    @Published var player: AVPlayer?
-    @Published var isLoading = false
-    @Published var errorMessage: String?
-    @Published var status = "Connecting"
-    
-    private var playerItem: AVPlayerItem?
-    private var timeObserver: Any?
-    private var statusObserver: NSKeyValueObservation?
-    private var currentCamera: Camera?
-    
-    func play(camera: Camera) {
-        guard let streamURL = camera.streamURL else {
-            errorMessage = "Stream URL not available for this camera"
-            status = "Error"
-            return
-        }
-        
-        guard let url = URL(string: streamURL) else {
-            errorMessage = "Invalid stream URL"
-            status = "Error"
-            return
-        }
-        
-        currentCamera = camera
-        isLoading = true
-        errorMessage = nil
-        status = "Connecting"
-        
-        print("📹 HLSPlayer: Starting stream for \(camera.displayName)")
-        print("   URL: \(streamURL)")
-
-        playerItem = AVPlayerItem(url: url)
-        player = AVPlayer(playerItem: playerItem)
-
-        statusObserver = playerItem?.observe(\.status, options: [.new]) { [weak self] item, _ in
-            DispatchQueue.main.async {
-                self?.handlePlayerStatus(item.status)
+            
+            Button(action: {
+                errorMessage = nil
+                isLoading = true
+            }) {
+                HStack {
+                    Image(systemName: "arrow.clockwise")
+                    Text("Retry")
+                }
+                .font(.headline)
+                .foregroundColor(.white)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+                .background(Color.blue)
+                .cornerRadius(10)
             }
         }
-   
-        player?.play()
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
-            if self?.isLoading == true {
-                self?.errorMessage = "Connection timeout - Stream may be unavailable"
-                self?.status = "Timeout"
-                self?.isLoading = false
-            }
-        }
-    }
-    
-    func stop() {
-        player?.pause()
-        player = nil
-        playerItem = nil
-        statusObserver?.invalidate()
-        statusObserver = nil
-        
-        if let observer = timeObserver {
-            player?.removeTimeObserver(observer)
-            timeObserver = nil
-        }
-        
-        print("📹 HLSPlayer: Stream stopped")
-    }
-    
-    func reconnect(camera: Camera) {
-        stop()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.play(camera: camera)
-        }
-    }
-    
-    private func handlePlayerStatus(_ status: AVPlayerItem.Status) {
-        switch status {
-        case .readyToPlay:
-            isLoading = false
-            errorMessage = nil
-            self.status = "Live"
-            print("✅ HLSPlayer: Stream ready")
-            
-        case .failed:
-            isLoading = false
-            let error = playerItem?.error?.localizedDescription ?? "Unknown error"
-            errorMessage = "Failed to load stream: \(error)"
-            self.status = "Error"
-            print("❌ HLSPlayer: Stream failed - \(error)")
-            
-        case .unknown:
-            break
-            
-        @unknown default:
-            break
-        }
-    }
-    
-    deinit {
-        stop()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black.opacity(0.8))
     }
 }
