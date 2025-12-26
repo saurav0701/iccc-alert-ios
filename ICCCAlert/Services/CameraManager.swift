@@ -88,29 +88,12 @@ class CameraManager: ObservableObject {
         // Create lookup dictionary for fast status updates
         let statusMap = Dictionary(uniqueKeysWithValues: newCameras.map { ($0.id, $0.status) })
         
-        // Update only status field
+        // Update only status field (using efficient helper method)
         for i in 0..<cameras.count {
             if let newStatus = statusMap[cameras[i].id] {
-                var updatedCamera = cameras[i]
-                if updatedCamera.status != newStatus {
-                    // Create new camera with updated status
-                    cameras[i] = Camera(
-                        category: updatedCamera.category,
-                        id: updatedCamera.id,
-                        ip: updatedCamera.ip,
-                        Id: updatedCamera.Id,
-                        deviceId: updatedCamera.deviceId,
-                        Name: updatedCamera.Name,
-                        name: updatedCamera.name,
-                        latitude: updatedCamera.latitude,
-                        longitude: updatedCamera.longitude,
-                        status: newStatus,
-                        groupId: updatedCamera.groupId,
-                        area: updatedCamera.area,
-                        transporter: updatedCamera.transporter,
-                        location: updatedCamera.location,
-                        lastUpdate: updatedCamera.lastUpdate
-                    )
+                if cameras[i].status != newStatus {
+                    // Use the new helper method for clean status updates
+                    cameras[i] = cameras[i].withUpdatedStatus(newStatus)
                 }
             }
         }
@@ -182,49 +165,4 @@ class CameraManager: ObservableObject {
         DebugLogger.shared.log("🗑️ Camera cache cleared", emoji: "🗑️", color: .red)
     }
     
-    // MARK: - Camera initializer helper
-    
-    private func createCamera(from existing: Camera, newStatus: String) -> Camera {
-        return Camera(
-            category: existing.category,
-            id: existing.id,
-            ip: existing.ip,
-            Id: existing.Id,
-            deviceId: existing.deviceId,
-            Name: existing.Name,
-            name: existing.name,
-            latitude: existing.latitude,
-            longitude: existing.longitude,
-            status: newStatus,
-            groupId: existing.groupId,
-            area: existing.area,
-            transporter: existing.transporter,
-            location: existing.location,
-            lastUpdate: existing.lastUpdate
-        )
-    }
-}
-
-// MARK: - Camera Model Extension (Add Memberwise Init)
-extension Camera {
-    init(category: String, id: String, ip: String, Id: Int, deviceId: Int, 
-         Name: String, name: String, latitude: String, longitude: String, 
-         status: String, groupId: Int, area: String, transporter: String, 
-         location: String, lastUpdate: String) {
-        self.category = category
-        self.id = id
-        self.ip = ip
-        self.Id = Id
-        self.deviceId = deviceId
-        self.Name = Name
-        self.name = name
-        self.latitude = latitude
-        self.longitude = longitude
-        self.status = status
-        self.groupId = groupId
-        self.area = area
-        self.transporter = transporter
-        self.location = location
-        self.lastUpdate = lastUpdate
-    }
 }

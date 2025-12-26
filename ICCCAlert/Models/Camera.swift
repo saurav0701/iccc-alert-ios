@@ -49,6 +49,28 @@ struct Camera: Codable, Identifiable, Equatable {
         lastUpdate = try container.decodeIfPresent(String.self, forKey: .lastUpdate) ?? ""
     }
     
+    // ✅ NEW: Memberwise initializer for manual camera creation
+    init(category: String, id: String, ip: String, Id: Int, deviceId: Int,
+         Name: String, name: String, latitude: String, longitude: String,
+         status: String, groupId: Int, area: String, transporter: String,
+         location: String, lastUpdate: String) {
+        self.category = category
+        self.id = id
+        self.ip = ip
+        self.Id = Id
+        self.deviceId = deviceId
+        self.Name = Name
+        self.name = name
+        self.latitude = latitude
+        self.longitude = longitude
+        self.status = status
+        self.groupId = groupId
+        self.area = area
+        self.transporter = transporter
+        self.location = location
+        self.lastUpdate = lastUpdate
+    }
+    
     // Standard encoder
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -113,6 +135,69 @@ struct Camera: Codable, Identifiable, Equatable {
     
     static func == (lhs: Camera, rhs: Camera) -> Bool {
         return lhs.id == rhs.id
+    }
+}
+
+// MARK: - ✅ NEW: Camera Extension for Status Updates
+
+extension Camera {
+    /// Creates a new Camera instance with updated status
+    /// Used by CameraManager for efficient status-only updates
+    func withUpdatedStatus(_ newStatus: String) -> Camera {
+        return Camera(
+            category: self.category,
+            id: self.id,
+            ip: self.ip,
+            Id: self.Id,
+            deviceId: self.deviceId,
+            Name: self.Name,
+            name: self.name,
+            latitude: self.latitude,
+            longitude: self.longitude,
+            status: newStatus,  // ← Only this changes
+            groupId: self.groupId,
+            area: self.area,
+            transporter: self.transporter,
+            location: self.location,
+            lastUpdate: self.lastUpdate
+        )
+    }
+    
+    /// Creates a new Camera instance with all fields updated
+    /// Used for full camera updates
+    func updated(
+        category: String? = nil,
+        ip: String? = nil,
+        Id: Int? = nil,
+        deviceId: Int? = nil,
+        Name: String? = nil,
+        name: String? = nil,
+        latitude: String? = nil,
+        longitude: String? = nil,
+        status: String? = nil,
+        groupId: Int? = nil,
+        area: String? = nil,
+        transporter: String? = nil,
+        location: String? = nil,
+        lastUpdate: String? = nil
+    ) -> Camera {
+        return Camera(
+            category: category ?? self.category,
+            id: self.id, // ID never changes
+            ip: ip ?? self.ip,
+            Id: Id ?? self.Id,
+            deviceId: deviceId ?? self.deviceId,
+            Name: Name ?? self.Name,
+            name: name ?? self.name,
+            latitude: latitude ?? self.latitude,
+            longitude: longitude ?? self.longitude,
+            status: status ?? self.status,
+            groupId: groupId ?? self.groupId,
+            area: area ?? self.area,
+            transporter: transporter ?? self.transporter,
+            location: location ?? self.location,
+            lastUpdate: lastUpdate ?? self.lastUpdate
+        )
     }
 }
 
