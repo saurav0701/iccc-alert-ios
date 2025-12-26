@@ -1,7 +1,7 @@
 import SwiftUI
 import WebKit
 
-// MARK: - Stable WebView HLS Player (Prevents Deallocation)
+// MARK: - Fixed Stable WebView HLS Player
 struct WebViewHLSPlayer: UIViewRepresentable {
     let streamURL: String
     let cameraName: String
@@ -15,9 +15,7 @@ struct WebViewHLSPlayer: UIViewRepresentable {
         configuration.mediaTypesRequiringUserActionForPlayback = []
         configuration.allowsPictureInPictureMediaPlayback = false
         
-        // Prevent automatic resource limiting
-        configuration.suppressesIncrementalRendering = false
-        
+        // Enable JavaScript (no deprecation warning on iOS 14+)
         if #available(iOS 14.0, *) {
             configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         }
@@ -27,9 +25,6 @@ struct WebViewHLSPlayer: UIViewRepresentable {
         webView.scrollView.isScrollEnabled = false
         webView.isOpaque = false
         webView.backgroundColor = .black
-        
-        // CRITICAL: Keep strong reference to prevent deallocation
-        context.coordinator.webView = webView
         
         // Add message handlers
         webView.configuration.userContentController.add(context.coordinator, name: "streamReady")
@@ -55,9 +50,8 @@ struct WebViewHLSPlayer: UIViewRepresentable {
         let playsinlineAttr = "playsinline"
         let preloadAttr = "preload=\"auto\""
         
-        // Shorter timeouts for faster failure detection
-        let manifestTimeout = isFullscreen ? "10000" : "12000"
-        let fragTimeout = isFullscreen ? "20000" : "25000"
+        let manifestTimeout = isFullscreen ? "8000" : "15000"
+        let fragTimeout = isFullscreen ? "15000" : "30000"
         
         return """
         <!DOCTYPE html>
@@ -94,34 +88,67 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                 
                 let hls = null;
                 let retryCount = 0;
-                const maxRetries = 3;
+                const maxRetries = 5;
                 let isDestroyed = false;
-                let keepAliveTimer = null;
+                let playbackStallTimer = null;
+                let lastPlaybackTime = 0;
+                let stallCheckCount = 0;
                 
                 function log(msg) {
-                    if (isFullscreen) {
-                        console.log(msg);
-                        try {
-                            window.webkit.messageHandlers.streamLog.postMessage(msg);
-                        } catch(e) {}
-                    }
+                    console.log(msg);
+                    try {
+                        window.webkit.messageHandlers.streamLog.postMessage(msg);
+                    } catch(e) {}
                 }
                 
                 function cleanup() {
-                    if (keepAliveTimer) clearInterval(keepAliveTimer);
+                    if (playbackStallTimer) clearInterval(playbackStallTimer);
                     if (hls) {
+                        log('🧹 Cleaning up HLS instance');
                         try {
                             hls.destroy();
-                        } catch(e) {}
+                        } catch(e) {
+                            log('⚠️ Error destroying HLS: ' + e.message);
+                        }
                         hls = null;
                     }
+                }
+                
+                function startStallDetection() {
+                    if (playbackStallTimer) clearInterval(playbackStallTimer);
+                    const checkInterval = isFullscreen ? 5000 : 10000;
+                    
+                    playbackStallTimer = setInterval(() => {
+                        if (isDestroyed || !video || video.paused) return;
+                        
+                        const currentTime = video.currentTime;
+                        if (currentTime > 0 && currentTime === lastPlaybackTime) {
+                            stallCheckCount++;
+                            if (stallCheckCount >= 2) {
+                                log('⚠️ PLAYBACK STALLED! Attempting recovery...');
+                                if (hls) {
+                                    hls.stopLoad();
+                                    setTimeout(() => {
+                                        if (hls && !isDestroyed) {
+                                            hls.startLoad(-1);
+                                            video.play().catch(e => log('Stall recovery play failed: ' + e.message));
+                                        }
+                                    }, 500);
+                                }
+                                stallCheckCount = 0;
+                            }
+                        } else {
+                            stallCheckCount = 0;
+                        }
+                        lastPlaybackTime = currentTime;
+                    }, checkInterval);
                 }
                 
                 function initPlayer() {
                     if (isDestroyed) return;
                     cleanup();
                     
-                    log('🎬 Init: ' + videoSrc);
+                    log('🎬 Initializing player: ' + videoSrc);
                     
                     if (Hls.isSupported()) {
                         hls = new Hls({
@@ -129,74 +156,80 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                             enableWorker: true,
                             lowLatencyMode: false,
                             backBufferLength: 90,
-                            maxBufferLength: isFullscreen ? 30 : 15,
-                            maxMaxBufferLength: isFullscreen ? 60 : 30,
-                            maxBufferSize: 60 * 1000 * 1000,
+                            maxBufferLength: isFullscreen ? 40 : 20,
+                            maxMaxBufferLength: isFullscreen ? 80 : 40,
+                            maxBufferSize: 80 * 1000 * 1000,
                             maxBufferHole: 0.5,
-                            highBufferWatchdogPeriod: 2,
+                            highBufferWatchdogPeriod: 3,
                             nudgeOffset: 0.1,
-                            nudgeMaxRetry: 5,
+                            nudgeMaxRetry: 10,
                             maxFragLookUpTolerance: 0.25,
                             liveSyncDurationCount: 3,
-                            liveMaxLatencyDurationCount: 10,
+                            liveMaxLatencyDurationCount: isFullscreen ? 15 : 5,
+                            liveDurationInfinity: false,
                             startLevel: -1,
                             autoStartLoad: true,
                             capLevelToPlayerSize: !isFullscreen,
                             manifestLoadingTimeOut: parseInt('\(manifestTimeout)'),
-                            manifestLoadingMaxRetry: 4,
+                            manifestLoadingMaxRetry: 6,
                             manifestLoadingRetryDelay: 1000,
                             levelLoadingTimeOut: parseInt('\(manifestTimeout)'),
-                            levelLoadingMaxRetry: 4,
+                            levelLoadingMaxRetry: 6,
                             levelLoadingRetryDelay: 1000,
                             fragLoadingTimeOut: parseInt('\(fragTimeout)'),
-                            fragLoadingMaxRetry: 6,
+                            fragLoadingMaxRetry: 10,
                             fragLoadingRetryDelay: 1000,
                             startFragPrefetch: true,
+                            testBandwidth: true,
                         });
                         
-                        hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                        hls.on(Hls.Events.MANIFEST_PARSED, function(event, data) {
                             log('✅ Manifest parsed');
+                            startStallDetection();
                             
                             video.play()
                                 .then(() => {
                                     log('▶️ Playing');
                                     window.webkit.messageHandlers.streamReady.postMessage('ready');
                                     retryCount = 0;
-                                    startKeepAlive();
                                 })
                                 .catch(e => {
                                     log('⚠️ Play error: ' + e.message);
                                     if (retryCount < maxRetries) {
                                         retryCount++;
                                         setTimeout(() => {
-                                            video.play();
-                                        }, 1000);
+                                            video.play().catch(err => log('Retry failed: ' + err.message));
+                                        }, 1500);
+                                    } else {
+                                        window.webkit.messageHandlers.streamError.postMessage('Failed to start: ' + e.message);
                                     }
                                 });
                         });
                         
                         hls.on(Hls.Events.ERROR, function(event, data) {
-                            if (!data.fatal) return;
-                            
-                            log('❌ Fatal: ' + data.type);
-                            
-                            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                                if (retryCount < maxRetries) {
-                                    retryCount++;
-                                    setTimeout(() => {
-                                        if (hls && !isDestroyed) {
-                                            hls.startLoad(-1);
-                                        }
-                                    }, 2000);
-                                } else {
-                                    window.webkit.messageHandlers.streamError.postMessage('Network error');
-                                }
-                            } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-                                if (retryCount < maxRetries) {
-                                    retryCount++;
-                                    try {
+                            if (data.fatal) {
+                                log('❌ Fatal error: ' + data.type + ' - ' + data.details);
+                                
+                                if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                                    if (retryCount < maxRetries) {
+                                        retryCount++;
+                                        const delay = Math.min(1000 * retryCount, 5000);
+                                        setTimeout(() => {
+                                            if (hls && !isDestroyed) {
+                                                hls.startLoad(-1);
+                                                video.play().catch(e => log('Recovery failed: ' + e.message));
+                                            }
+                                        }, delay);
+                                    } else {
+                                        window.webkit.messageHandlers.streamError.postMessage('Network error');
+                                    }
+                                } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                                    if (retryCount < maxRetries) {
+                                        retryCount++;
                                         hls.recoverMediaError();
-                                    } catch(e) {}
+                                    } else {
+                                        window.webkit.messageHandlers.streamError.postMessage('Media error');
+                                    }
                                 }
                             }
                         });
@@ -205,57 +238,43 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                         hls.attachMedia(video);
                         
                     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                        log('🍎 Native HLS');
                         video.src = videoSrc;
                         video.addEventListener('loadedmetadata', function() {
                             video.play()
-                                .then(() => {
-                                    window.webkit.messageHandlers.streamReady.postMessage('ready');
-                                    startKeepAlive();
-                                })
+                                .then(() => window.webkit.messageHandlers.streamReady.postMessage('ready'))
                                 .catch(e => window.webkit.messageHandlers.streamError.postMessage('Play error'));
                         });
                         video.load();
                     }
                 }
                 
-                function startKeepAlive() {
-                    if (keepAliveTimer) clearInterval(keepAliveTimer);
-                    
-                    keepAliveTimer = setInterval(() => {
-                        if (isDestroyed) {
-                            clearInterval(keepAliveTimer);
-                            return;
-                        }
-                        
-                        // Auto-resume if paused unexpectedly
-                        if (video.paused && !video.ended && video.readyState >= 2) {
-                            log('⚠️ Auto-resuming');
-                            video.play().catch(e => {});
-                        }
-                    }, isFullscreen ? 3000 : 5000);
-                }
-                
-                initPlayer();
-                
-                // Prevent page unload
-                window.addEventListener('beforeunload', function(e) {
-                    if (!isDestroyed) {
-                        e.preventDefault();
-                        e.returnValue = '';
+                video.addEventListener('stalled', function() {
+                    if (hls && !isDestroyed) {
+                        setTimeout(() => {
+                            hls.stopLoad();
+                            setTimeout(() => { if (hls) hls.startLoad(-1); }, 500);
+                        }, 2000);
                     }
                 });
                 
-                // Cleanup on visibility change
-                document.addEventListener('visibilitychange', function() {
-                    if (document.hidden && !isFullscreen) {
-                        if (hls) hls.stopLoad();
-                    } else if (!document.hidden) {
-                        if (hls && !isDestroyed) {
-                            hls.startLoad(-1);
-                            setTimeout(() => video.play().catch(e => {}), 500);
-                        }
+                initPlayer();
+                
+                const keepAliveInterval = isFullscreen ? 2000 : 5000;
+                let keepAlive = setInterval(() => {
+                    if (isDestroyed) {
+                        clearInterval(keepAlive);
+                        return;
                     }
+                    if (video.paused && !video.ended && video.readyState >= 2) {
+                        video.play().catch(e => log('Resume failed'));
+                    }
+                }, keepAliveInterval);
+                
+                window.addEventListener('beforeunload', function() {
+                    isDestroyed = true;
+                    if (playbackStallTimer) clearInterval(playbackStallTimer);
+                    if (keepAlive) clearInterval(keepAlive);
+                    cleanup();
                 });
             </script>
         </body>
@@ -270,7 +289,6 @@ struct WebViewHLSPlayer: UIViewRepresentable {
     class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var parent: WebViewHLSPlayer
         var lastLoadedURL: String = ""
-        var webView: WKWebView? // Strong reference
         
         init(_ parent: WebViewHLSPlayer) {
             self.parent = parent
@@ -297,41 +315,30 @@ struct WebViewHLSPlayer: UIViewRepresentable {
         }
         
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            // Success
+            print("📄 WebView loaded for: \(parent.cameraName)")
         }
         
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            // Only report critical failures
-            if (error as NSError).code != NSURLErrorCancelled {
-                DispatchQueue.main.async {
-                    self.parent.errorMessage = "Load failed"
-                    self.parent.isLoading = false
-                }
-            }
-        }
-        
-        // CRITICAL: Prevent navigation away from our HTML
-        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-            // Only allow our initial load
-            if navigationAction.navigationType == .other {
-                decisionHandler(.allow)
-            } else {
-                decisionHandler(.cancel)
+            DispatchQueue.main.async {
+                self.parent.errorMessage = "Navigation failed"
+                self.parent.isLoading = false
             }
         }
     }
 }
 
-// MARK: - Camera Thumbnail (Lightweight)
+// MARK: - Camera Thumbnail (Grid Preview) - MEMORY SAFE
 struct CameraThumbnail: View {
     let camera: Camera
     @State private var isLoading = true
     @State private var errorMessage: String? = nil
     @State private var retryCount = 0
+    @State private var loadTimer: Timer? = nil
+    @State private var isActive = false
     
     var body: some View {
         ZStack {
-            if let streamURL = camera.streamURL, camera.isOnline {
+            if let streamURL = camera.streamURL, camera.isOnline, isActive {
                 WebViewHLSPlayer(
                     streamURL: streamURL,
                     cameraName: camera.displayName,
@@ -340,22 +347,44 @@ struct CameraThumbnail: View {
                     isFullscreen: false
                 )
                 .id("\(camera.id)-\(retryCount)")
+                .onAppear {
+                    isActive = true
+                    loadTimer = Timer.scheduledTimer(withTimeInterval: 8.0, repeats: false) { _ in
+                        if isLoading && errorMessage == nil {
+                            isLoading = false
+                        }
+                    }
+                }
+                .onDisappear {
+                    isActive = false
+                    loadTimer?.invalidate()
+                    loadTimer = nil
+                }
                 
                 if isLoading {
                     ZStack {
                         Color.black.opacity(0.7)
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        VStack(spacing: 8) {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            Text("Loading...")
+                                .font(.caption2)
+                                .foregroundColor(.white)
+                        }
                     }
                 }
                 
-                if let _ = errorMessage {
+                if let error = errorMessage {
                     ZStack {
                         Color.black.opacity(0.9)
                         VStack(spacing: 8) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .font(.system(size: 18))
                                 .foregroundColor(.orange)
+                            
+                            Text("Stream Error")
+                                .font(.caption2)
+                                .foregroundColor(.white)
                             
                             Button(action: {
                                 errorMessage = nil
@@ -392,13 +421,13 @@ struct CameraThumbnail: View {
                     Image(systemName: "video.slash.fill")
                         .font(.system(size: 24))
                         .foregroundColor(.gray)
-                    Text("Offline")
+                    Text(camera.isOnline ? "No Stream" : "Offline")
                         .font(.caption)
                         .foregroundColor(.gray)
                 }
             }
             
-            if camera.isOnline && !isLoading && errorMessage == nil {
+            if camera.isOnline && !isLoading && errorMessage == nil && isActive {
                 VStack {
                     HStack {
                         Spacer()
@@ -423,7 +452,7 @@ struct CameraThumbnail: View {
     }
 }
 
-// MARK: - Fullscreen HLS Player View (Stable)
+// MARK: - Fullscreen HLS Player View - SAFE VERSION
 struct HLSPlayerView: View {
     let camera: Camera
     @State private var isLoading = true
@@ -431,13 +460,14 @@ struct HLSPlayerView: View {
     @State private var retryCount = 0
     @State private var showControls = true
     @State private var autoHideTimer: Timer? = nil
+    @State private var isPlayerActive = false
     @Environment(\.presentationMode) var presentationMode
     
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             
-            if let streamURL = camera.streamURL {
+            if let streamURL = camera.streamURL, isPlayerActive {
                 WebViewHLSPlayer(
                     streamURL: streamURL,
                     cameraName: camera.displayName,
@@ -448,7 +478,7 @@ struct HLSPlayerView: View {
                 .id("fullscreen-\(camera.id)-\(retryCount)")
                 .ignoresSafeArea()
                 .onAppear {
-                    print("🎬 Fullscreen: \(camera.displayName)")
+                    isPlayerActive = true
                     autoHideTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
                         withAnimation {
                             showControls = false
@@ -456,8 +486,9 @@ struct HLSPlayerView: View {
                     }
                 }
                 .onDisappear {
+                    isPlayerActive = false
                     autoHideTimer?.invalidate()
-                    print("🚪 Closing: \(camera.displayName)")
+                    autoHideTimer = nil
                 }
                 .onTapGesture {
                     withAnimation {
@@ -509,6 +540,7 @@ struct HLSPlayerView: View {
                         Spacer()
                         
                         Button(action: {
+                            isPlayerActive = false
                             presentationMode.wrappedValue.dismiss()
                         }) {
                             Image(systemName: "xmark.circle.fill")
@@ -530,6 +562,12 @@ struct HLSPlayerView: View {
         }
         .navigationBarHidden(true)
         .statusBar(hidden: !showControls)
+        .onAppear {
+            isPlayerActive = true
+        }
+        .onDisappear {
+            isPlayerActive = false
+        }
     }
     
     private var loadingView: some View {
@@ -538,7 +576,7 @@ struct HLSPlayerView: View {
                 .scaleEffect(1.5)
                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
             
-            Text("Connecting...")
+            Text("Connecting to stream...")
                 .font(.headline)
                 .foregroundColor(.white)
             
@@ -569,21 +607,6 @@ struct HLSPlayerView: View {
             
             HStack(spacing: 16) {
                 Button(action: {
-                    presentationMode.wrappedValue.dismiss()
-                }) {
-                    HStack {
-                        Image(systemName: "xmark")
-                        Text("Close")
-                    }
-                    .font(.headline)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 12)
-                    .background(Color.red)
-                    .cornerRadius(10)
-                }
-                
-                Button(action: {
                     errorMessage = nil
                     isLoading = true
                     retryCount += 1
@@ -599,9 +622,362 @@ struct HLSPlayerView: View {
                     .background(Color.blue)
                     .cornerRadius(10)
                 }
+                
+                Button(action: {
+                    isPlayerActive = false
+                    presentationMode.wrappedValue.dismiss()
+                }) {
+                    HStack {
+                        Image(systemName: "xmark")
+                        Text("Close")
+                    }
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
+                    .background(Color.gray)
+                    .cornerRadius(10)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.opacity(0.8))
+    }
+}
+
+// MARK: - Area Cameras View - SAFE VERSION
+struct AreaCamerasView: View {
+    let area: String
+    @StateObject private var cameraManager = CameraManager.shared
+    
+    @State private var searchText = ""
+    @State private var showOnlineOnly = false
+    @State private var selectedCamera: Camera? = nil
+    @State private var gridLayout: GridLayout = .grid2x2
+    @State private var refreshID = UUID()
+    @State private var isNavigationActive = true
+    
+    enum GridLayout: String, CaseIterable, Identifiable {
+        case list = "List"
+        case grid2x2 = "2×2 Grid"
+        case grid3x3 = "3×3 Grid"
+        
+        var id: String { rawValue }
+        
+        var columns: Int {
+            switch self {
+            case .list: return 1
+            case .grid2x2: return 2
+            case .grid3x3: return 3
+            }
+        }
+        
+        var icon: String {
+            switch self {
+            case .list: return "list.bullet"
+            case .grid2x2: return "square.grid.2x2"
+            case .grid3x3: return "square.grid.3x3"
+            }
+        }
+    }
+    
+    var cameras: [Camera] {
+        guard isNavigationActive else { return [] }
+        
+        var result = cameraManager.getCameras(forArea: area)
+        
+        if showOnlineOnly {
+            result = result.filter { $0.isOnline }
+        }
+        
+        if !searchText.isEmpty {
+            result = result.filter { 
+                $0.displayName.localizedCaseInsensitiveContains(searchText) ||
+                $0.location.localizedCaseInsensitiveContains(searchText)
+            }
+        }
+        
+        return result.sorted { $0.displayName < $1.displayName }
+    }
+    
+    var onlineCount: Int {
+        cameras.filter { $0.isOnline }.count
+    }
+    
+    var totalCount: Int {
+        cameraManager.getCameras(forArea: area).count
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            statsBar
+            filterBar
+            
+            if cameras.isEmpty {
+                emptyView
+            } else {
+                cameraGridView
+            }
+        }
+        .navigationTitle(area)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Menu {
+                    Picker("Layout", selection: $gridLayout) {
+                        ForEach(GridLayout.allCases) { layout in
+                            Label(layout.rawValue, systemImage: layout.icon)
+                                .tag(layout)
+                        }
+                    }
+                } label: {
+                    Image(systemName: gridLayout.icon)
+                        .font(.system(size: 18))
+                }
+            }
+        }
+        .fullScreenCover(item: $selectedCamera) { camera in
+            HLSPlayerView(camera: camera)
+        }
+        .id(refreshID)
+        .onAppear {
+            isNavigationActive = true
+            DebugLogger.shared.log("📹 AreaCamerasView appeared for \(area)", emoji: "📹", color: .blue)
+            DebugLogger.shared.log("   Total cameras: \(totalCount)", emoji: "📊", color: .gray)
+            DebugLogger.shared.log("   Online: \(onlineCount)", emoji: "🟢", color: .green)
+        }
+        .onDisappear {
+            isNavigationActive = false
+            DebugLogger.shared.log("📹 AreaCamerasView disappeared for \(area)", emoji: "📹", color: .gray)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("CamerasUpdated"))) { _ in
+            guard isNavigationActive else { return }
+            DebugLogger.shared.log("🔄 AreaCamerasView: Cameras updated", emoji: "🔄", color: .blue)
+            refreshID = UUID()
+        }
+    }
+
+    private var statsBar: some View {
+        HStack {
+            HStack(spacing: 8) {
+                Image(systemName: "video.fill")
+                    .foregroundColor(.blue)
+                Text("\(cameras.count) \(cameras.count == 1 ? "camera" : "cameras")")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+            }
+            
+            Spacer()
+            
+            HStack(spacing: 12) {
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 8, height: 8)
+                    Text("\(onlineCount)")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(Color.gray)
+                        .frame(width: 8, height: 8)
+                    Text("\(totalCount - onlineCount)")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .padding()
+        .background(Color(.systemBackground))
+        .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 2)
+    }
+
+    private var filterBar: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.gray)
+                
+                TextField("Search cameras...", text: $searchText)
+                    .textFieldStyle(PlainTextFieldStyle())
+                    .autocapitalization(.none)
+                    .disableAutocorrection(true)
+                
+                if !searchText.isEmpty {
+                    Button(action: { searchText = "" }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.gray)
+                    }
+                }
+            }
+            .padding(12)
+            .background(Color(.systemGray6))
+            .cornerRadius(10)
+            .padding(.horizontal)
+
+            HStack {
+                Toggle(isOn: $showOnlineOnly) {
+                    HStack(spacing: 8) {
+                        Image(systemName: showOnlineOnly ? "checkmark.circle.fill" : "circle")
+                            .foregroundColor(showOnlineOnly ? .green : .gray)
+                        Text("Show Online Only")
+                            .font(.subheadline)
+                    }
+                }
+                .toggleStyle(SwitchToggleStyle(tint: .green))
+            }
+            .padding(.horizontal)
+        }
+        .padding(.vertical, 8)
+        .background(Color(.systemGroupedBackground))
+    }
+
+    private var cameraGridView: some View {
+        ScrollView {
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: gridLayout.columns),
+                spacing: 12
+            ) {
+                ForEach(cameras) { camera in
+                    CameraCard(camera: camera, layout: gridLayout)
+                        .onTapGesture {
+                            guard isNavigationActive else { return }
+                            
+                            if camera.isOnline {
+                                selectedCamera = camera
+                            } else {
+                                DebugLogger.shared.log("⚠️ Cannot play offline camera: \(camera.displayName)", emoji: "⚠️", color: .orange)
+                            }
+                        }
+                }
+            }
+            .padding()
+        }
+        .background(Color(.systemGroupedBackground))
+    }
+
+    private var emptyView: some View {
+        VStack(spacing: 20) {
+            Spacer()
+            
+            ZStack {
+                Circle()
+                    .fill(Color.gray.opacity(0.1))
+                    .frame(width: 100, height: 100)
+                
+                Image(systemName: searchText.isEmpty ? "video.slash" : "magnifyingglass")
+                    .font(.system(size: 50))
+                    .foregroundColor(.gray)
+            }
+            
+            Text(searchText.isEmpty ? "No Cameras" : "No Results")
+                .font(.title2)
+                .fontWeight(.bold)
+            
+            Text(searchText.isEmpty ? 
+                 (showOnlineOnly ? "No online cameras in this area" : "No cameras found in this area") :
+                 "No cameras match your search")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
+            
+            if !searchText.isEmpty || showOnlineOnly {
+                Button(action: {
+                    searchText = ""
+                    showOnlineOnly = false
+                }) {
+                    HStack {
+                        Image(systemName: "xmark.circle")
+                        Text("Clear Filters")
+                    }
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
+                    .background(Color.blue)
+                    .cornerRadius(10)
+                }
+            }
+            
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemGroupedBackground))
+    }
+}
+
+// MARK: - Camera Card - SAFE VERSION
+struct CameraCard: View {
+    let camera: Camera
+    let layout: AreaCamerasView.GridLayout
+    @State private var cardIsActive = true
+    
+    var cardHeight: CGFloat {
+        switch layout {
+        case .list: return 180
+        case .grid2x2: return 140
+        case .grid3x3: return 100
+        }
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if cardIsActive {
+                CameraThumbnail(camera: camera)
+                    .frame(height: cardHeight)
+                    .cornerRadius(12)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(camera.isOnline ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
+                    )
+            } else {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.2))
+                    .frame(height: cardHeight)
+                    .cornerRadius(12)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(camera.displayName)
+                    .font(layout == .list ? .body : (layout == .grid2x2 ? .caption : .caption2))
+                    .fontWeight(.medium)
+                    .lineLimit(layout == .grid3x3 ? 1 : 2)
+                    .foregroundColor(.primary)
+                
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(camera.isOnline ? Color.green : Color.gray)
+                        .frame(width: 6, height: 6)
+                    
+                    Text(camera.location.isEmpty ? camera.area : camera.location)
+                        .font(.system(size: layout == .grid3x3 ? 9 : 11))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .padding(layout == .grid3x3 ? 8 : 12)
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
+        .opacity(camera.isOnline ? 1 : 0.6)
+        .onAppear {
+            cardIsActive = true
+        }
+        .onDisappear {
+            cardIsActive = false
+        }
+    }
+}
+
+// MARK: - Preview Provider
+struct AreaCamerasView_Previews: PreviewProvider {
+    static var previews: some View {
+        NavigationView {
+            AreaCamerasView(area: "barora")
+        }
     }
 }
