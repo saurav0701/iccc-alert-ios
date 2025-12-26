@@ -10,6 +10,9 @@ struct AreaCamerasView: View {
     @State private var gridLayout: GridLayout = .grid2x2
     @State private var refreshID = UUID()
     
+    // Prevent memory issues
+    @Environment(\.scenePhase) private var scenePhase
+    
     enum GridLayout: String, CaseIterable, Identifiable {
         case list = "List"
         case grid2x2 = "2×2 Grid"
@@ -95,6 +98,16 @@ struct AreaCamerasView: View {
             DebugLogger.shared.log("📹 AreaCamerasView appeared for \(area)", emoji: "📹", color: .blue)
             DebugLogger.shared.log("   Total cameras: \(totalCount)", emoji: "📊", color: .gray)
             DebugLogger.shared.log("   Online: \(onlineCount)", emoji: "🟢", color: .green)
+        }
+        .onChange(of: scenePhase) { newPhase in
+            // Handle background/foreground transitions
+            if newPhase == .background {
+                DebugLogger.shared.log("📱 AreaCamerasView: App backgrounded", emoji: "📱", color: .gray)
+            } else if newPhase == .active {
+                DebugLogger.shared.log("📱 AreaCamerasView: App active", emoji: "📱", color: .green)
+                // Refresh on return
+                refreshID = UUID()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("CamerasUpdated"))) { _ in
             DebugLogger.shared.log("🔄 AreaCamerasView: Cameras updated", emoji: "🔄", color: .blue)
@@ -188,6 +201,7 @@ struct AreaCamerasView: View {
                         .onTapGesture {
                             if camera.isOnline {
                                 selectedCamera = camera
+                                DebugLogger.shared.log("🎬 Opening fullscreen: \(camera.displayName)", emoji: "🎬", color: .blue)
                             } else {
                                 DebugLogger.shared.log("⚠️ Cannot play offline camera: \(camera.displayName)", emoji: "⚠️", color: .orange)
                             }
