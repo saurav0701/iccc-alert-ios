@@ -174,29 +174,35 @@ struct AreaCamerasView: View {
     }
 
     private var cameraGridView: some View {
-        ScrollView {
-            LazyVGrid(
-                columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: gridLayout.columns),
-                spacing: 12
-            ) {
-                ForEach(cameras) { camera in
-                    // ✅ CRITICAL: Use camera.id as stable identifier
-                    CameraCard(camera: camera, layout: gridLayout)
-                        .id(camera.id) // ✅ Stable ID prevents recreation
-                        .equatable() // ✅ Only update when camera actually changes
-                        .onTapGesture {
-                            if camera.isOnline {
-                                selectedCamera = camera
-                            } else {
-                                DebugLogger.shared.log("⚠️ Cannot play offline camera: \(camera.displayName)", emoji: "⚠️", color: .orange)
-                            }
+    ScrollView {
+        LazyVGrid(
+            columns: Array(
+                repeating: GridItem(.flexible(), spacing: 12),
+                count: gridLayout.columns
+            ),
+            spacing: 12
+        ) {
+            ForEach(cameras) { camera in
+                CameraCard(camera: camera, layout: gridLayout)
+                    .id(camera.id) // Stable identity
+                    .onTapGesture {
+                        if camera.isOnline {
+                            selectedCamera = camera
+                        } else {
+                            DebugLogger.shared.log(
+                                "⚠️ Cannot play offline camera: \(camera.displayName)",
+                                emoji: "⚠️",
+                                color: .orange
+                            )
                         }
-                }
+                    }
             }
-            .padding()
         }
-        .background(Color(.systemGroupedBackground))
+        .padding()
     }
+    .background(Color(.systemGroupedBackground))
+}
+
 
     private var emptyView: some View {
         VStack(spacing: 20) {
