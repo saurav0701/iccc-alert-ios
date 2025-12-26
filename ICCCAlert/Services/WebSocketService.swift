@@ -32,9 +32,9 @@ class WebSocketService: ObservableObject {
     private var _droppedCount = 0
     private var _ackedCount = 0
     
-    // MARK: - Camera Update Throttling
-    private var lastCameraUpdate: TimeInterval = 0
-    private let cameraUpdateInterval: TimeInterval = 300 // 5 minutes
+    // REMOVED: Camera update throttling variables
+    // private var lastCameraUpdate: TimeInterval = 0
+    // private let cameraUpdateInterval: TimeInterval = 300
     
     private var receivedCount: Int {
         get {
@@ -376,21 +376,9 @@ class WebSocketService: ObservableObject {
         handleEvent(event)
     }
 
-    // MARK: - Handle Camera List Updates (with Throttling)
+    // MARK: - Handle Camera List Updates (NO THROTTLING - IMMEDIATE PROCESSING)
     
     private func handleCameraList(_ response: CameraListResponse) {
-        let now = Date().timeIntervalSince1970
-        
-        // Throttle camera updates - only process every 5 minutes
-        if lastCameraUpdate > 0 && (now - lastCameraUpdate) < cameraUpdateInterval {
-            let timeSinceLastUpdate = Int(now - lastCameraUpdate)
-            let timeUntilNext = Int(cameraUpdateInterval) - timeSinceLastUpdate
-            DebugLogger.shared.log("⏭️ Skipping camera update (last update \(timeSinceLastUpdate)s ago, next in \(timeUntilNext)s)", emoji: "⏭️", color: .gray)
-            return
-        }
-        
-        lastCameraUpdate = now
-        
         let onlineCount = response.cameras.filter { $0.isOnline }.count
         let areas = Set(response.cameras.map { $0.area })
         
@@ -414,12 +402,10 @@ class WebSocketService: ObservableObject {
         
         DebugLogger.shared.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", emoji: "📹", color: .blue)
         
-        // Update on main thread
+        // Update on main thread - NO THROTTLING, IMMEDIATE PROCESSING
         DispatchQueue.main.async {
             CameraManager.shared.updateCameras(response.cameras)
-            
             DebugLogger.shared.log("✅ CameraManager updated", emoji: "✅", color: .green)
-            DebugLogger.shared.log("   Next camera update in \(Int(self.cameraUpdateInterval))s", emoji: "⏰", color: .gray)
         }
     }
     
