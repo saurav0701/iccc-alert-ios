@@ -457,7 +457,7 @@ struct HLSPlayerViewEnhanced: View {
         VStack(spacing: 20) {
             ProgressView()
                 .scaleEffect(1.5)
-                .tint(.white)
+                .progressViewStyle(CircularProgressViewStyle(tint: .white))
             
             Text("Connecting to stream...")
                 .font(.headline)
