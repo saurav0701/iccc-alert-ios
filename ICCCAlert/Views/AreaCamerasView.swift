@@ -292,10 +292,3 @@ struct CameraCard: View {
         .opacity(camera.isOnline ? 1 : 0.6)
     }
 }
-
-// ✅ CRITICAL: Make Camera equatable by ID only to prevent unnecessary updates
-extension Camera {
-    static func == (lhs: Camera, rhs: Camera) -> Bool {
-        return lhs.id == rhs.id && lhs.status == rhs.status
-    }
-}
