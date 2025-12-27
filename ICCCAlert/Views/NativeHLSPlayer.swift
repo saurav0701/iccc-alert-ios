@@ -271,14 +271,14 @@ struct HLSWebViewPlayer: UIViewRepresentable {
                                     console.log('🌐 Network error detected');
                                     if (retryCount < maxRetries) {
                                         retryCount++;
-                                        console.log(\`🔄 Retry attempt \${retryCount}/\${maxRetries}\`);
+                                        console.log('🔄 Retry attempt ' + retryCount + '/' + maxRetries);
                                         setTimeout(() => {
                                             hls.startLoad();
                                         }, 1000 * retryCount); // Exponential backoff
                                     } else {
                                         handleError(
                                             'Network error',
-                                            \`Failed to load stream after \${maxRetries} attempts. Check your connection.\`
+                                            'Failed to load stream after ' + maxRetries + ' attempts. Check your connection.'
                                         );
                                     }
                                     break;
@@ -287,7 +287,7 @@ struct HLSWebViewPlayer: UIViewRepresentable {
                                     console.log('🎬 Media error detected');
                                     if (retryCount < maxRetries) {
                                         retryCount++;
-                                        console.log(\`🔄 Attempting media recovery \${retryCount}/\${maxRetries}\`);
+                                        console.log('🔄 Attempting media recovery ' + retryCount + '/' + maxRetries);
                                         hls.recoverMediaError();
                                     } else {
                                         handleError(
