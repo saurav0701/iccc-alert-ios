@@ -196,6 +196,17 @@ struct AreaCamerasView: View {
                                 )
                             }
                         }
+                        .contextMenu {
+                            Button(action: {
+                                selectedCamera = camera
+                            }) {
+                                Label("Open Stream", systemImage: "play.circle")
+                            }
+                            
+                            NavigationLink(destination: StreamDiagnosticView(camera: camera)) {
+                                Label("Run Diagnostics", systemImage: "stethoscope")
+                            }
+                        }
                 }
             }
             .padding()
