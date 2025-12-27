@@ -2,7 +2,7 @@ import SwiftUI
 import WebKit
 import AVFoundation
 
-// ✅ CRITICAL FIX: Unified WebView caching with proper lifecycle
+// ✅ OPTIMIZED: Conservative caching strategy
 class WebViewStore {
     static let shared = WebViewStore()
     
@@ -15,11 +15,10 @@ class WebViewStore {
     }
     
     private var cache: [String: CachedWebView] = [:]
-    private let cacheExpiration: TimeInterval = 600
-    private let maxCacheSize = 12
+    private let cacheExpiration: TimeInterval = 300 // 5 minutes
+    private let maxCacheSize = 6 // Reduced from 12
     private let lock = NSLock()
     
-    // ✅ Use cameraId as the ONLY key (no fullscreen/thumbnail distinction)
     func getWebView(for cameraId: String, streamURL: String) -> WKWebView? {
         lock.lock()
         defer { lock.unlock() }
@@ -126,7 +125,7 @@ class AudioSessionManager {
     }
 }
 
-// MARK: - WebView HLS Player (FIXED)
+// MARK: - WebView HLS Player (HEAVILY OPTIMIZED)
 struct WebViewHLSPlayer: UIViewRepresentable {
     let streamURL: String
     let cameraId: String
@@ -136,7 +135,6 @@ struct WebViewHLSPlayer: UIViewRepresentable {
     let isFullscreen: Bool
     
     func makeUIView(context: Context) -> WKWebView {
-        // ✅ Use cameraId as the ONLY cache key
         if let cached = WebViewStore.shared.getWebView(for: cameraId, streamURL: streamURL) {
             print("♻️ Reusing cached WebView for: \(cameraName)")
             cached.navigationDelegate = context.coordinator
@@ -149,6 +147,7 @@ struct WebViewHLSPlayer: UIViewRepresentable {
         configuration.mediaTypesRequiringUserActionForPlayback = []
         configuration.allowsPictureInPictureMediaPlayback = false
         
+        // ✅ Enable CORS and media playback
         if #available(iOS 14.0, *) {
             configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         }
@@ -180,13 +179,12 @@ struct WebViewHLSPlayer: UIViewRepresentable {
     }
     
     func updateUIView(_ webView: WKWebView, context: Context) {
-        // ✅ Only reload if URL changed AND sufficient time passed
         guard context.coordinator.lastLoadedURL != streamURL else {
             return
         }
         
         let now = Date().timeIntervalSince1970
-        if now - context.coordinator.lastLoadTime < 5.0 {
+        if now - context.coordinator.lastLoadTime < 3.0 {
             print("⚠️ Preventing rapid reload for: \(cameraName)")
             return
         }
@@ -210,11 +208,12 @@ struct WebViewHLSPlayer: UIViewRepresentable {
     }
     
     private func generateHTML() -> String {
+        // ✅ CRITICAL: Only autoplay in fullscreen, thumbnails are muted and paused
         let autoplayAttr = isFullscreen ? "autoplay" : ""
-        let mutedAttr = "muted"
+        let mutedAttr = "muted" // Always muted initially
         let controlsAttr = isFullscreen ? "controls" : ""
         let playsinlineAttr = "playsinline"
-        let preloadAttr = isFullscreen ? "preload=\"auto\"" : "preload=\"metadata\""
+        let preloadAttr = isFullscreen ? "preload=\"auto\"" : "preload=\"none\""
         
         return """
         <!DOCTYPE html>
@@ -239,26 +238,47 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                     object-fit: contain;
                     background: #000;
                 }
+                .error-overlay {
+                    position: absolute;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    color: #fff;
+                    text-align: center;
+                    background: rgba(0,0,0,0.8);
+                    padding: 20px;
+                    border-radius: 10px;
+                    display: none;
+                }
             </style>
         </head>
         <body>
             <video id="player" \(autoplayAttr) \(playsinlineAttr) \(mutedAttr) \(controlsAttr) \(preloadAttr)></video>
+            <div id="error" class="error-overlay"></div>
             <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
             <script>
                 const video = document.getElementById('player');
+                const errorDiv = document.getElementById('error');
                 const videoSrc = '\(streamURL)';
                 const isFullscreen = \(isFullscreen ? "true" : "false");
                 
                 let hls = null;
                 let retryCount = 0;
-                const maxRetries = 3;
+                const maxRetries = 5;
                 let isDestroyed = false;
+                let loadStartTime = Date.now();
                 
                 function log(msg) {
                     console.log(msg);
                     try {
                         window.webkit.messageHandlers.streamLog.postMessage(msg);
                     } catch(e) {}
+                }
+                
+                function showError(msg) {
+                    errorDiv.textContent = msg;
+                    errorDiv.style.display = 'block';
+                    window.webkit.messageHandlers.streamError.postMessage(msg);
                 }
                 
                 function cleanup() {
@@ -279,6 +299,7 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                     if (isDestroyed) return;
                     cleanup();
                     
+                    loadStartTime = Date.now();
                     log('🎬 Initializing player: ' + videoSrc);
                     
                     if (Hls.isSupported()) {
@@ -287,53 +308,70 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                             enableWorker: true,
                             lowLatencyMode: false,
                             
-                            // ✅ FIXED: More conservative buffering for thumbnails
-                            maxBufferLength: isFullscreen ? 30 : 15,
-                            maxMaxBufferLength: isFullscreen ? 60 : 30,
-                            maxBufferSize: 60 * 1000 * 1000,
+                            // ✅ OPTIMIZED: Much more conservative for thumbnails
+                            maxBufferLength: isFullscreen ? 30 : 10,
+                            maxMaxBufferLength: isFullscreen ? 60 : 20,
+                            maxBufferSize: 30 * 1000 * 1000, // 30MB max
                             maxBufferHole: 1.0,
-                            backBufferLength: isFullscreen ? 20 : 0,
+                            backBufferLength: isFullscreen ? 10 : 0,
                             
-                            // ✅ FIXED: Longer timeouts
-                            manifestLoadingTimeOut: 20000,
-                            manifestLoadingMaxRetry: 4,
-                            manifestLoadingRetryDelay: 1000,
+                            // ✅ CRITICAL: Much longer timeouts for slow connections
+                            manifestLoadingTimeOut: 30000, // 30 seconds
+                            manifestLoadingMaxRetry: 6,
+                            manifestLoadingRetryDelay: 2000,
                             
-                            levelLoadingTimeOut: 20000,
-                            levelLoadingMaxRetry: 4,
-                            levelLoadingRetryDelay: 1000,
+                            levelLoadingTimeOut: 30000,
+                            levelLoadingMaxRetry: 6,
+                            levelLoadingRetryDelay: 2000,
                             
-                            fragLoadingTimeOut: 20000,
-                            fragLoadingMaxRetry: 4,
-                            fragLoadingRetryDelay: 1000,
+                            fragLoadingTimeOut: 30000,
+                            fragLoadingMaxRetry: 6,
+                            fragLoadingRetryDelay: 2000,
                             
-                            startLevel: -1,
+                            // ✅ OPTIMIZED: Start with lowest quality for thumbnails
+                            startLevel: isFullscreen ? -1 : 0,
                             autoStartLoad: true,
                             capLevelToPlayerSize: !isFullscreen,
                             
                             liveSyncDurationCount: 3,
                             liveMaxLatencyDurationCount: 10,
                             
-                            startFragPrefetch: true,
-                            testBandwidth: true,
+                            startFragPrefetch: isFullscreen,
+                            testBandwidth: isFullscreen,
+                            
+                            // ✅ NEW: Enable CORS credentials
+                            xhrSetup: function(xhr, url) {
+                                xhr.withCredentials = false; // Try without credentials first
+                            }
                         });
+                        
+                        // ✅ CRITICAL: Timeout check
+                        const loadTimeout = setTimeout(() => {
+                            if (!hls || hls.media.readyState < 2) {
+                                log('⏱️ Load timeout after 45s');
+                                showError('Connection timeout - stream may be slow or unavailable');
+                            }
+                        }, 45000);
                         
                         hls.on(Hls.Events.ERROR, function(event, data) {
                             if (data.fatal) {
+                                clearTimeout(loadTimeout);
                                 log('❌ Fatal error: ' + data.type + ' - ' + data.details);
                                 
                                 switch(data.type) {
                                     case Hls.ErrorTypes.NETWORK_ERROR:
                                         if (retryCount < maxRetries) {
                                             retryCount++;
-                                            log('🔄 Network retry ' + retryCount + '/' + maxRetries);
+                                            const delay = Math.min(2000 * retryCount, 10000);
+                                            log('🔄 Network retry ' + retryCount + '/' + maxRetries + ' in ' + (delay/1000) + 's');
+                                            
                                             setTimeout(() => {
                                                 if (hls && !isDestroyed) {
                                                     hls.startLoad();
                                                 }
-                                            }, 2000 * retryCount);
+                                            }, delay);
                                         } else {
-                                            window.webkit.messageHandlers.streamError.postMessage('Network connection failed');
+                                            showError('Network error - please check connection');
                                         }
                                         break;
                                         
@@ -343,19 +381,29 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                                             log('🔄 Media retry ' + retryCount + '/' + maxRetries);
                                             hls.recoverMediaError();
                                         } else {
-                                            window.webkit.messageHandlers.streamError.postMessage('Media playback failed');
+                                            showError('Media playback failed');
                                         }
                                         break;
                                         
                                     default:
-                                        window.webkit.messageHandlers.streamError.postMessage('Stream failed: ' + data.details);
+                                        showError('Stream error: ' + data.details);
                                         break;
                                 }
+                            } else if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) {
+                                log('⚠️ Buffer stalled - network may be slow');
                             }
                         });
                         
                         hls.on(Hls.Events.MANIFEST_PARSED, function(event, data) {
-                            log('✅ Manifest parsed, levels: ' + data.levels.length);
+                            clearTimeout(loadTimeout);
+                            const loadTime = ((Date.now() - loadStartTime) / 1000).toFixed(1);
+                            log('✅ Manifest parsed in ' + loadTime + 's, levels: ' + data.levels.length);
+                            
+                            // Log available quality levels
+                            data.levels.forEach((level, i) => {
+                                log('   Level ' + i + ': ' + level.width + 'x' + level.height + ' @ ' + Math.round(level.bitrate/1000) + 'kbps');
+                            });
+                            
                             window.webkit.messageHandlers.streamReady.postMessage('ready');
                             retryCount = 0;
                             
@@ -366,36 +414,62 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                             }
                         });
                         
-                        // ✅ FIXED: Monitor stalls and buffer underruns
-                        hls.on(Hls.Events.BUFFER_APPENDING, function() {
-                            log('📦 Buffer appending');
-                        });
-                        
-                        hls.on(Hls.Events.BUFFER_EOS, function() {
-                            log('✅ Buffer end of stream');
+                        hls.on(Hls.Events.LEVEL_SWITCHED, function(event, data) {
+                            const level = hls.levels[data.level];
+                            log('🎥 Quality: ' + level.width + 'x' + level.height);
                         });
                         
                         hls.loadSource(videoSrc);
                         hls.attachMedia(video);
                         
                     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                        // Native HLS support (iOS Safari)
+                        log('📱 Using native HLS');
                         video.src = videoSrc;
+                        
+                        const nativeTimeout = setTimeout(() => {
+                            if (video.readyState < 2) {
+                                showError('Connection timeout');
+                            }
+                        }, 45000);
+                        
                         video.addEventListener('loadedmetadata', function() {
-                            log('✅ Native HLS loaded');
+                            clearTimeout(nativeTimeout);
+                            const loadTime = ((Date.now() - loadStartTime) / 1000).toFixed(1);
+                            log('✅ Native HLS loaded in ' + loadTime + 's');
                             window.webkit.messageHandlers.streamReady.postMessage('ready');
+                            
                             if (isFullscreen) {
                                 video.play().catch(e => 
-                                    window.webkit.messageHandlers.streamError.postMessage('Play error')
+                                    log('⚠️ Play error: ' + e.message)
                                 );
                             }
                         });
-                        video.addEventListener('error', function() {
-                            log('❌ Native HLS error');
-                            window.webkit.messageHandlers.streamError.postMessage('Stream error');
+                        
+                        video.addEventListener('error', function(e) {
+                            clearTimeout(nativeTimeout);
+                            log('❌ Native HLS error: ' + (video.error ? video.error.message : 'unknown'));
+                            showError('Stream unavailable');
                         });
+                        
                         video.load();
+                    } else {
+                        showError('HLS not supported on this device');
                     }
                 }
+                
+                // ✅ Monitor video health
+                video.addEventListener('waiting', function() {
+                    log('⏳ Buffering...');
+                });
+                
+                video.addEventListener('playing', function() {
+                    log('▶️ Playing smoothly');
+                });
+                
+                video.addEventListener('stalled', function() {
+                    log('⚠️ Stream stalled');
+                });
                 
                 initPlayer();
                 
@@ -454,275 +528,5 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                 print("❌ WebView navigation failed: \(error.localizedDescription)")
             }
         }
-    }
-}
-
-// MARK: - Camera Thumbnail (FIXED)
-struct CameraThumbnail: View {
-    let camera: Camera
-    @State private var isLoading = true
-    @State private var errorMessage: String? = nil
-    
-    // ✅ CRITICAL: Stable identifier based on camera ID only
-    private var viewId: String {
-        "thumbnail_\(camera.id)"
-    }
-    
-    var body: some View {
-        ZStack {
-            if let streamURL = camera.streamURL, camera.isOnline {
-                WebViewHLSPlayer(
-                    streamURL: streamURL,
-                    cameraId: camera.id,
-                    cameraName: camera.displayName,
-                    isLoading: $isLoading,
-                    errorMessage: $errorMessage,
-                    isFullscreen: false
-                )
-                .id(viewId)
-                
-                if isLoading {
-                    ZStack {
-                        Color.black.opacity(0.7)
-                        VStack(spacing: 8) {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            Text("Loading...")
-                                .font(.caption2)
-                                .foregroundColor(.white)
-                        }
-                    }
-                }
-                
-                if let error = errorMessage {
-                    ZStack {
-                        Color.black.opacity(0.9)
-                        VStack(spacing: 8) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.system(size: 18))
-                                .foregroundColor(.orange)
-                            
-                            Text("Stream Error")
-                                .font(.caption2)
-                                .foregroundColor(.white)
-                            
-                            Text(error)
-                                .font(.system(size: 10))
-                                .foregroundColor(.white.opacity(0.7))
-                                .lineLimit(2)
-                                .padding(.horizontal, 4)
-                        }
-                        .padding(8)
-                    }
-                }
-            } else {
-                LinearGradient(
-                    gradient: Gradient(colors: [
-                        Color.gray.opacity(0.3),
-                        Color.gray.opacity(0.1)
-                    ]),
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                
-                VStack(spacing: 8) {
-                    Image(systemName: "video.slash.fill")
-                        .font(.system(size: 24))
-                        .foregroundColor(.gray)
-                    Text("Offline")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                }
-            }
-            
-            if camera.isOnline && !isLoading && errorMessage == nil {
-                VStack {
-                    HStack {
-                        Spacer()
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(Color.red)
-                                .frame(width: 6, height: 6)
-                            Text("LIVE")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundColor(.white)
-                        }
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(Color.black.opacity(0.7))
-                        .cornerRadius(4)
-                        .padding(6)
-                    }
-                    Spacer()
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Fullscreen HLS Player View (FIXED)
-struct HLSPlayerView: View {
-    let camera: Camera
-    @State private var isLoading = true
-    @State private var errorMessage: String? = nil
-    @State private var showControls = true
-    @State private var autoHideTimer: Timer? = nil
-    @Environment(\.presentationMode) var presentationMode
-    
-    var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            
-            if let streamURL = camera.streamURL {
-                WebViewHLSPlayer(
-                    streamURL: streamURL,
-                    cameraId: camera.id,
-                    cameraName: camera.displayName,
-                    isLoading: $isLoading,
-                    errorMessage: $errorMessage,
-                    isFullscreen: true
-                )
-                .ignoresSafeArea()
-                .onAppear {
-                    AudioSessionManager.shared.configure()
-                    resetAutoHideTimer()
-                }
-                .onDisappear {
-                    autoHideTimer?.invalidate()
-                }
-                .onTapGesture {
-                    withAnimation {
-                        showControls.toggle()
-                    }
-                    resetAutoHideTimer()
-                }
-            } else {
-                errorView("Stream URL not available")
-            }
-            
-            if isLoading {
-                loadingView
-            }
-            
-            if showControls {
-                controlsOverlay
-            }
-            
-            if let error = errorMessage {
-                errorView(error)
-            }
-        }
-        .navigationBarHidden(true)
-        .statusBar(hidden: !showControls)
-    }
-    
-    private func resetAutoHideTimer() {
-        autoHideTimer?.invalidate()
-        if showControls {
-            // ✅ FIXED: Increased to 5 seconds to avoid interference
-            autoHideTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
-                withAnimation {
-                    showControls = false
-                }
-            }
-        }
-    }
-    
-    private var controlsOverlay: some View {
-        VStack {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(camera.displayName)
-                        .font(.headline)
-                        .foregroundColor(.white)
-                    
-                    HStack(spacing: 8) {
-                        Text(camera.area)
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.8))
-                        
-                        Circle()
-                            .fill(camera.isOnline ? Color.green : Color.red)
-                            .frame(width: 8, height: 8)
-                        
-                        Text(camera.isOnline ? "Live" : "Offline")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.8))
-                    }
-                }
-                .padding()
-                .background(Color.black.opacity(0.7))
-                .cornerRadius(10)
-                
-                Spacer()
-                
-                Button(action: {
-                    presentationMode.wrappedValue.dismiss()
-                }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 32))
-                        .foregroundColor(.white)
-                        .padding()
-                }
-            }
-            .padding()
-            .transition(.move(edge: .top))
-            
-            Spacer()
-        }
-    }
-    
-    private var loadingView: some View {
-        VStack(spacing: 20) {
-            ProgressView()
-                .scaleEffect(1.5)
-                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-            
-            Text("Connecting to stream...")
-                .font(.headline)
-                .foregroundColor(.white)
-            
-            Text(camera.displayName)
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.7))
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black.opacity(0.8))
-    }
-    
-    private func errorView(_ message: String) -> some View {
-        VStack(spacing: 20) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 60))
-                .foregroundColor(.orange)
-            
-            Text("Stream Error")
-                .font(.title2)
-                .fontWeight(.bold)
-                .foregroundColor(.white)
-            
-            Text(message)
-                .font(.body)
-                .foregroundColor(.white.opacity(0.8))
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-            
-            Button(action: {
-                presentationMode.wrappedValue.dismiss()
-            }) {
-                HStack {
-                    Image(systemName: "arrow.left")
-                    Text("Go Back")
-                }
-                .font(.headline)
-                .foregroundColor(.white)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 12)
-                .background(Color.blue)
-                .cornerRadius(10)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black.opacity(0.8))
     }
 }

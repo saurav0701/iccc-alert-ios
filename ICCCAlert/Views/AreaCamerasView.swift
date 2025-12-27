@@ -6,14 +6,14 @@ struct AreaCamerasView: View {
     
     @State private var searchText = ""
     @State private var showOnlineOnly = false
-    @State private var gridLayout: GridLayout = .grid2x2
+    @State private var gridLayout: GridLayout = .grid2x2 // ✅ Start with 2x2 for better performance
     
     @Binding var selectedCamera: Camera?
     
     enum GridLayout: String, CaseIterable, Identifiable {
         case list = "List"
         case grid2x2 = "2×2 Grid"
-        case grid3x3 = "3×3 Grid"
+        case grid3x3 = "3×3 Grid" // ⚠️ Use sparingly - can be resource intensive
         
         var id: String { rawValue }
         
@@ -91,10 +91,17 @@ struct AreaCamerasView: View {
             DebugLogger.shared.log("📹 AreaCamerasView appeared for \(area)", emoji: "📹", color: .blue)
         }
         .onDisappear {
-            // Clean up inactive WebViews when leaving area view
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+            // ✅ Clean up inactive WebViews when leaving area view
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                 WebViewStore.shared.clearInactive()
             }
+        }
+        .alert(isPresented: .constant(gridLayout == .grid3x3 && cameras.count > 12)) {
+            Alert(
+                title: Text("Performance Warning"),
+                message: Text("3×3 grid with many cameras may impact performance. Consider using 2×2 grid or showing online cameras only."),
+                dismissButton: .default(Text("OK"))
+            )
         }
     }
 
@@ -166,6 +173,13 @@ struct AreaCamerasView: View {
                     }
                 }
                 .toggleStyle(SwitchToggleStyle(tint: .green))
+                
+                Spacer()
+                
+                // ✅ NEW: Quick info about current view
+                Text("\(cameras.count) visible")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
             .padding(.horizontal)
         }
@@ -175,6 +189,7 @@ struct AreaCamerasView: View {
 
     private var cameraGridView: some View {
         ScrollView {
+            // ✅ OPTIMIZED: Use LazyVGrid for better performance with many items
             LazyVGrid(
                 columns: Array(
                     repeating: GridItem(.flexible(), spacing: 12),
@@ -182,13 +197,16 @@ struct AreaCamerasView: View {
                 ),
                 spacing: 12
             ) {
-                // ✅ FIXED: Use camera.id as stable identifier
                 ForEach(cameras, id: \.id) { camera in
                     CameraCard(camera: camera, layout: gridLayout)
                         .onTapGesture {
                             if camera.isOnline {
                                 selectedCamera = camera
                             } else {
+                                // ✅ Show alert for offline cameras
+                                let generator = UINotificationFeedbackGenerator()
+                                generator.notificationOccurred(.warning)
+                                
                                 DebugLogger.shared.log(
                                     "⚠️ Cannot play offline camera: \(camera.displayName)",
                                     emoji: "⚠️",
