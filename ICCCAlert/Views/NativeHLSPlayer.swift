@@ -11,13 +11,6 @@ class PlayerManager: ObservableObject {
     
     private init() {}
     
-    func getWebView(for cameraId: String) -> WKWebView? {
-        lock.lock()
-        defer { lock.unlock() }
-        
-        return activeWebViews[cameraId]
-    }
-    
     func registerWebView(_ webView: WKWebView, for cameraId: String) {
         lock.lock()
         defer { lock.unlock() }
@@ -55,7 +48,7 @@ class PlayerManager: ObservableObject {
     }
 }
 
-// MARK: - HLS WebView Player (Using hls.js for better format support)
+// MARK: - Enhanced WebView Player with hls.js
 struct HLSWebViewPlayer: UIViewRepresentable {
     let streamURL: String
     let cameraId: String
@@ -67,22 +60,17 @@ struct HLSWebViewPlayer: UIViewRepresentable {
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
-        
-        // Enable better video handling
-        if #available(iOS 14.5, *) {
-            config.preferences.isTextInteractionEnabled = false
-        }
+        config.allowsPictureInPictureMediaPlayback = false
         
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.scrollView.isScrollEnabled = false
+        webView.scrollView.bounces = false
         webView.backgroundColor = .black
         webView.isOpaque = false
         webView.navigationDelegate = context.coordinator
         
-        // Register this webView
         PlayerManager.shared.registerWebView(webView, for: cameraId)
         
-        // Load the HLS player
         loadPlayer(in: webView)
         
         return webView
@@ -95,6 +83,7 @@ struct HLSWebViewPlayer: UIViewRepresentable {
     }
     
     private func loadPlayer(in webView: WKWebView) {
+        // Using hls.js CDN version for better codec support
         let html = """
         <!DOCTYPE html>
         <html>
@@ -105,16 +94,18 @@ struct HLSWebViewPlayer: UIViewRepresentable {
                     margin: 0;
                     padding: 0;
                     box-sizing: border-box;
+                    -webkit-user-select: none;
+                    -webkit-touch-callout: none;
                 }
-                body {
-                    background: #000;
-                    overflow: hidden;
-                    width: 100vw;
-                    height: 100vh;
-                }
-                #videoContainer {
+                html, body {
                     width: 100%;
                     height: 100%;
+                    overflow: hidden;
+                    background: #000;
+                }
+                #container {
+                    width: 100vw;
+                    height: 100vh;
                     position: relative;
                     display: flex;
                     align-items: center;
@@ -126,26 +117,17 @@ struct HLSWebViewPlayer: UIViewRepresentable {
                     object-fit: contain;
                     background: #000;
                 }
-                #loading {
+                #loading, #error {
                     position: absolute;
                     top: 50%;
                     left: 50%;
                     transform: translate(-50%, -50%);
                     color: white;
-                    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-                    text-align: center;
-                    display: none;
-                }
-                #error {
-                    position: absolute;
-                    top: 50%;
-                    left: 50%;
-                    transform: translate(-50%, -50%);
-                    color: white;
-                    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                    font-family: -apple-system, sans-serif;
                     text-align: center;
                     padding: 20px;
                     display: none;
+                    z-index: 10;
                 }
                 .spinner {
                     border: 3px solid rgba(255,255,255,0.3);
@@ -163,11 +145,11 @@ struct HLSWebViewPlayer: UIViewRepresentable {
             </style>
         </head>
         <body>
-            <div id="videoContainer">
-                <video id="video" playsinline webkit-playsinline muted autoplay></video>
+            <div id="container">
+                <video id="video" playsinline webkit-playsinline muted></video>
                 <div id="loading">
                     <div class="spinner"></div>
-                    <div>Loading stream...</div>
+                    <div>Loading...</div>
                 </div>
                 <div id="error">
                     <div style="font-size: 40px; margin-bottom: 10px;">⚠️</div>
@@ -175,142 +157,208 @@ struct HLSWebViewPlayer: UIViewRepresentable {
                 </div>
             </div>
             
+            <script src="https://cdn.jsdelivr.net/npm/hls.js@1.4.12"></script>
             <script>
                 const video = document.getElementById('video');
                 const loading = document.getElementById('loading');
                 const errorDiv = document.getElementById('error');
                 const errorText = document.getElementById('errorText');
                 const streamUrl = '\(streamURL)';
-                let retryCount = 0;
-                let retryTimer = null;
                 
-                // Show loading
+                let hls = null;
+                let retryCount = 0;
+                let maxRetries = 3;
+                let retryTimer = null;
+                let playAttempts = 0;
+                
                 loading.style.display = 'block';
                 
-                // Try native HLS first (Safari supports it)
-                function playStream() {
-                    console.log('Attempting to play:', streamUrl);
+                function initPlayer() {
+                    console.log('🎬 Initializing player for:', streamUrl);
                     
-                    if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                        console.log('Using native HLS');
-                        video.src = streamUrl;
-                        video.load();
-                        
-                        video.play().then(() => {
-                            console.log('Playback started');
-                            loading.style.display = 'none';
-                            errorDiv.style.display = 'none';
-                        }).catch(e => {
-                            console.error('Play error:', e);
-                            handleError('Cannot play stream: ' + e.message);
-                        });
+                    // Check if hls.js is supported
+                    if (Hls.isSupported()) {
+                        console.log('✅ hls.js supported - using it');
+                        useHlsJs();
+                    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                        console.log('✅ Native HLS supported - using native');
+                        useNativeHls();
                     } else {
-                        handleError('HLS not supported');
+                        handleError('HLS not supported on this device');
                     }
                 }
                 
-                // Video event listeners
-                video.addEventListener('loadstart', () => {
-                    console.log('Load start');
+                function useHlsJs() {
+                    if (hls) {
+                        hls.destroy();
+                    }
+                    
+                    hls = new Hls({
+                        debug: false,
+                        enableWorker: true,
+                        lowLatencyMode: false,
+                        backBufferLength: 30,
+                        maxBufferLength: 30,
+                        maxMaxBufferLength: 60,
+                        maxBufferSize: 60 * 1000 * 1000,
+                        maxBufferHole: 0.5,
+                        highBufferWatchdogPeriod: 2,
+                        nudgeOffset: 0.1,
+                        nudgeMaxRetry: 5,
+                        maxFragLookUpTolerance: 0.25,
+                        liveSyncDurationCount: 3,
+                        liveMaxLatencyDurationCount: 10,
+                        liveDurationInfinity: true,
+                        manifestLoadingTimeOut: 10000,
+                        manifestLoadingMaxRetry: 3,
+                        manifestLoadingRetryDelay: 1000,
+                        levelLoadingTimeOut: 10000,
+                        levelLoadingMaxRetry: 4,
+                        levelLoadingRetryDelay: 1000,
+                        fragLoadingTimeOut: 20000,
+                        fragLoadingMaxRetry: 6,
+                        fragLoadingRetryDelay: 1000,
+                        startFragPrefetch: true,
+                        xhrSetup: function(xhr, url) {
+                            xhr.setRequestHeader('Cache-Control', 'no-cache');
+                        }
+                    });
+                    
+                    hls.loadSource(streamUrl);
+                    hls.attachMedia(video);
+                    
+                    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                        console.log('📋 Manifest parsed');
+                        loading.style.display = 'none';
+                        
+                        video.play().then(() => {
+                            console.log('▶️ Playing');
+                            errorDiv.style.display = 'none';
+                            retryCount = 0;
+                        }).catch(e => {
+                            console.error('Play failed:', e);
+                            if (playAttempts < 3) {
+                                playAttempts++;
+                                setTimeout(() => video.play(), 500);
+                            } else {
+                                handleError('Cannot start playback');
+                            }
+                        });
+                    });
+                    
+                    hls.on(Hls.Events.ERROR, (event, data) => {
+                        console.error('❌ HLS Error:', data.type, data.details, data.fatal);
+                        
+                        if (data.fatal) {
+                            switch(data.type) {
+                                case Hls.ErrorTypes.NETWORK_ERROR:
+                                    console.log('Network error - attempting recovery');
+                                    if (retryCount < maxRetries) {
+                                        retryCount++;
+                                        setTimeout(() => {
+                                            hls.startLoad();
+                                        }, 1000);
+                                    } else {
+                                        handleError('Network error - stream unavailable');
+                                    }
+                                    break;
+                                    
+                                case Hls.ErrorTypes.MEDIA_ERROR:
+                                    console.log('Media error - attempting recovery');
+                                    if (retryCount < maxRetries) {
+                                        retryCount++;
+                                        hls.recoverMediaError();
+                                    } else {
+                                        // Try native HLS as fallback
+                                        console.log('Switching to native HLS');
+                                        useNativeHls();
+                                    }
+                                    break;
+                                    
+                                default:
+                                    handleError('Fatal error: ' + data.details);
+                                    break;
+                            }
+                        }
+                    });
+                    
+                    hls.on(Hls.Events.FRAG_LOADED, () => {
+                        loading.style.display = 'none';
+                    });
+                }
+                
+                function useNativeHls() {
+                    console.log('Using native HLS playback');
+                    
+                    if (hls) {
+                        hls.destroy();
+                        hls = null;
+                    }
+                    
+                    video.src = streamUrl;
+                    video.load();
+                    
+                    video.addEventListener('loadeddata', () => {
+                        loading.style.display = 'none';
+                        video.play().catch(e => {
+                            console.error('Native play failed:', e);
+                            handleError('Cannot play stream');
+                        });
+                    });
+                    
+                    video.addEventListener('error', (e) => {
+                        console.error('Native video error:', video.error);
+                        
+                        let msg = 'Stream error';
+                        if (video.error) {
+                            switch(video.error.code) {
+                                case 1: msg = 'Loading aborted'; break;
+                                case 2: msg = 'Network error'; break;
+                                case 3: msg = 'Decode error - format not supported'; break;
+                                case 4: msg = 'Stream not found'; break;
+                            }
+                        }
+                        
+                        handleError(msg);
+                    });
+                }
+                
+                // Video event handlers
+                video.addEventListener('waiting', () => {
+                    console.log('⏳ Buffering');
                     loading.style.display = 'block';
-                });
-                
-                video.addEventListener('loadedmetadata', () => {
-                    console.log('Metadata loaded');
-                });
-                
-                video.addEventListener('loadeddata', () => {
-                    console.log('Data loaded');
-                    loading.style.display = 'none';
-                });
-                
-                video.addEventListener('canplay', () => {
-                    console.log('Can play');
-                    loading.style.display = 'none';
                 });
                 
                 video.addEventListener('playing', () => {
-                    console.log('Playing');
+                    console.log('▶️ Playing');
                     loading.style.display = 'none';
                     errorDiv.style.display = 'none';
-                    retryCount = 0;
-                });
-                
-                video.addEventListener('waiting', () => {
-                    console.log('Waiting/Buffering');
-                    loading.style.display = 'block';
                 });
                 
                 video.addEventListener('stalled', () => {
-                    console.log('Stalled');
-                    if (retryCount < 3) {
-                        retryCount++;
-                        console.log('Retry attempt', retryCount);
-                        setTimeout(() => {
-                            video.load();
-                            video.play();
-                        }, 1000);
-                    }
-                });
-                
-                video.addEventListener('error', (e) => {
-                    console.error('Video error:', video.error);
-                    let msg = 'Stream error';
-                    
-                    if (video.error) {
-                        switch(video.error.code) {
-                            case 1: msg = 'Loading aborted'; break;
-                            case 2: msg = 'Network error'; break;
-                            case 3: msg = 'Decode error - format not supported'; break;
-                            case 4: msg = 'Stream not found'; break;
-                        }
-                    }
-                    
-                    handleError(msg);
+                    console.log('⚠️ Stalled');
                 });
                 
                 video.addEventListener('suspend', () => {
-                    console.log('Download suspended');
-                });
-                
-                video.addEventListener('abort', () => {
-                    console.log('Loading aborted');
+                    console.log('⏸️ Suspended');
                 });
                 
                 function handleError(msg) {
-                    console.error('Error:', msg);
+                    console.error('💥 Final error:', msg);
                     loading.style.display = 'none';
                     errorDiv.style.display = 'block';
                     errorText.textContent = msg;
-                    
-                    // Auto-retry after 3 seconds
-                    if (retryCount < 2) {
-                        retryTimer = setTimeout(() => {
-                            retryCount++;
-                            errorDiv.style.display = 'none';
-                            playStream();
-                        }, 3000);
-                    }
                 }
-                
-                // Prevent sleep/screen lock during playback
-                let wakeLock = null;
-                if ('wakeLock' in navigator) {
-                    navigator.wakeLock.request('screen').then(lock => {
-                        wakeLock = lock;
-                    }).catch(() => {});
-                }
-                
-                // Start playback
-                playStream();
                 
                 // Cleanup
                 window.addEventListener('pagehide', () => {
-                    if (wakeLock) wakeLock.release();
-                    if (retryTimer) clearTimeout(retryTimer);
+                    if (hls) hls.destroy();
                     video.pause();
                     video.src = '';
                 });
+                
+                // Start
+                initPlayer();
             </script>
         </body>
         </html>
@@ -328,18 +376,10 @@ struct HLSWebViewPlayer: UIViewRepresentable {
         
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             print("✅ WebView loaded for: \(parent.cameraId)")
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                self.parent.isLoading = false
-            }
         }
         
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             print("❌ WebView failed: \(error.localizedDescription)")
-            DispatchQueue.main.async {
-                self.parent.errorMessage = "Failed to load player"
-                self.parent.isLoading = false
-            }
         }
     }
 }
@@ -472,11 +512,8 @@ struct HLSPlayerView: View {
                     errorMessage: $errorMessage
                 )
                 .ignoresSafeArea()
-            } else {
-                errorView("No stream URL")
             }
             
-            // Header with close button
             VStack {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
@@ -514,66 +551,11 @@ struct HLSPlayerView: View {
                 
                 Spacer()
             }
-            
-            if isLoading {
-                loadingView
-            }
         }
         .navigationBarHidden(true)
         .statusBarHidden(true)
         .onDisappear {
             PlayerManager.shared.releaseWebView(camera.id)
         }
-    }
-    
-    private var loadingView: some View {
-        VStack(spacing: 20) {
-            ProgressView()
-                .scaleEffect(1.5)
-                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-            
-            Text("Loading stream...")
-                .font(.headline)
-                .foregroundColor(.white)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black.opacity(0.7))
-    }
-    
-    private func errorView(_ message: String) -> some View {
-        VStack(spacing: 24) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 60))
-                .foregroundColor(.orange)
-            
-            Text("Stream Unavailable")
-                .font(.title2)
-                .fontWeight(.bold)
-                .foregroundColor(.white)
-            
-            Text(message)
-                .font(.body)
-                .foregroundColor(.white.opacity(0.9))
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
-            
-            Button(action: {
-                PlayerManager.shared.releaseWebView(camera.id)
-                presentationMode.wrappedValue.dismiss()
-            }) {
-                HStack {
-                    Image(systemName: "arrow.left")
-                    Text("Back")
-                }
-                .font(.headline)
-                .foregroundColor(.white)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 12)
-                .background(Color.gray)
-                .cornerRadius(10)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black.opacity(0.9))
     }
 }
