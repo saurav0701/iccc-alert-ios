@@ -2,16 +2,13 @@ import SwiftUI
 import AVKit
 import AVFoundation
 
-// ✅ COMPLETE REWRITE: Use native AVPlayer instead of WebView
-// This is MUCH more stable and efficient for HLS streams
-
-// MARK: - Player Manager (Singleton for resource management)
 class PlayerManager: ObservableObject {
     static let shared = PlayerManager()
     
     private var players: [String: AVPlayer] = [:]
+    private var playerItems: [String: AVPlayerItem] = [:]
     private let lock = NSLock()
-    private let maxPlayers = 4 // Only allow 4 concurrent players
+    private let maxPlayers = 4 
     
     private init() {
         setupAudioSession()
@@ -35,23 +32,45 @@ class PlayerManager: ObservableObject {
             print("♻️ Reusing player for: \(cameraId)")
             return existing
         }
-        
-        // Clean up if we have too many players
+   
         if players.count >= maxPlayers {
             let oldestKey = players.keys.first!
             if let oldPlayer = players.removeValue(forKey: oldestKey) {
                 oldPlayer.pause()
                 oldPlayer.replaceCurrentItem(with: nil)
+                playerItems.removeValue(forKey: oldestKey)
                 print("🗑️ Removed old player: \(oldestKey)")
             }
         }
         
-        let player = AVPlayer(url: url)
+        // Create player item with proper configuration for HLS
+        let asset = AVURLAsset(url: url, options: [
+            AVURLAssetHTTPHeaderFieldsKey: [
+                "User-Agent": "ICCCAlert/1.0",
+                "Accept": "*/*"
+            ],
+            AVURLAssetPreferPreciseDurationAndTimingKey: false
+        ])
+        
+        let playerItem = AVPlayerItem(asset: asset)
+        
+        // Configure player item for better HLS streaming
+        playerItem.preferredForwardBufferDuration = 5.0
+        if #available(iOS 14.0, *) {
+            playerItem.startsOnFirstEligibleVariant = true
+        }
+        
+        let player = AVPlayer(playerItem: playerItem)
         player.automaticallyWaitsToMinimizeStalling = true
         player.allowsExternalPlayback = false
         
+        // Store both player and item
         players[cameraId] = player
+        playerItems[cameraId] = playerItem
+        
         print("🆕 Created new player for: \(cameraId)")
+        print("   URL: \(url.absoluteString)")
+        
         return player
     }
     
@@ -63,6 +82,7 @@ class PlayerManager: ObservableObject {
             player.pause()
             player.replaceCurrentItem(with: nil)
             players.removeValue(forKey: cameraId)
+            playerItems.removeValue(forKey: cameraId)
             print("📤 Released player: \(cameraId)")
         }
     }
@@ -83,6 +103,7 @@ class PlayerManager: ObservableObject {
             player.replaceCurrentItem(with: nil)
         }
         players.removeAll()
+        playerItems.removeAll()
         print("🧹 Cleared all players")
     }
 }
@@ -104,6 +125,15 @@ struct NativeVideoPlayer: UIViewControllerRepresentable {
         guard let url = URL(string: streamURL) else {
             DispatchQueue.main.async {
                 self.errorMessage = "Invalid stream URL"
+                self.isLoading = false
+            }
+            return controller
+        }
+        
+        // Validate URL scheme
+        if url.scheme != "https" && url.scheme != "http" {
+            DispatchQueue.main.async {
+                self.errorMessage = "Invalid URL scheme. Only HTTP/HTTPS supported."
                 self.isLoading = false
             }
             return controller
@@ -157,6 +187,8 @@ struct NativeVideoPlayer: UIViewControllerRepresentable {
         private var statusObserver: NSKeyValueObservation?
         private var timeControlObserver: NSKeyValueObservation?
         private var errorObserver: NSKeyValueObservation?
+        private var accessLogObserver: Any?
+        private var errorLogObserver: Any?
         
         init(_ parent: NativeVideoPlayer) {
             self.parent = parent
@@ -165,8 +197,10 @@ struct NativeVideoPlayer: UIViewControllerRepresentable {
         func setupObservers(for player: AVPlayer) {
             cleanup()
             
+            guard let playerItem = player.currentItem else { return }
+            
             // Observe status
-            statusObserver = player.currentItem?.observe(\.status, options: [.new]) { [weak self] item, _ in
+            statusObserver = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
                 guard let self = self else { return }
                 
                 DispatchQueue.main.async {
@@ -178,8 +212,11 @@ struct NativeVideoPlayer: UIViewControllerRepresentable {
                         
                     case .failed:
                         print("❌ Player failed: \(self.parent.cameraId)")
-                        let error = item.error?.localizedDescription ?? "Unknown error"
-                        self.parent.errorMessage = error
+                        if let error = item.error {
+                            self.handlePlaybackError(error)
+                        } else {
+                            self.parent.errorMessage = "Unknown playback error"
+                        }
                         self.parent.isLoading = false
                         
                     case .unknown:
@@ -207,6 +244,9 @@ struct NativeVideoPlayer: UIViewControllerRepresentable {
                         
                     case .waitingToPlayAtSpecifiedRate:
                         print("⏳ Buffering: \(self.parent.cameraId)")
+                        if let reason = player.reasonForWaitingToPlay {
+                            print("   Reason: \(reason.rawValue)")
+                        }
                         self.parent.isLoading = true
                         
                     @unknown default:
@@ -216,24 +256,104 @@ struct NativeVideoPlayer: UIViewControllerRepresentable {
             }
             
             // Observe errors
-            errorObserver = player.currentItem?.observe(\.error, options: [.new]) { [weak self] item, _ in
+            errorObserver = playerItem.observe(\.error, options: [.new]) { [weak self] item, _ in
                 guard let self = self, let error = item.error else { return }
                 
                 DispatchQueue.main.async {
-                    print("❌ Playback error: \(error.localizedDescription)")
-                    self.parent.errorMessage = error.localizedDescription
+                    self.handlePlaybackError(error)
                     self.parent.isLoading = false
                 }
             }
+            
+            // Observe access log for detailed debugging
+            accessLogObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemNewAccessLogEntry,
+                object: playerItem,
+                queue: .main
+            ) { [weak self] _ in
+                if let accessLog = playerItem.accessLog(),
+                   let lastEvent = accessLog.events.last {
+                    print("📊 Access Log for \(self?.parent.cameraId ?? "unknown"):")
+                    print("   URI: \(lastEvent.uri ?? "N/A")")
+                    print("   Server Address: \(lastEvent.serverAddress ?? "N/A")")
+                    print("   Playback Type: \(lastEvent.playbackType ?? "N/A")")
+                    if let errorLog = playerItem.errorLog() {
+                        print("⚠️ Error log has \(errorLog.events.count) events")
+                    }
+                }
+            }
+            
+            // Observe error log
+            errorLogObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemNewErrorLogEntry,
+                object: playerItem,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self = self else { return }
+                if let errorLog = playerItem.errorLog(),
+                   let lastEvent = errorLog.events.last {
+                    print("❌ Error Log for \(self.parent.cameraId):")
+                    print("   Error: \(lastEvent.errorComment ?? "N/A")")
+                    print("   Status Code: \(lastEvent.errorStatusCode)")
+                    print("   Domain: \(lastEvent.errorDomain ?? "N/A")")
+                    
+                    DispatchQueue.main.async {
+                        if lastEvent.errorStatusCode == -12938 {
+                            self.parent.errorMessage = "Connection failed. Check stream URL and network."
+                        } else {
+                            self.parent.errorMessage = lastEvent.errorComment ?? "Stream error (\(lastEvent.errorStatusCode))"
+                        }
+                    }
+                }
+            }
+        }
+        
+        private func handlePlaybackError(_ error: Error) {
+            let nsError = error as NSError
+            print("❌ Playback error details:")
+            print("   Domain: \(nsError.domain)")
+            print("   Code: \(nsError.code)")
+            print("   Description: \(nsError.localizedDescription)")
+            
+            // Provide user-friendly error messages
+            let userMessage: String
+            switch nsError.code {
+            case -1100: // kCFURLErrorFileDoesNotExist
+                userMessage = "Stream not found. Camera may be offline."
+            case -1001: // kCFURLErrorTimedOut
+                userMessage = "Connection timed out. Check your network."
+            case -1009: // kCFURLErrorNotConnectedToInternet
+                userMessage = "No internet connection."
+            case -1200: // kCFURLErrorSecureConnectionFailed
+                userMessage = "Secure connection failed. Stream may use HTTP."
+            case -12938: // CoreMedia error
+                userMessage = "Cannot load stream. Format may not be supported."
+            case -11800: // AVFoundation error
+                userMessage = "Playback failed. Stream format issue."
+            default:
+                userMessage = "Stream error: \(nsError.localizedDescription)"
+            }
+            
+            parent.errorMessage = userMessage
         }
         
         func cleanup() {
             statusObserver?.invalidate()
             timeControlObserver?.invalidate()
             errorObserver?.invalidate()
+            
+            if let observer = accessLogObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            if let observer = errorLogObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            
             statusObserver = nil
             timeControlObserver = nil
             errorObserver = nil
+            accessLogObserver = nil
+            errorLogObserver = nil
         }
         
         deinit {
@@ -264,6 +384,7 @@ struct CameraThumbnail: View {
                         )
                         .onAppear {
                             print("📹 Thumbnail appeared: \(camera.displayName)")
+                            print("   Stream URL: \(streamURL)")
                         }
                         .onDisappear {
                             print("📤 Thumbnail disappeared: \(camera.displayName)")
@@ -338,7 +459,7 @@ struct CameraThumbnail: View {
             VStack(spacing: 8) {
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                Text("Loading...")
+                Text("Loading stream...")
                     .font(.caption2)
                     .foregroundColor(.white)
             }
@@ -358,10 +479,10 @@ struct CameraThumbnail: View {
                     .fontWeight(.semibold)
                     .foregroundColor(.white)
                 
-                Text(error.prefix(50))
+                Text(error)
                     .font(.system(size: 9))
                     .foregroundColor(.white.opacity(0.7))
-                    .lineLimit(2)
+                    .lineLimit(3)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 4)
                 
@@ -454,6 +575,11 @@ struct HLSPlayerView: View {
                     errorMessage: $errorMessage
                 )
                 .ignoresSafeArea()
+                .onAppear {
+                    print("🎬 Fullscreen player appeared")
+                    print("   Camera: \(camera.displayName)")
+                    print("   Stream URL: \(streamURL)")
+                }
             } else {
                 errorView("Stream URL not available")
             }
@@ -517,7 +643,7 @@ struct HLSPlayerView: View {
                 .scaleEffect(1.5)
                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
             
-            Text("Connecting...")
+            Text("Connecting to stream...")
                 .font(.headline)
                 .foregroundColor(.white)
             
@@ -545,6 +671,14 @@ struct HLSPlayerView: View {
                 .foregroundColor(.white.opacity(0.8))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
+            
+            if let streamURL = camera.streamURL {
+                Text("URL: \(streamURL)")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.5))
+                    .padding(.horizontal)
+                    .lineLimit(2)
+            }
             
             HStack(spacing: 16) {
                 Button(action: {

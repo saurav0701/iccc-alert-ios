@@ -21,7 +21,6 @@
     <key>LSRequiresIPhoneOS</key>
     <true/>
 
-    <!-- ✅ Added notification settings -->
     <key>UIUserNotificationSettings</key>
     <dict>
         <key>UIUserNotificationTypesAlert</key>
@@ -68,7 +67,7 @@
         <string>processing</string>
     </array>
 
-     <key>UIFileSharingEnabled</key>
+    <key>UIFileSharingEnabled</key>
     <true/>
     <key>LSSupportsOpeningDocumentsInPlace</key>
     <true/>
@@ -76,13 +75,112 @@
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
 
+    <!-- ✅ CRITICAL: Allow ALL insecure HTTP loads for video streaming -->
     <key>NSAppTransportSecurity</key>
     <dict>
+        <!-- Allow all HTTP connections -->
         <key>NSAllowsArbitraryLoads</key>
         <true/>
+        
+        <!-- Specifically allow media streams over HTTP -->
+        <key>NSAllowsArbitraryLoadsInMedia</key>
+        <true/>
+        
+        <!-- Allow web content over HTTP -->
+        <key>NSAllowsArbitraryLoadsInWebContent</key>
+        <true/>
+        
+        <!-- Exception domains for your specific servers -->
         <key>NSExceptionDomains</key>
         <dict>
+            <!-- Your WebSocket server -->
             <key>192.168.29.69</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+                <key>NSIncludesSubdomains</key>
+                <true/>
+            </dict>
+            
+            <!-- Video stream servers -->
+            <key>103.208.173.131</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+                <key>NSIncludesSubdomains</key>
+                <true/>
+            </dict>
+            <key>103.208.173.147</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+                <key>NSIncludesSubdomains</key>
+                <true/>
+            </dict>
+            <key>103.208.173.163</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+                <key>NSIncludesSubdomains</key>
+                <true/>
+            </dict>
+            <key>103.208.173.195</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+                <key>NSIncludesSubdomains</key>
+                <true/>
+            </dict>
+            <key>103.208.173.179</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+                <key>NSIncludesSubdomains</key>
+                <true/>
+            </dict>
+            <key>103.208.173.211</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+                <key>NSIncludesSubdomains</key>
+                <true/>
+            </dict>
+            <key>103.210.88.195</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+                <key>NSIncludesSubdomains</key>
+                <true/>
+            </dict>
+            <key>103.210.88.211</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+                <key>NSIncludesSubdomains</key>
+                <true/>
+            </dict>
+            <key>a5va.bccliccc.in</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+                <key>NSIncludesSubdomains</key>
+                <true/>
+            </dict>
+            <key>a6va.bccliccc.in</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+                <key>NSIncludesSubdomains</key>
+                <true/>
+            </dict>
+            <key>a9va.bccliccc.in</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+                <key>NSIncludesSubdomains</key>
+                <true/>
+            </dict>
+            <key>a10va.bccliccc.in</key>
             <dict>
                 <key>NSExceptionAllowsInsecureHTTPLoads</key>
                 <true/>
