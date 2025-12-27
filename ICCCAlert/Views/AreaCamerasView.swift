@@ -254,7 +254,6 @@ struct AreaCamerasView: View {
     }
 }
 
-// MARK: - CameraCard (FIXED - Removed Equatable)
 struct CameraCard: View {
     let camera: Camera
     let layout: AreaCamerasView.GridLayout
@@ -269,7 +268,6 @@ struct CameraCard: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // ✅ FIXED: Camera thumbnail with proper ID handling
             CameraThumbnail(camera: camera)
                 .frame(height: cardHeight)
                 .cornerRadius(12)
