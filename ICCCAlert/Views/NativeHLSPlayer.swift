@@ -8,10 +8,11 @@ class PlayerManager: ObservableObject {
     private var players: [String: AVPlayer] = [:]
     private var playerItems: [String: AVPlayerItem] = [:]
     private let lock = NSLock()
-    private let maxPlayers = 4 
+    private let maxPlayers = 3  // Reduced from 4 for better memory management
     
     private init() {
         setupAudioSession()
+        setupNotifications()
     }
     
     private func setupAudioSession() {
@@ -22,6 +23,31 @@ class PlayerManager: ObservableObject {
         } catch {
             print("❌ Audio session setup failed: \(error)")
         }
+    }
+    
+    private func setupNotifications() {
+        // Monitor for stalls
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(playerItemDidPlayToEnd(_:)),
+            name: .AVPlayerItemDidPlayToEndTime,
+            object: nil
+        )
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(playerItemFailedToPlayToEnd(_:)),
+            name: .AVPlayerItemFailedToPlayToEndTime,
+            object: nil
+        )
+    }
+    
+    @objc private func playerItemDidPlayToEnd(_ notification: Notification) {
+        print("📹 Player reached end")
+    }
+    
+    @objc private func playerItemFailedToPlayToEnd(_ notification: Notification) {
+        print("❌ Player failed to play to end")
     }
     
     func getPlayer(for cameraId: String, url: URL) -> AVPlayer {
@@ -43,26 +69,33 @@ class PlayerManager: ObservableObject {
             }
         }
         
-        // Create player item with proper configuration for HLS
+        // Create player item with aggressive buffering settings
         let asset = AVURLAsset(url: url, options: [
             "AVURLAssetHTTPHeaderFieldsKey": [
                 "User-Agent": "ICCCAlert/1.0",
-                "Accept": "*/*"
+                "Accept": "*/*",
+                "Connection": "keep-alive"
             ],
             AVURLAssetPreferPreciseDurationAndTimingKey: false
         ])
         
         let playerItem = AVPlayerItem(asset: asset)
         
-        // Configure player item for better HLS streaming
-        playerItem.preferredForwardBufferDuration = 5.0
+        // Configure for better streaming - CRITICAL for preventing stalls
+        playerItem.preferredForwardBufferDuration = 10.0  // Increased buffer
+        playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        
         if #available(iOS 14.0, *) {
             playerItem.startsOnFirstEligibleVariant = true
         }
         
+        // Create player with optimal settings
         let player = AVPlayer(playerItem: playerItem)
         player.automaticallyWaitsToMinimizeStalling = true
         player.allowsExternalPlayback = false
+        
+        // CRITICAL: Set rate to prevent immediate playback issues
+        player.actionAtItemEnd = .pause
         
         // Store both player and item
         players[cameraId] = player
@@ -80,6 +113,7 @@ class PlayerManager: ObservableObject {
         
         if let player = players[cameraId] {
             player.pause()
+            player.rate = 0
             player.replaceCurrentItem(with: nil)
             players.removeValue(forKey: cameraId)
             playerItems.removeValue(forKey: cameraId)
@@ -91,7 +125,10 @@ class PlayerManager: ObservableObject {
         lock.lock()
         defer { lock.unlock() }
         
-        players[cameraId]?.pause()
+        if let player = players[cameraId] {
+            player.pause()
+            player.rate = 0
+        }
     }
     
     func clearAll() {
@@ -100,11 +137,16 @@ class PlayerManager: ObservableObject {
         
         players.values.forEach { player in
             player.pause()
+            player.rate = 0
             player.replaceCurrentItem(with: nil)
         }
         players.removeAll()
         playerItems.removeAll()
         print("🧹 Cleared all players")
+    }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 }
 
@@ -145,9 +187,9 @@ struct NativeVideoPlayer: UIViewControllerRepresentable {
         // Add observer for player status
         context.coordinator.setupObservers(for: player)
         
-        // Auto-play for fullscreen only
+        // Auto-play for fullscreen with delay
         if isFullscreen {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 player.play()
             }
         }
@@ -170,7 +212,9 @@ struct NativeVideoPlayer: UIViewControllerRepresentable {
         context.coordinator.setupObservers(for: player)
         
         if isFullscreen {
-            player.play()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                player.play()
+            }
         }
     }
     
@@ -187,8 +231,12 @@ struct NativeVideoPlayer: UIViewControllerRepresentable {
         private var statusObserver: NSKeyValueObservation?
         private var timeControlObserver: NSKeyValueObservation?
         private var errorObserver: NSKeyValueObservation?
-        private var accessLogObserver: Any?
-        private var errorLogObserver: Any?
+        private var bufferEmptyObserver: NSKeyValueObservation?
+        private var bufferFullObserver: NSKeyValueObservation?
+        private var stalledObserver: Any?
+        private var failedObserver: Any?
+        private var retryTimer: Timer?
+        private var stallCount = 0
         
         init(_ parent: NativeVideoPlayer) {
             self.parent = parent
@@ -200,7 +248,7 @@ struct NativeVideoPlayer: UIViewControllerRepresentable {
             guard let playerItem = player.currentItem else { return }
             
             // Observe status
-            statusObserver = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
+            statusObserver = playerItem.observe(\.status, options: [.new, .old]) { [weak self] item, change in
                 guard let self = self else { return }
                 
                 DispatchQueue.main.async {
@@ -209,6 +257,7 @@ struct NativeVideoPlayer: UIViewControllerRepresentable {
                         print("✅ Player ready: \(self.parent.cameraId)")
                         self.parent.isLoading = false
                         self.parent.errorMessage = nil
+                        self.stallCount = 0
                         
                     case .failed:
                         print("❌ Player failed: \(self.parent.cameraId)")
@@ -230,7 +279,7 @@ struct NativeVideoPlayer: UIViewControllerRepresentable {
             }
             
             // Observe playback state
-            timeControlObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
+            timeControlObserver = player.observe(\.timeControlStatus, options: [.new, .old]) { [weak self] player, change in
                 guard let self = self else { return }
                 
                 DispatchQueue.main.async {
@@ -238,6 +287,7 @@ struct NativeVideoPlayer: UIViewControllerRepresentable {
                     case .playing:
                         print("▶️ Playing: \(self.parent.cameraId)")
                         self.parent.isLoading = false
+                        self.stallCount = 0
                         
                     case .paused:
                         print("⏸️ Paused: \(self.parent.cameraId)")
@@ -249,8 +299,39 @@ struct NativeVideoPlayer: UIViewControllerRepresentable {
                         }
                         self.parent.isLoading = true
                         
+                        // Handle stalling
+                        self.stallCount += 1
+                        if self.stallCount > 5 {
+                            print("⚠️ Too many stalls, attempting recovery...")
+                            self.handleStall(player: player)
+                        }
+                        
                     @unknown default:
                         break
+                    }
+                }
+            }
+            
+            // Observe buffer empty (causes stalling)
+            bufferEmptyObserver = playerItem.observe(\.isPlaybackBufferEmpty, options: [.new]) { [weak self] item, _ in
+                guard let self = self else { return }
+                
+                if item.isPlaybackBufferEmpty {
+                    print("🔴 Buffer empty for: \(self.parent.cameraId)")
+                    DispatchQueue.main.async {
+                        self.parent.isLoading = true
+                    }
+                }
+            }
+            
+            // Observe buffer full (ready to play)
+            bufferFullObserver = playerItem.observe(\.isPlaybackBufferFull, options: [.new]) { [weak self] item, _ in
+                guard let self = self else { return }
+                
+                if item.isPlaybackBufferFull {
+                    print("🟢 Buffer full for: \(self.parent.cameraId)")
+                    DispatchQueue.main.async {
+                        self.parent.isLoading = false
                     }
                 }
             }
@@ -265,44 +346,47 @@ struct NativeVideoPlayer: UIViewControllerRepresentable {
                 }
             }
             
-            // Observe access log for detailed debugging
-            accessLogObserver = NotificationCenter.default.addObserver(
-                forName: .AVPlayerItemNewAccessLogEntry,
-                object: playerItem,
-                queue: .main
-            ) { [weak self] _ in
-                if let accessLog = playerItem.accessLog(),
-                   let lastEvent = accessLog.events.last {
-                    print("📊 Access Log for \(self?.parent.cameraId ?? "unknown"):")
-                    print("   URI: \(lastEvent.uri ?? "N/A")")
-                    print("   Server Address: \(lastEvent.serverAddress ?? "N/A")")
-                    print("   Playback Type: \(lastEvent.playbackType ?? "N/A")")
-                    if let errorLog = playerItem.errorLog() {
-                        print("⚠️ Error log has \(errorLog.events.count) events")
-                    }
-                }
-            }
-            
-            // Observe error log
-            errorLogObserver = NotificationCenter.default.addObserver(
-                forName: .AVPlayerItemNewErrorLogEntry,
+            // Observe playback stalled
+            stalledObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemPlaybackStalled,
                 object: playerItem,
                 queue: .main
             ) { [weak self] _ in
                 guard let self = self else { return }
-                if let errorLog = playerItem.errorLog(),
-                   let lastEvent = errorLog.events.last {
-                    print("❌ Error Log for \(self.parent.cameraId):")
-                    print("   Error: \(lastEvent.errorComment ?? "N/A")")
-                    print("   Status Code: \(lastEvent.errorStatusCode)")
-                    print("   Domain: \(lastEvent.errorDomain)")
-                    
-                    DispatchQueue.main.async {
-                        if lastEvent.errorStatusCode == -12938 {
-                            self.parent.errorMessage = "Connection failed. Check stream URL and network."
-                        } else {
-                            self.parent.errorMessage = lastEvent.errorComment ?? "Stream error (\(lastEvent.errorStatusCode))"
-                        }
+                print("⚠️ Playback stalled for: \(self.parent.cameraId)")
+                
+                self.stallCount += 1
+                if self.stallCount > 3 {
+                    print("🔄 Attempting to recover from stall...")
+                    self.handleStall(player: player)
+                }
+            }
+            
+            // Observe failed to play to end
+            failedObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemFailedToPlayToEndTime,
+                object: playerItem,
+                queue: .main
+            ) { [weak self] notification in
+                guard let self = self else { return }
+                print("❌ Failed to play to end: \(self.parent.cameraId)")
+                
+                if let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error {
+                    self.handlePlaybackError(error)
+                }
+            }
+        }
+        
+        private func handleStall(player: AVPlayer) {
+            // Attempt recovery by seeking slightly forward
+            let currentTime = player.currentTime()
+            let seekTime = CMTimeAdd(currentTime, CMTime(seconds: 0.1, preferredTimescale: 600))
+            
+            player.seek(to: seekTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                if finished {
+                    print("✅ Seek completed, attempting to resume playback")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        player.play()
                     }
                 }
             }
@@ -325,35 +409,43 @@ struct NativeVideoPlayer: UIViewControllerRepresentable {
             case -1009: // kCFURLErrorNotConnectedToInternet
                 userMessage = "No internet connection."
             case -1200: // kCFURLErrorSecureConnectionFailed
-                userMessage = "Secure connection failed. Stream may use HTTP."
+                userMessage = "Secure connection failed."
             case -12938: // CoreMedia error
                 userMessage = "Cannot load stream. Format may not be supported."
             case -11800: // AVFoundation error
-                userMessage = "Playback failed. Stream format issue."
+                userMessage = "Stream error. Try again."
             default:
-                userMessage = "Stream error: \(nsError.localizedDescription)"
+                userMessage = "Stream error (\(nsError.code))"
             }
             
             parent.errorMessage = userMessage
         }
         
         func cleanup() {
+            retryTimer?.invalidate()
+            retryTimer = nil
+            
             statusObserver?.invalidate()
             timeControlObserver?.invalidate()
             errorObserver?.invalidate()
+            bufferEmptyObserver?.invalidate()
+            bufferFullObserver?.invalidate()
             
-            if let observer = accessLogObserver {
+            if let observer = stalledObserver {
                 NotificationCenter.default.removeObserver(observer)
             }
-            if let observer = errorLogObserver {
+            if let observer = failedObserver {
                 NotificationCenter.default.removeObserver(observer)
             }
             
             statusObserver = nil
             timeControlObserver = nil
             errorObserver = nil
-            accessLogObserver = nil
-            errorLogObserver = nil
+            bufferEmptyObserver = nil
+            bufferFullObserver = nil
+            stalledObserver = nil
+            failedObserver = nil
+            stallCount = 0
         }
         
         deinit {
@@ -384,7 +476,6 @@ struct CameraThumbnail: View {
                         )
                         .onAppear {
                             print("📹 Thumbnail appeared: \(camera.displayName)")
-                            print("   Stream URL: \(streamURL)")
                         }
                         .onDisappear {
                             print("📤 Thumbnail disappeared: \(camera.displayName)")
@@ -421,6 +512,7 @@ struct CameraThumbnail: View {
                     }
                 } else if !isInView && isVisible {
                     isVisible = false
+                    shouldLoad = false
                     // Pause when scrolled out of view
                     PlayerManager.shared.pausePlayer(camera.id)
                 }
@@ -685,6 +777,12 @@ struct HLSPlayerView: View {
                     errorMessage = nil
                     isLoading = true
                     PlayerManager.shared.releasePlayer(camera.id)
+                    
+                    // Wait before retrying
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        // Trigger reload
+                        self.isLoading = true
+                    }
                 }) {
                     HStack {
                         Image(systemName: "arrow.clockwise")
