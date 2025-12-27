@@ -1,244 +1,345 @@
 import SwiftUI
-import AVKit
-import AVFoundation
+import WebKit
 
-// MARK: - Player Manager with Better Format Handling
+// MARK: - Player Manager
 class PlayerManager: ObservableObject {
     static let shared = PlayerManager()
     
-    private var players: [String: AVPlayer] = [:]
+    private var activeWebViews: [String: WKWebView] = [:]
     private let lock = NSLock()
     private let maxPlayers = 2
     
-    private init() {
-        setupAudioSession()
-    }
+    private init() {}
     
-    private func setupAudioSession() {
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers, .allowAirPlay])
-            try session.setActive(true)
-        } catch {
-            print("❌ Audio session setup failed: \(error)")
-        }
-    }
-    
-    func getPlayer(for cameraId: String, url: URL) -> AVPlayer {
+    func getWebView(for cameraId: String) -> WKWebView? {
         lock.lock()
         defer { lock.unlock() }
         
-        if let existing = players[cameraId] {
-            print("♻️ Reusing player for: \(cameraId)")
-            return existing
-        }
-   
-        if players.count >= maxPlayers {
-            let oldestKey = players.keys.first!
-            releasePlayerInternal(oldestKey)
-        }
+        return activeWebViews[cameraId]
+    }
+    
+    func registerWebView(_ webView: WKWebView, for cameraId: String) {
+        lock.lock()
+        defer { lock.unlock() }
         
-        // Use minimal options to let AVFoundation handle format detection
-        let asset = AVURLAsset(url: url)
-        
-        // Load asset properties asynchronously
-        asset.loadValuesAsynchronously(forKeys: ["playable", "tracks"]) {
-            var error: NSError?
-            let status = asset.statusOfValue(forKey: "playable", error: &error)
-            
-            if status == .loaded {
-                print("✅ Asset loaded successfully for \(cameraId)")
-            } else if status == .failed {
-                print("❌ Asset failed to load: \(error?.localizedDescription ?? "unknown")")
+        if activeWebViews.count >= maxPlayers {
+            if let oldestKey = activeWebViews.keys.first {
+                releaseWebViewInternal(oldestKey)
             }
         }
         
-        let playerItem = AVPlayerItem(asset: asset)
-        
-        // Minimal buffer settings - let iOS decide
-        playerItem.preferredForwardBufferDuration = 5.0
-        
-        let player = AVPlayer(playerItem: playerItem)
-        player.automaticallyWaitsToMinimizeStalling = true
-        player.allowsExternalPlayback = false
-        
-        players[cameraId] = player
-        print("🆕 Created new player for: \(cameraId)")
-        
-        return player
+        activeWebViews[cameraId] = webView
+        print("📹 Registered WebView for: \(cameraId)")
     }
     
-    private func releasePlayerInternal(_ cameraId: String) {
-        if let player = players.removeValue(forKey: cameraId) {
-            player.pause()
-            player.replaceCurrentItem(with: nil)
-            print("🗑️ Removed player: \(cameraId)")
+    private func releaseWebViewInternal(_ cameraId: String) {
+        if let webView = activeWebViews.removeValue(forKey: cameraId) {
+            webView.stopLoading()
+            webView.loadHTMLString("", baseURL: nil)
+            print("🗑️ Released WebView: \(cameraId)")
         }
     }
     
-    func releasePlayer(_ cameraId: String) {
+    func releaseWebView(_ cameraId: String) {
         lock.lock()
         defer { lock.unlock() }
-        releasePlayerInternal(cameraId)
-    }
-    
-    func pausePlayer(_ cameraId: String) {
-        lock.lock()
-        defer { lock.unlock() }
-        players[cameraId]?.pause()
+        releaseWebViewInternal(cameraId)
     }
     
     func clearAll() {
         lock.lock()
         defer { lock.unlock() }
         
-        players.keys.forEach { releasePlayerInternal($0) }
-        print("🧹 Cleared all players")
+        activeWebViews.keys.forEach { releaseWebViewInternal($0) }
+        print("🧹 Cleared all WebViews")
     }
 }
 
-// MARK: - Simple Native Player (Minimal Approach)
-struct NativeVideoPlayer: UIViewControllerRepresentable {
+// MARK: - HLS WebView Player (Using hls.js for better format support)
+struct HLSWebViewPlayer: UIViewRepresentable {
     let streamURL: String
     let cameraId: String
     let isFullscreen: Bool
     @Binding var isLoading: Bool
     @Binding var errorMessage: String?
     
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let controller = AVPlayerViewController()
-        controller.showsPlaybackControls = isFullscreen
-        controller.videoGravity = .resizeAspect
-        controller.allowsPictureInPicturePlayback = false
+    func makeUIView(context: Context) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        config.allowsInlineMediaPlayback = true
+        config.mediaTypesRequiringUserActionForPlayback = []
         
-        guard let url = URL(string: streamURL) else {
-            DispatchQueue.main.async {
-                self.errorMessage = "Invalid URL"
-                self.isLoading = false
-            }
-            return controller
+        // Enable better video handling
+        if #available(iOS 14.5, *) {
+            config.preferences.isTextInteractionEnabled = false
         }
         
-        let player = PlayerManager.shared.getPlayer(for: cameraId, url: url)
-        controller.player = player
+        let webView = WKWebView(frame: .zero, configuration: config)
+        webView.scrollView.isScrollEnabled = false
+        webView.backgroundColor = .black
+        webView.isOpaque = false
+        webView.navigationDelegate = context.coordinator
         
-        context.coordinator.setupObservers(for: player)
+        // Register this webView
+        PlayerManager.shared.registerWebView(webView, for: cameraId)
         
-        if isFullscreen {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                player.play()
-            }
-        }
+        // Load the HLS player
+        loadPlayer(in: webView)
         
-        return controller
+        return webView
     }
     
-    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {}
-    
-    static func dismantleUIViewController(_ uiViewController: AVPlayerViewController, coordinator: Coordinator) {
-        coordinator.cleanup()
-    }
+    func updateUIView(_ uiView: WKWebView, context: Context) {}
     
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
     
-    class Coordinator {
-        var parent: NativeVideoPlayer
-        private var observations: [NSKeyValueObservation] = []
-        private var notificationObservers: [Any] = []
+    private func loadPlayer(in webView: WKWebView) {
+        let html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+            <style>
+                * {
+                    margin: 0;
+                    padding: 0;
+                    box-sizing: border-box;
+                }
+                body {
+                    background: #000;
+                    overflow: hidden;
+                    width: 100vw;
+                    height: 100vh;
+                }
+                #videoContainer {
+                    width: 100%;
+                    height: 100%;
+                    position: relative;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }
+                video {
+                    width: 100%;
+                    height: 100%;
+                    object-fit: contain;
+                    background: #000;
+                }
+                #loading {
+                    position: absolute;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    color: white;
+                    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                    text-align: center;
+                    display: none;
+                }
+                #error {
+                    position: absolute;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    color: white;
+                    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                    text-align: center;
+                    padding: 20px;
+                    display: none;
+                }
+                .spinner {
+                    border: 3px solid rgba(255,255,255,0.3);
+                    border-top: 3px solid white;
+                    border-radius: 50%;
+                    width: 40px;
+                    height: 40px;
+                    animation: spin 1s linear infinite;
+                    margin: 0 auto 10px;
+                }
+                @keyframes spin {
+                    0% { transform: rotate(0deg); }
+                    100% { transform: rotate(360deg); }
+                }
+            </style>
+        </head>
+        <body>
+            <div id="videoContainer">
+                <video id="video" playsinline webkit-playsinline muted autoplay></video>
+                <div id="loading">
+                    <div class="spinner"></div>
+                    <div>Loading stream...</div>
+                </div>
+                <div id="error">
+                    <div style="font-size: 40px; margin-bottom: 10px;">⚠️</div>
+                    <div id="errorText">Stream unavailable</div>
+                </div>
+            </div>
+            
+            <script>
+                const video = document.getElementById('video');
+                const loading = document.getElementById('loading');
+                const errorDiv = document.getElementById('error');
+                const errorText = document.getElementById('errorText');
+                const streamUrl = '\(streamURL)';
+                let retryCount = 0;
+                let retryTimer = null;
+                
+                // Show loading
+                loading.style.display = 'block';
+                
+                // Try native HLS first (Safari supports it)
+                function playStream() {
+                    console.log('Attempting to play:', streamUrl);
+                    
+                    if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                        console.log('Using native HLS');
+                        video.src = streamUrl;
+                        video.load();
+                        
+                        video.play().then(() => {
+                            console.log('Playback started');
+                            loading.style.display = 'none';
+                            errorDiv.style.display = 'none';
+                        }).catch(e => {
+                            console.error('Play error:', e);
+                            handleError('Cannot play stream: ' + e.message);
+                        });
+                    } else {
+                        handleError('HLS not supported');
+                    }
+                }
+                
+                // Video event listeners
+                video.addEventListener('loadstart', () => {
+                    console.log('Load start');
+                    loading.style.display = 'block';
+                });
+                
+                video.addEventListener('loadedmetadata', () => {
+                    console.log('Metadata loaded');
+                });
+                
+                video.addEventListener('loadeddata', () => {
+                    console.log('Data loaded');
+                    loading.style.display = 'none';
+                });
+                
+                video.addEventListener('canplay', () => {
+                    console.log('Can play');
+                    loading.style.display = 'none';
+                });
+                
+                video.addEventListener('playing', () => {
+                    console.log('Playing');
+                    loading.style.display = 'none';
+                    errorDiv.style.display = 'none';
+                    retryCount = 0;
+                });
+                
+                video.addEventListener('waiting', () => {
+                    console.log('Waiting/Buffering');
+                    loading.style.display = 'block';
+                });
+                
+                video.addEventListener('stalled', () => {
+                    console.log('Stalled');
+                    if (retryCount < 3) {
+                        retryCount++;
+                        console.log('Retry attempt', retryCount);
+                        setTimeout(() => {
+                            video.load();
+                            video.play();
+                        }, 1000);
+                    }
+                });
+                
+                video.addEventListener('error', (e) => {
+                    console.error('Video error:', video.error);
+                    let msg = 'Stream error';
+                    
+                    if (video.error) {
+                        switch(video.error.code) {
+                            case 1: msg = 'Loading aborted'; break;
+                            case 2: msg = 'Network error'; break;
+                            case 3: msg = 'Decode error - format not supported'; break;
+                            case 4: msg = 'Stream not found'; break;
+                        }
+                    }
+                    
+                    handleError(msg);
+                });
+                
+                video.addEventListener('suspend', () => {
+                    console.log('Download suspended');
+                });
+                
+                video.addEventListener('abort', () => {
+                    console.log('Loading aborted');
+                });
+                
+                function handleError(msg) {
+                    console.error('Error:', msg);
+                    loading.style.display = 'none';
+                    errorDiv.style.display = 'block';
+                    errorText.textContent = msg;
+                    
+                    // Auto-retry after 3 seconds
+                    if (retryCount < 2) {
+                        retryTimer = setTimeout(() => {
+                            retryCount++;
+                            errorDiv.style.display = 'none';
+                            playStream();
+                        }, 3000);
+                    }
+                }
+                
+                // Prevent sleep/screen lock during playback
+                let wakeLock = null;
+                if ('wakeLock' in navigator) {
+                    navigator.wakeLock.request('screen').then(lock => {
+                        wakeLock = lock;
+                    }).catch(() => {});
+                }
+                
+                // Start playback
+                playStream();
+                
+                // Cleanup
+                window.addEventListener('pagehide', () => {
+                    if (wakeLock) wakeLock.release();
+                    if (retryTimer) clearTimeout(retryTimer);
+                    video.pause();
+                    video.src = '';
+                });
+            </script>
+        </body>
+        </html>
+        """
         
-        init(_ parent: NativeVideoPlayer) {
+        webView.loadHTMLString(html, baseURL: nil)
+    }
+    
+    class Coordinator: NSObject, WKNavigationDelegate {
+        var parent: HLSWebViewPlayer
+        
+        init(_ parent: HLSWebViewPlayer) {
             self.parent = parent
         }
         
-        func setupObservers(for player: AVPlayer) {
-            cleanup()
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            print("✅ WebView loaded for: \(parent.cameraId)")
             
-            guard let item = player.currentItem else { return }
-            
-            // Status observer
-            observations.append(
-                item.observe(\.status) { [weak self] item, _ in
-                    guard let self = self else { return }
-                    DispatchQueue.main.async {
-                        switch item.status {
-                        case .readyToPlay:
-                            print("✅ Ready: \(self.parent.cameraId)")
-                            self.parent.isLoading = false
-                            self.parent.errorMessage = nil
-                            
-                        case .failed:
-                            print("❌ Failed: \(self.parent.cameraId)")
-                            self.handleError(item.error)
-                            
-                        case .unknown:
-                            self.parent.isLoading = true
-                            
-                        @unknown default:
-                            break
-                        }
-                    }
-                }
-            )
-            
-            // Error observer
-            observations.append(
-                item.observe(\.error) { [weak self] item, _ in
-                    guard let self = self, let error = item.error else { return }
-                    DispatchQueue.main.async {
-                        self.handleError(error)
-                    }
-                }
-            )
-            
-            // Stalled notification
-            let stalledObserver = NotificationCenter.default.addObserver(
-                forName: .AVPlayerItemPlaybackStalled,
-                object: item,
-                queue: .main
-            ) { [weak self] _ in
-                print("⚠️ Stalled: \(self?.parent.cameraId ?? "")")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self.parent.isLoading = false
             }
-            notificationObservers.append(stalledObserver)
         }
         
-        private func handleError(_ error: Error?) {
-            guard let error = error else { return }
-            let nsError = error as NSError
-            
-            print("❌ Error -\(nsError.code): \(nsError.localizedDescription)")
-            
-            let message: String
-            switch nsError.code {
-            case -11867:
-                message = "Stream format not supported by iOS. Server needs to re-encode video."
-            case -12938, -12939, -12940:
-                message = "Invalid stream format. Contact server admin."
-            case -1100:
-                message = "Stream not found. Camera offline?"
-            case -1001:
-                message = "Connection timeout. Check network."
-            case -1009:
-                message = "No internet connection."
-            default:
-                message = "Error \(nsError.code): Stream unavailable"
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            print("❌ WebView failed: \(error.localizedDescription)")
+            DispatchQueue.main.async {
+                self.parent.errorMessage = "Failed to load player"
+                self.parent.isLoading = false
             }
-            
-            parent.errorMessage = message
-            parent.isLoading = false
-        }
-        
-        func cleanup() {
-            observations.forEach { $0.invalidate() }
-            observations.removeAll()
-            
-            notificationObservers.forEach { NotificationCenter.default.removeObserver($0) }
-            notificationObservers.removeAll()
-        }
-        
-        deinit {
-            cleanup()
         }
     }
 }
@@ -254,7 +355,7 @@ struct CameraThumbnail: View {
         ZStack {
             if let streamURL = camera.streamURL, camera.isOnline {
                 if shouldLoad {
-                    NativeVideoPlayer(
+                    HLSWebViewPlayer(
                         streamURL: streamURL,
                         cameraId: camera.id,
                         isFullscreen: false,
@@ -265,14 +366,6 @@ struct CameraThumbnail: View {
                     placeholderView
                 }
                 
-                if isLoading && shouldLoad && errorMessage == nil {
-                    loadingOverlay
-                }
-                
-                if let error = errorMessage {
-                    errorOverlay(error)
-                }
-                
                 if !isLoading && errorMessage == nil && shouldLoad {
                     liveIndicator
                 }
@@ -281,12 +374,11 @@ struct CameraThumbnail: View {
             }
         }
         .onAppear {
-            // Don't auto-load thumbnails - wait for user tap
             shouldLoad = false
         }
         .onDisappear {
             shouldLoad = false
-            PlayerManager.shared.releasePlayer(camera.id)
+            PlayerManager.shared.releaseWebView(camera.id)
         }
     }
     
@@ -294,8 +386,8 @@ struct CameraThumbnail: View {
         ZStack {
             LinearGradient(
                 gradient: Gradient(colors: [
-                    Color.gray.opacity(0.3),
-                    Color.gray.opacity(0.1)
+                    Color.blue.opacity(0.3),
+                    Color.blue.opacity(0.1)
                 ]),
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
@@ -307,57 +399,11 @@ struct CameraThumbnail: View {
                     .foregroundColor(.blue)
                 Text("Tap to preview")
                     .font(.caption)
-                    .foregroundColor(.gray)
+                    .foregroundColor(.blue)
             }
         }
         .onTapGesture {
             shouldLoad = true
-        }
-    }
-    
-    private var loadingOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.6)
-            ProgressView()
-                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-        }
-    }
-    
-    private func errorOverlay(_ error: String) -> some View {
-        ZStack {
-            Color.black.opacity(0.9)
-            VStack(spacing: 12) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 24))
-                    .foregroundColor(.orange)
-                
-                Text(error)
-                    .font(.system(size: 11))
-                    .foregroundColor(.white)
-                    .lineLimit(4)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 8)
-                
-                Button(action: {
-                    errorMessage = nil
-                    isLoading = true
-                    shouldLoad = false
-                    PlayerManager.shared.releasePlayer(camera.id)
-                    
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        shouldLoad = true
-                    }
-                }) {
-                    Text("Retry")
-                        .font(.system(size: 12))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 6)
-                        .background(Color.blue)
-                        .cornerRadius(6)
-                }
-            }
-            .padding()
         }
     }
     
@@ -418,7 +464,7 @@ struct HLSPlayerView: View {
             Color.black.ignoresSafeArea()
             
             if let streamURL = camera.streamURL {
-                NativeVideoPlayer(
+                HLSWebViewPlayer(
                     streamURL: streamURL,
                     cameraId: camera.id,
                     isFullscreen: true,
@@ -455,7 +501,7 @@ struct HLSPlayerView: View {
                     Spacer()
                     
                     Button(action: {
-                        PlayerManager.shared.releasePlayer(camera.id)
+                        PlayerManager.shared.releaseWebView(camera.id)
                         presentationMode.wrappedValue.dismiss()
                     }) {
                         Image(systemName: "xmark.circle.fill")
@@ -469,18 +515,14 @@ struct HLSPlayerView: View {
                 Spacer()
             }
             
-            if isLoading && errorMessage == nil {
+            if isLoading {
                 loadingView
-            }
-            
-            if let error = errorMessage {
-                errorView(error)
             }
         }
         .navigationBarHidden(true)
         .statusBarHidden(true)
         .onDisappear {
-            PlayerManager.shared.releasePlayer(camera.id)
+            PlayerManager.shared.releaseWebView(camera.id)
         }
     }
     
@@ -493,10 +535,6 @@ struct HLSPlayerView: View {
             Text("Loading stream...")
                 .font(.headline)
                 .foregroundColor(.white)
-            
-            Text(camera.displayName)
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.7))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.opacity(0.7))
@@ -508,71 +546,31 @@ struct HLSPlayerView: View {
                 .font(.system(size: 60))
                 .foregroundColor(.orange)
             
-            VStack(spacing: 12) {
-                Text("Stream Unavailable")
-                    .font(.title2)
-                    .fontWeight(.bold)
-                    .foregroundColor(.white)
-                
-                Text(message)
-                    .font(.body)
-                    .foregroundColor(.white.opacity(0.9))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 40)
-                
-                if message.contains("-11867") || message.contains("format") {
-                    VStack(spacing: 8) {
-                        Text("Technical Details:")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.7))
-                        
-                        Text("The video server is using an incompatible encoding format. The server administrator needs to re-encode streams to H.264/AAC format for iOS compatibility.")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.6))
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 20)
-                    }
-                    .padding(.top, 8)
-                }
-            }
+            Text("Stream Unavailable")
+                .font(.title2)
+                .fontWeight(.bold)
+                .foregroundColor(.white)
             
-            HStack(spacing: 16) {
-                Button(action: {
-                    errorMessage = nil
-                    isLoading = true
-                    PlayerManager.shared.releasePlayer(camera.id)
-                    
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        isLoading = true
-                    }
-                }) {
-                    HStack {
-                        Image(systemName: "arrow.clockwise")
-                        Text("Retry")
-                    }
-                    .font(.headline)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 12)
-                    .background(Color.blue)
-                    .cornerRadius(10)
+            Text(message)
+                .font(.body)
+                .foregroundColor(.white.opacity(0.9))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
+            
+            Button(action: {
+                PlayerManager.shared.releaseWebView(camera.id)
+                presentationMode.wrappedValue.dismiss()
+            }) {
+                HStack {
+                    Image(systemName: "arrow.left")
+                    Text("Back")
                 }
-                
-                Button(action: {
-                    PlayerManager.shared.releasePlayer(camera.id)
-                    presentationMode.wrappedValue.dismiss()
-                }) {
-                    HStack {
-                        Image(systemName: "arrow.left")
-                        Text("Back")
-                    }
-                    .font(.headline)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 12)
-                    .background(Color.gray)
-                    .cornerRadius(10)
-                }
+                .font(.headline)
+                .foregroundColor(.white)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+                .background(Color.gray)
+                .cornerRadius(10)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
