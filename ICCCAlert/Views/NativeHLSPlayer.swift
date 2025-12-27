@@ -162,8 +162,12 @@ struct HLSWebViewPlayer: UIViewRepresentable {
                 </div>
             </div>
             
-            <script src="https://cdn.jsdelivr.net/npm/hls.js@1.4.12"></script>
+            <script src="https://cdn.jsdelivr.net/npm/hls.js@1.4.12/dist/hls.min.js" crossorigin="anonymous"></script>
             <script>
+                // ✅ Debug: Check if script loaded
+                console.log('📦 Script tag executed');
+                console.log('🔍 Hls available?', typeof Hls !== 'undefined' ? 'YES' : 'NO');
+                
                 const video = document.getElementById('video');
                 const loading = document.getElementById('loading');
                 const errorDiv = document.getElementById('error');
@@ -175,21 +179,49 @@ struct HLSWebViewPlayer: UIViewRepresentable {
                 let retryCount = 0;
                 let maxRetries = 5;
                 let playAttempts = 0;
+                let initAttempts = 0;
+                let maxInitAttempts = 50; // Try for 5 seconds
                 
                 loading.style.display = 'block';
                 
                 console.log('🎬 Stream URL:', streamUrl);
                 console.log('🔍 URL Protocol:', streamUrl.startsWith('http:') ? 'HTTP' : 'HTTPS');
                 
+                // ✅ Wait for hls.js to load before initializing
                 function initPlayer() {
-                    // ✅ ALWAYS use hls.js, even if native HLS is supported
-                    // This bypasses Safari's HTTP restrictions
+                    initAttempts++;
+                    
+                    // Check if Hls is defined (library loaded)
+                    if (typeof Hls === 'undefined') {
+                        if (initAttempts < maxInitAttempts) {
+                            console.warn('⏳ Waiting for hls.js to load... attempt', initAttempts);
+                            setTimeout(initPlayer, 100);
+                            return;
+                        } else {
+                            console.error('❌ hls.js failed to load after 5 seconds');
+                            // Try native HLS as last resort
+                            if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                                console.log('⚠️ Falling back to native HLS (HTTP may not work)');
+                                useNativeHls();
+                            } else {
+                                handleError('HLS library failed to load', 'Please check your internet connection');
+                            }
+                            return;
+                        }
+                    }
+                    
+                    console.log('✅ hls.js loaded successfully after', initAttempts, 'attempts');
+                    
+                    // Check if hls.js is supported
                     if (Hls.isSupported()) {
-                        console.log('✅ Using hls.js for stream playback');
+                        console.log('✅ hls.js is supported on this device');
                         useHlsJs();
+                    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                        console.log('⚠️ hls.js not supported, using native HLS (HTTP may not work)');
+                        useNativeHls();
                     } else {
-                        console.error('❌ hls.js not supported on this device');
-                        handleError('HLS playback not supported', 'Device does not support HLS.js');
+                        console.error('❌ No HLS support available');
+                        handleError('HLS playback not supported', 'This device does not support HLS streaming');
                     }
                 }
                 
@@ -314,6 +346,56 @@ struct HLSWebViewPlayer: UIViewRepresentable {
                     
                     hls.on(Hls.Events.LEVEL_LOADED, (event, data) => {
                         console.log('📊 Level loaded:', data.details.totalduration, 'seconds');
+                    });
+                }
+                
+                function useNativeHls() {
+                    console.log('📱 Using native HLS playback');
+                    
+                    if (hls) {
+                        hls.destroy();
+                        hls = null;
+                    }
+                    
+                    video.src = streamUrl;
+                    video.load();
+                    
+                    video.addEventListener('loadeddata', () => {
+                        console.log('✅ Native HLS: Data loaded');
+                        loading.style.display = 'none';
+                        video.play().catch(e => {
+                            console.error('❌ Native play failed:', e);
+                            handleError('Cannot play stream', e.message);
+                        });
+                    });
+                    
+                    video.addEventListener('error', (e) => {
+                        console.error('❌ Native video error:', video.error);
+                        
+                        let msg = 'Stream error';
+                        let detail = '';
+                        if (video.error) {
+                            switch(video.error.code) {
+                                case 1: 
+                                    msg = 'Loading aborted'; 
+                                    detail = 'Stream loading was aborted';
+                                    break;
+                                case 2: 
+                                    msg = 'Network error'; 
+                                    detail = 'A network error occurred';
+                                    break;
+                                case 3: 
+                                    msg = 'Decode error'; 
+                                    detail = 'Stream format not supported';
+                                    break;
+                                case 4: 
+                                    msg = 'Stream not found'; 
+                                    detail = 'The stream URL is not accessible';
+                                    break;
+                            }
+                        }
+                        
+                        handleError(msg, detail);
                     });
                 }
                 
