@@ -48,7 +48,7 @@ class PlayerManager: ObservableObject {
     }
 }
 
-// MARK: - Enhanced WebView Player with hls.js (HTTP Support)
+// MARK: - Enhanced WebView Player with Codec Support
 struct HLSWebViewPlayer: UIViewRepresentable {
     let streamURL: String
     let cameraId: String
@@ -61,9 +61,6 @@ struct HLSWebViewPlayer: UIViewRepresentable {
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
         config.allowsPictureInPictureMediaPlayback = false
-        
-        // ✅ CRITICAL: Allow HTTP media loading
-        config.mediaTypesRequiringUserActionForPlayback = []
         
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.scrollView.isScrollEnabled = false
@@ -86,8 +83,6 @@ struct HLSWebViewPlayer: UIViewRepresentable {
     }
     
     private func loadPlayer(in webView: WKWebView) {
-        // ✅ FIXED: Force hls.js to handle ALL streams (including HTTP)
-        // This prevents Safari from trying to use native playback
         let html = """
         <!DOCTYPE html>
         <html>
@@ -146,6 +141,18 @@ struct HLSWebViewPlayer: UIViewRepresentable {
                     0% { transform: rotate(0deg); }
                     100% { transform: rotate(360deg); }
                 }
+                #debug {
+                    position: absolute;
+                    bottom: 10px;
+                    left: 10px;
+                    background: rgba(0,0,0,0.7);
+                    color: white;
+                    padding: 8px;
+                    font-size: 10px;
+                    border-radius: 4px;
+                    max-width: 90%;
+                    word-wrap: break-word;
+                }
             </style>
         </head>
         <body>
@@ -160,19 +167,17 @@ struct HLSWebViewPlayer: UIViewRepresentable {
                     <div id="errorText">Stream unavailable</div>
                     <div id="errorDetail" style="font-size: 12px; margin-top: 10px; opacity: 0.7;"></div>
                 </div>
+                <div id="debug"></div>
             </div>
             
             <script src="https://cdn.jsdelivr.net/npm/hls.js@1.4.12/dist/hls.min.js" crossorigin="anonymous"></script>
             <script>
-                // ✅ Debug: Check if script loaded
-                console.log('📦 Script tag executed');
-                console.log('🔍 Hls available?', typeof Hls !== 'undefined' ? 'YES' : 'NO');
-                
                 const video = document.getElementById('video');
                 const loading = document.getElementById('loading');
                 const errorDiv = document.getElementById('error');
                 const errorText = document.getElementById('errorText');
                 const errorDetail = document.getElementById('errorDetail');
+                const debugDiv = document.getElementById('debug');
                 const streamUrl = '\(streamURL)';
                 
                 let hls = null;
@@ -180,48 +185,42 @@ struct HLSWebViewPlayer: UIViewRepresentable {
                 let maxRetries = 5;
                 let playAttempts = 0;
                 let initAttempts = 0;
-                let maxInitAttempts = 50; // Try for 5 seconds
+                let stallCount = 0;
+                let lastFragTime = Date.now();
+                let stallCheckInterval = null;
                 
                 loading.style.display = 'block';
                 
-                console.log('🎬 Stream URL:', streamUrl);
-                console.log('🔍 URL Protocol:', streamUrl.startsWith('http:') ? 'HTTP' : 'HTTPS');
+                function log(msg) {
+                    console.log(msg);
+                    debugDiv.textContent = msg;
+                }
                 
-                // ✅ Wait for hls.js to load before initializing
+                log('🎬 Initializing: ' + streamUrl);
+                
                 function initPlayer() {
                     initAttempts++;
                     
-                    // Check if Hls is defined (library loaded)
                     if (typeof Hls === 'undefined') {
-                        if (initAttempts < maxInitAttempts) {
-                            console.warn('⏳ Waiting for hls.js to load... attempt', initAttempts);
+                        if (initAttempts < 50) {
                             setTimeout(initPlayer, 100);
                             return;
                         } else {
-                            console.error('❌ hls.js failed to load after 5 seconds');
-                            // Try native HLS as last resort
-                            if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                                console.log('⚠️ Falling back to native HLS (HTTP may not work)');
-                                useNativeHls();
-                            } else {
-                                handleError('HLS library failed to load', 'Please check your internet connection');
-                            }
+                            handleError('Library failed to load', 'hls.js could not be loaded');
                             return;
                         }
                     }
                     
-                    console.log('✅ hls.js loaded successfully after', initAttempts, 'attempts');
+                    log('✅ hls.js loaded');
                     
-                    // Check if hls.js is supported
                     if (Hls.isSupported()) {
-                        console.log('✅ hls.js is supported on this device');
+                        log('📱 Using hls.js');
                         useHlsJs();
                     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                        console.log('⚠️ hls.js not supported, using native HLS (HTTP may not work)');
+                        log('📱 Using native HLS');
                         useNativeHls();
                     } else {
-                        console.error('❌ No HLS support available');
-                        handleError('HLS playback not supported', 'This device does not support HLS streaming');
+                        handleError('HLS not supported', 'Device cannot play HLS streams');
                     }
                 }
                 
@@ -230,127 +229,146 @@ struct HLSWebViewPlayer: UIViewRepresentable {
                         hls.destroy();
                     }
                     
+                    // ✅ CRITICAL: Optimized config for codec compatibility
                     hls = new Hls({
-                        debug: true, // Enable for debugging
+                        debug: false,
                         enableWorker: true,
                         lowLatencyMode: false,
                         
-                        // Buffer settings
-                        backBufferLength: 30,
-                        maxBufferLength: 30,
-                        maxMaxBufferLength: 60,
-                        maxBufferSize: 60 * 1000 * 1000,
-                        maxBufferHole: 0.5,
+                        // ✅ Buffer settings - prevent 3-second stops
+                        maxBufferLength: 15,              // Reduced from 30
+                        maxMaxBufferLength: 30,           // Reduced from 60
+                        maxBufferSize: 20 * 1000 * 1000,  // 20MB
+                        maxBufferHole: 0.3,               // More aggressive hole jumping
                         
-                        // Retry settings
-                        manifestLoadingTimeOut: 15000,
+                        // ✅ Fragment settings - better handling
+                        highBufferWatchdogPeriod: 3,
+                        nudgeOffset: 0.05,
+                        nudgeMaxRetry: 10,
+                        maxFragLookUpTolerance: 0.5,
+                        
+                        // ✅ Live stream settings
+                        liveSyncDurationCount: 2,          // Reduced for faster sync
+                        liveMaxLatencyDurationCount: 6,     // Reduced
+                        liveDurationInfinity: false,        // Better for some streams
+                        
+                        // ✅ Loading timeouts
+                        manifestLoadingTimeOut: 20000,
                         manifestLoadingMaxRetry: 4,
                         manifestLoadingRetryDelay: 1000,
-                        levelLoadingTimeOut: 15000,
+                        levelLoadingTimeOut: 20000,
                         levelLoadingMaxRetry: 4,
                         levelLoadingRetryDelay: 1000,
-                        fragLoadingTimeOut: 20000,
+                        fragLoadingTimeOut: 30000,         // Increased for slow streams
                         fragLoadingMaxRetry: 6,
                         fragLoadingRetryDelay: 1000,
                         
-                        // ✅ CRITICAL: Custom XHR setup to ensure HTTP works
+                        // ✅ Start settings
+                        startPosition: -1,                  // Start from live edge
+                        startFragPrefetch: true,
+                        testBandwidth: false,               // Skip bandwidth test
+                        
+                        // ✅ CRITICAL: Disable worker for codec compatibility
+                        enableSoftwareAES: true,
+                        
                         xhrSetup: function(xhr, url) {
-                            console.log('📡 Loading:', url);
                             xhr.withCredentials = false;
-                            xhr.setRequestHeader('Cache-Control', 'no-cache');
                         }
                     });
                     
                     hls.loadSource(streamUrl);
                     hls.attachMedia(video);
                     
+                    // Track fragment loading
+                    hls.on(Hls.Events.FRAG_LOADED, (event, data) => {
+                        lastFragTime = Date.now();
+                        stallCount = 0;
+                        loading.style.display = 'none';
+                        log('✅ Playing: frag ' + data.frag.sn);
+                    });
+                    
                     hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
-                        console.log('📋 Manifest parsed successfully');
-                        console.log('   Levels:', data.levels.length);
+                        log('📋 Manifest: ' + data.levels.length + ' levels');
+                        
+                        // ✅ Force lowest quality for compatibility
+                        if (data.levels.length > 0) {
+                            hls.currentLevel = 0;
+                            log('📊 Using level 0 for compatibility');
+                        }
+                        
                         loading.style.display = 'none';
                         
-                        // Auto-play after manifest loads
                         video.play().then(() => {
-                            console.log('▶️ Playback started');
+                            log('▶️ Playback started');
                             errorDiv.style.display = 'none';
                             retryCount = 0;
+                            startStallMonitor();
                         }).catch(e => {
-                            console.error('❌ Play failed:', e.message);
                             if (playAttempts < 3) {
                                 playAttempts++;
-                                setTimeout(() => {
-                                    console.log('🔄 Retry play attempt', playAttempts);
-                                    video.play();
-                                }, 500);
+                                setTimeout(() => video.play(), 500);
                             } else {
-                                handleError('Cannot start playback', e.message);
+                                handleError('Cannot start', e.message);
                             }
                         });
                     });
                     
                     hls.on(Hls.Events.ERROR, (event, data) => {
-                        console.error('❌ HLS Error:', {
-                            type: data.type,
-                            details: data.details,
-                            fatal: data.fatal,
-                            url: data.url,
-                            response: data.response
-                        });
+                        console.error('HLS Error:', data.type, data.details, data.fatal);
+                        log('❌ Error: ' + data.details);
                         
                         if (data.fatal) {
                             switch(data.type) {
                                 case Hls.ErrorTypes.NETWORK_ERROR:
-                                    console.log('🌐 Network error detected');
                                     if (retryCount < maxRetries) {
                                         retryCount++;
-                                        console.log('🔄 Retry attempt ' + retryCount + '/' + maxRetries);
-                                        setTimeout(() => {
-                                            hls.startLoad();
-                                        }, 1000 * retryCount); // Exponential backoff
+                                        log('🔄 Retry ' + retryCount + '/' + maxRetries);
+                                        setTimeout(() => hls.startLoad(), 1000 * retryCount);
                                     } else {
-                                        handleError(
-                                            'Network error',
-                                            'Failed to load stream after ' + maxRetries + ' attempts. Check your connection.'
-                                        );
+                                        handleError('Network error', 'Cannot load stream');
                                     }
                                     break;
                                     
                                 case Hls.ErrorTypes.MEDIA_ERROR:
-                                    console.log('🎬 Media error detected');
                                     if (retryCount < maxRetries) {
                                         retryCount++;
-                                        console.log('🔄 Attempting media recovery ' + retryCount + '/' + maxRetries);
-                                        hls.recoverMediaError();
+                                        log('🔄 Media recovery ' + retryCount);
+                                        
+                                        if (data.details === 'bufferStalledError' || 
+                                            data.details === 'bufferAppendError') {
+                                            // Buffer issue - try swapping codec
+                                            hls.swapAudioCodec();
+                                            hls.recoverMediaError();
+                                        } else {
+                                            hls.recoverMediaError();
+                                        }
                                     } else {
-                                        handleError(
-                                            'Media playback error',
-                                            'The stream format may not be supported.'
-                                        );
+                                        // ✅ Last resort: try native player
+                                        log('⚠️ Trying native HLS');
+                                        if (hls) hls.destroy();
+                                        useNativeHls();
                                     }
                                     break;
                                     
                                 default:
-                                    handleError(
-                                        'Playback error',
-                                        data.details || 'Unknown error occurred'
-                                    );
+                                    handleError('Playback error', data.details);
                                     break;
                             }
                         }
                     });
                     
-                    hls.on(Hls.Events.FRAG_LOADED, (event, data) => {
-                        loading.style.display = 'none';
-                        console.log('✅ Fragment loaded:', data.frag.sn);
+                    // ✅ Monitor for codec issues
+                    hls.on(Hls.Events.BUFFER_APPENDING, () => {
+                        log('📦 Appending buffer');
                     });
                     
-                    hls.on(Hls.Events.LEVEL_LOADED, (event, data) => {
-                        console.log('📊 Level loaded:', data.details.totalduration, 'seconds');
+                    hls.on(Hls.Events.BUFFER_APPENDED, () => {
+                        log('✅ Buffer appended');
                     });
                 }
                 
                 function useNativeHls() {
-                    console.log('📱 Using native HLS playback');
+                    log('📱 Native HLS mode');
                     
                     if (hls) {
                         hls.destroy();
@@ -361,107 +379,102 @@ struct HLSWebViewPlayer: UIViewRepresentable {
                     video.load();
                     
                     video.addEventListener('loadeddata', () => {
-                        console.log('✅ Native HLS: Data loaded');
+                        log('✅ Native: loaded');
                         loading.style.display = 'none';
                         video.play().catch(e => {
-                            console.error('❌ Native play failed:', e);
-                            handleError('Cannot play stream', e.message);
+                            handleError('Cannot play', e.message);
                         });
                     });
                     
                     video.addEventListener('error', (e) => {
-                        console.error('❌ Native video error:', video.error);
-                        
                         let msg = 'Stream error';
                         let detail = '';
                         if (video.error) {
                             switch(video.error.code) {
-                                case 1: 
-                                    msg = 'Loading aborted'; 
-                                    detail = 'Stream loading was aborted';
-                                    break;
-                                case 2: 
-                                    msg = 'Network error'; 
-                                    detail = 'A network error occurred';
-                                    break;
                                 case 3: 
-                                    msg = 'Decode error'; 
-                                    detail = 'Stream format not supported';
+                                    msg = 'Decode error';
+                                    detail = 'Stream codec not supported by device';
                                     break;
                                 case 4: 
-                                    msg = 'Stream not found'; 
-                                    detail = 'The stream URL is not accessible';
+                                    msg = 'Not found';
+                                    detail = 'Stream URL not accessible';
                                     break;
+                                default:
+                                    detail = 'Error code: ' + video.error.code;
                             }
                         }
-                        
                         handleError(msg, detail);
                     });
                 }
                 
+                // ✅ Stall monitor - detect when stream stops
+                function startStallMonitor() {
+                    if (stallCheckInterval) clearInterval(stallCheckInterval);
+                    
+                    stallCheckInterval = setInterval(() => {
+                        const timeSinceLastFrag = Date.now() - lastFragTime;
+                        
+                        if (timeSinceLastFrag > 10000 && !video.paused) {
+                            stallCount++;
+                            log('⚠️ Stalled ' + stallCount + 'x');
+                            
+                            if (stallCount > 2 && hls) {
+                                log('🔄 Recovering from stall');
+                                hls.startLoad();
+                                lastFragTime = Date.now();
+                            }
+                        }
+                    }, 5000);
+                }
+                
                 // Video event handlers
                 video.addEventListener('waiting', () => {
-                    console.log('⏳ Buffering...');
+                    log('⏳ Buffering');
                     loading.style.display = 'block';
                 });
                 
                 video.addEventListener('playing', () => {
-                    console.log('▶️ Playing');
+                    log('▶️ Playing');
                     loading.style.display = 'none';
                     errorDiv.style.display = 'none';
                 });
                 
-                video.addEventListener('stalled', () => {
-                    console.log('⚠️ Stream stalled');
-                });
-                
-                video.addEventListener('error', (e) => {
-                    console.error('❌ Video element error:', video.error);
-                    if (video.error) {
-                        let msg = 'Video error';
-                        let detail = '';
-                        switch(video.error.code) {
-                            case 1: 
-                                msg = 'Loading aborted'; 
-                                detail = 'Stream loading was aborted';
-                                break;
-                            case 2: 
-                                msg = 'Network error'; 
-                                detail = 'A network error occurred';
-                                break;
-                            case 3: 
-                                msg = 'Decode error'; 
-                                detail = 'Stream format not supported';
-                                break;
-                            case 4: 
-                                msg = 'Stream not found'; 
-                                detail = 'The stream URL is not accessible';
-                                break;
-                        }
-                        handleError(msg, detail);
+                video.addEventListener('pause', () => {
+                    if (!video.ended) {
+                        log('⏸️ Paused unexpectedly');
+                        // Auto-resume
+                        setTimeout(() => {
+                            if (video.paused && !video.ended) {
+                                video.play();
+                            }
+                        }, 1000);
                     }
                 });
                 
+                video.addEventListener('stalled', () => {
+                    log('⚠️ Stream stalled');
+                });
+                
                 function handleError(msg, detail) {
-                    console.error('💥 Final error:', msg, detail);
+                    log('💥 ' + msg);
                     loading.style.display = 'none';
                     errorDiv.style.display = 'block';
                     errorText.textContent = msg;
                     if (detail) {
                         errorDetail.textContent = detail;
                     }
+                    if (stallCheckInterval) clearInterval(stallCheckInterval);
                 }
                 
                 // Cleanup
                 window.addEventListener('pagehide', () => {
-                    console.log('👋 Page hiding - cleaning up');
+                    if (stallCheckInterval) clearInterval(stallCheckInterval);
                     if (hls) hls.destroy();
                     video.pause();
                     video.src = '';
                 });
                 
-                // Start playback
-                console.log('🚀 Initializing player...');
+                // Start
                 initPlayer();
             </script>
         </body>
@@ -485,15 +498,10 @@ struct HLSWebViewPlayer: UIViewRepresentable {
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             print("❌ WebView failed: \(error.localizedDescription)")
         }
-        
-        // ✅ Allow HTTP loads
-        func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-            completionHandler(.useCredential, nil)
-        }
     }
 }
 
-// MARK: - Camera Thumbnail (unchanged)
+// MARK: - Camera Thumbnail
 struct CameraThumbnail: View {
     let camera: Camera
     @State private var isLoading = true
@@ -601,7 +609,7 @@ struct CameraThumbnail: View {
     }
 }
 
-// MARK: - Fullscreen Player (unchanged)
+// MARK: - Fullscreen Player
 struct HLSPlayerView: View {
     let camera: Camera
     @State private var isLoading = true
