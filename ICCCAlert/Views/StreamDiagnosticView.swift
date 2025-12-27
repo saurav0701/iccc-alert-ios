@@ -246,6 +246,7 @@ struct StreamDiagnosticView: View {
     }
 }
 
+// Diagnostic helper views - renamed to avoid conflicts
 struct InfoRow: View {
     let label: String
     let value: String

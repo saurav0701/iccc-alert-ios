@@ -2,7 +2,7 @@ import SwiftUI
 import WebKit
 import AVFoundation
 
-// ✅ CRITICAL FIX: Simplified WebView caching
+// MARK: - WebView Store
 class WebViewStore {
     static let shared = WebViewStore()
     
@@ -22,7 +22,7 @@ class WebViewStore {
         guard var cached = cache[cameraId] else { return nil }
         
         let age = Date().timeIntervalSince1970 - cached.createdAt.timeIntervalSince1970
-        if age > 300 { // 5 minutes
+        if age > 300 {
             cleanupWebView(cached.webView)
             cache.removeValue(forKey: cameraId)
             return nil
@@ -61,12 +61,25 @@ class WebViewStore {
     
     func clearAll() {
         lock.lock()
-        defer { lock.unlock()
+        defer { lock.unlock() }
         cache.values.forEach { cleanupWebView($0.webView) }
         cache.removeAll()
     }
+    
+    func clearInactive() {
+        lock.lock()
+        defer { lock.unlock() }
+        let oldEntries = cache.filter { 
+            Date().timeIntervalSince($0.value.lastAccessTime) > 60
+        }
+        oldEntries.forEach { key, cached in
+            cleanupWebView(cached.webView)
+            cache.removeValue(forKey: key)
+        }
+    }
 }
 
+// MARK: - Audio Session Manager
 class AudioSessionManager {
     static let shared = AudioSessionManager()
     
@@ -81,7 +94,7 @@ class AudioSessionManager {
     }
 }
 
-// MARK: - WebView HLS Player (COMPLETELY REWRITTEN)
+// MARK: - WebView HLS Player
 struct WebViewHLSPlayer: UIViewRepresentable {
     let streamURL: String
     let cameraId: String
@@ -96,7 +109,6 @@ struct WebViewHLSPlayer: UIViewRepresentable {
         config.mediaTypesRequiringUserActionForPlayback = []
         config.allowsPictureInPictureMediaPlayback = false
         
-        // ✅ CRITICAL: Enable media playback
         if #available(iOS 14.0, *) {
             config.defaultWebpagePreferences.allowsContentJavaScript = true
         }
@@ -107,7 +119,6 @@ struct WebViewHLSPlayer: UIViewRepresentable {
         webView.isOpaque = false
         webView.backgroundColor = .black
         
-        // Add message handlers
         let contentController = webView.configuration.userContentController
         contentController.add(context.coordinator, name: "streamReady")
         contentController.add(context.coordinator, name: "streamError")
@@ -120,12 +131,10 @@ struct WebViewHLSPlayer: UIViewRepresentable {
     }
     
     func updateUIView(_ webView: WKWebView, context: Context) {
-        // ✅ CRITICAL: Only load once or when URL changes
         guard context.coordinator.currentURL != streamURL else {
             return
         }
         
-        // Prevent rapid reloads
         let now = Date().timeIntervalSince1970
         if now - context.coordinator.lastLoadTime < 2.0 {
             print("⚠️ Throttling reload: \(cameraName)")
@@ -146,9 +155,8 @@ struct WebViewHLSPlayer: UIViewRepresentable {
     }
     
     private func generateHTML() -> String {
-        // ✅ CRITICAL: Proper video attributes
         let autoplay = isFullscreen ? "autoplay" : ""
-        let muted = "muted" // Always muted initially
+        let muted = "muted"
         let controls = isFullscreen ? "controls" : ""
         let playsinline = "playsinline webkit-playsinline"
         
@@ -236,13 +244,11 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                                     enableWorker: true,
                                     lowLatencyMode: false,
                                     
-                                    // ✅ CRITICAL: Very conservative buffering
                                     maxBufferLength: isFullscreen ? 60 : 30,
                                     maxMaxBufferLength: isFullscreen ? 120 : 60,
                                     maxBufferSize: 100 * 1000 * 1000,
                                     maxBufferHole: 2.0,
                                     
-                                    // ✅ CRITICAL: Generous timeouts for slow streams
                                     manifestLoadingTimeOut: 30000,
                                     manifestLoadingMaxRetry: 6,
                                     manifestLoadingRetryDelay: 2000,
@@ -255,29 +261,22 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                                     fragLoadingMaxRetry: 6,
                                     fragLoadingRetryDelay: 2000,
                                     
-                                    // ✅ Let HLS.js choose best quality
                                     startLevel: -1,
                                     autoStartLoad: true,
-                                    
-                                    // ✅ CRITICAL: Don't cap quality for thumbnails
                                     capLevelToPlayerSize: false,
                                     
-                                    // ✅ Live stream settings
                                     liveSyncDurationCount: 3,
                                     liveMaxLatencyDurationCount: 10,
                                     maxLiveSyncPlaybackRate: 1,
                                     
-                                    // ✅ Enable prefetch
                                     startFragPrefetch: true,
                                     testBandwidth: true,
                                     
-                                    // ✅ CRITICAL: XHR setup for CORS
                                     xhrSetup: function(xhr, url) {
                                         xhr.withCredentials = false;
                                     }
                                 });
                                 
-                                // Error handling
                                 hls.on(Hls.Events.ERROR, function(event, data) {
                                     log('HLS Error: ' + data.type + ' - ' + data.details);
                                     
@@ -319,7 +318,6 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                                     }
                                 });
                                 
-                                // Success events
                                 hls.on(Hls.Events.MANIFEST_PARSED, function(event, data) {
                                     log('Manifest parsed - ' + data.levels.length + ' quality levels');
                                     retryCount = 0;
@@ -338,7 +336,6 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                                     log('Fragment loaded: ' + data.frag.sn);
                                 });
                                 
-                                // Load stream
                                 hls.loadSource(streamURL);
                                 hls.attachMedia(video);
                                 
@@ -380,7 +377,6 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                         }
                     }
                     
-                    // ✅ Prevent video pause/stop on visibility change
                     document.addEventListener('visibilitychange', function() {
                         if (!document.hidden && video.paused && hls) {
                             log('Tab visible - resuming playback');
@@ -390,10 +386,8 @@ struct WebViewHLSPlayer: UIViewRepresentable {
                         }
                     });
                     
-                    // Start initialization
                     initHLS();
                     
-                    // Cleanup on unload
                     window.addEventListener('beforeunload', cleanup);
                 })();
             </script>
@@ -487,7 +481,7 @@ struct CameraThumbnail: View {
                     }
                 }
                 
-                if let error = errorMessage {
+                if let _ = errorMessage {
                     ZStack {
                         Color.black.opacity(0.9)
                         VStack(spacing: 6) {
