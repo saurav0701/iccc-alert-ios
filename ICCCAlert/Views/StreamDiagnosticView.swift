@@ -24,14 +24,14 @@ struct StreamDiagnosticView: View {
                         Text("Camera Information")
                             .font(.headline)
                         
-                        InfoRow(label: "Name", value: camera.displayName)
-                        InfoRow(label: "ID", value: camera.id)
-                        InfoRow(label: "Area", value: camera.area)
-                        InfoRow(label: "Status", value: camera.status)
-                        InfoRow(label: "Group ID", value: "\(camera.groupId)")
+                        DiagnosticInfoRow(label: "Name", value: camera.displayName)
+                        DiagnosticInfoRow(label: "ID", value: camera.id)
+                        DiagnosticInfoRow(label: "Area", value: camera.area)
+                        DiagnosticInfoRow(label: "Status", value: camera.status)
+                        DiagnosticInfoRow(label: "Group ID", value: "\(camera.groupId)")
                         
                         if let streamURL = camera.streamURL {
-                            InfoRow(label: "Stream URL", value: streamURL)
+                            DiagnosticInfoRow(label: "Stream URL", value: streamURL)
                                 .font(.caption)
                         }
                     }
@@ -246,8 +246,8 @@ struct StreamDiagnosticView: View {
     }
 }
 
-// Diagnostic helper views - renamed to avoid conflicts
-struct InfoRow: View {
+// MARK: - Private Helper Views
+private struct DiagnosticInfoRow: View {
     let label: String
     let value: String
     
