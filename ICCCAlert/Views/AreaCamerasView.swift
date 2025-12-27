@@ -5,15 +5,16 @@ struct AreaCamerasView: View {
     @StateObject private var cameraManager = CameraManager.shared
     
     @State private var searchText = ""
-    @State private var showOnlineOnly = false
-    @State private var gridLayout: GridLayout = .grid2x2 // ✅ Start with 2x2 for better performance
+    @State private var showOnlineOnly = true // ✅ Default to online only
+    @State private var gridLayout: GridLayout = .list // ✅ Start with list for best performance
     
     @Binding var selectedCamera: Camera?
+    
+    @Environment(\.scenePhase) var scenePhase
     
     enum GridLayout: String, CaseIterable, Identifiable {
         case list = "List"
         case grid2x2 = "2×2 Grid"
-        case grid3x3 = "3×3 Grid" // ⚠️ Use sparingly - can be resource intensive
         
         var id: String { rawValue }
         
@@ -21,7 +22,6 @@ struct AreaCamerasView: View {
             switch self {
             case .list: return 1
             case .grid2x2: return 2
-            case .grid3x3: return 3
             }
         }
         
@@ -29,7 +29,6 @@ struct AreaCamerasView: View {
             switch self {
             case .list: return "list.bullet"
             case .grid2x2: return "square.grid.2x2"
-            case .grid3x3: return "square.grid.3x3"
             }
         }
     }
@@ -91,17 +90,15 @@ struct AreaCamerasView: View {
             DebugLogger.shared.log("📹 AreaCamerasView appeared for \(area)", emoji: "📹", color: .blue)
         }
         .onDisappear {
-            // ✅ Clean up inactive WebViews when leaving area view
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                WebViewStore.shared.clearInactive()
-            }
+            DebugLogger.shared.log("📤 AreaCamerasView disappeared for \(area)", emoji: "📤", color: .gray)
+            // Clean up all players when leaving
+            PlayerManager.shared.clearAll()
         }
-        .alert(isPresented: .constant(gridLayout == .grid3x3 && cameras.count > 12)) {
-            Alert(
-                title: Text("Performance Warning"),
-                message: Text("3×3 grid with many cameras may impact performance. Consider using 2×2 grid or showing online cameras only."),
-                dismissButton: .default(Text("OK"))
-            )
+        .onChange(of: scenePhase) { newPhase in
+            if newPhase == .background {
+                // Pause all players when app goes to background
+                PlayerManager.shared.clearAll()
+            }
         }
     }
 
@@ -173,13 +170,10 @@ struct AreaCamerasView: View {
                     }
                 }
                 .toggleStyle(SwitchToggleStyle(tint: .green))
-                
-                Spacer()
-                
-                // ✅ NEW: Quick info about current view
-                Text("\(cameras.count) visible")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                .onChange(of: showOnlineOnly) { _ in
+                    // Clear players when filter changes
+                    PlayerManager.shared.clearAll()
+                }
             }
             .padding(.horizontal)
         }
@@ -189,36 +183,54 @@ struct AreaCamerasView: View {
 
     private var cameraGridView: some View {
         ScrollView {
-            // ✅ OPTIMIZED: Use LazyVGrid for better performance with many items
-            LazyVGrid(
-                columns: Array(
-                    repeating: GridItem(.flexible(), spacing: 12),
-                    count: gridLayout.columns
-                ),
-                spacing: 12
-            ) {
+            LazyVStack(spacing: 12) {
                 ForEach(cameras, id: \.id) { camera in
-                    CameraCard(camera: camera, layout: gridLayout)
-                        .onTapGesture {
-                            if camera.isOnline {
-                                selectedCamera = camera
-                            } else {
-                                // ✅ Show alert for offline cameras
-                                let generator = UINotificationFeedbackGenerator()
-                                generator.notificationOccurred(.warning)
-                                
-                                DebugLogger.shared.log(
-                                    "⚠️ Cannot play offline camera: \(camera.displayName)",
-                                    emoji: "⚠️",
-                                    color: .orange
-                                )
+                    if gridLayout == .list {
+                        CameraListItem(camera: camera)
+                            .onTapGesture {
+                                handleCameraTap(camera)
                             }
-                        }
+                    }
                 }
             }
             .padding()
+            
+            if gridLayout == .grid2x2 {
+                LazyVGrid(
+                    columns: Array(
+                        repeating: GridItem(.flexible(), spacing: 12),
+                        count: 2
+                    ),
+                    spacing: 12
+                ) {
+                    ForEach(cameras, id: \.id) { camera in
+                        CameraCard(camera: camera, layout: .grid2x2)
+                            .onTapGesture {
+                                handleCameraTap(camera)
+                            }
+                    }
+                }
+                .padding()
+            }
         }
         .background(Color(.systemGroupedBackground))
+    }
+    
+    private func handleCameraTap(_ camera: Camera) {
+        if camera.isOnline {
+            // Pause all current players before opening fullscreen
+            PlayerManager.shared.clearAll()
+            selectedCamera = camera
+        } else {
+            let generator = UINotificationFeedbackGenerator()
+            generator.notificationOccurred(.warning)
+            
+            DebugLogger.shared.log(
+                "⚠️ Cannot play offline camera: \(camera.displayName)",
+                emoji: "⚠️",
+                color: .orange
+            )
+        }
     }
 
     private var emptyView: some View {
@@ -272,22 +284,72 @@ struct AreaCamerasView: View {
     }
 }
 
+// MARK: - List View Item (Optimized for single column)
+struct CameraListItem: View {
+    let camera: Camera
+    
+    var body: some View {
+        HStack(spacing: 16) {
+            // Thumbnail
+            CameraThumbnail(camera: camera)
+                .frame(width: 120, height: 90)
+                .cornerRadius(12)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(camera.isOnline ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
+                )
+            
+            // Info
+            VStack(alignment: .leading, spacing: 8) {
+                Text(camera.displayName)
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                    .lineLimit(2)
+                
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(camera.isOnline ? Color.green : Color.gray)
+                        .frame(width: 8, height: 8)
+                    
+                    Text(camera.location.isEmpty ? camera.area : camera.location)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+                
+                if camera.isOnline {
+                    HStack(spacing: 4) {
+                        Image(systemName: "play.circle.fill")
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                        Text("Tap to view")
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                    }
+                }
+            }
+            
+            Spacer()
+            
+            Image(systemName: "chevron.right")
+                .foregroundColor(.gray)
+        }
+        .padding()
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
+        .opacity(camera.isOnline ? 1 : 0.6)
+    }
+}
+
 struct CameraCard: View {
     let camera: Camera
     let layout: AreaCamerasView.GridLayout
     
-    var cardHeight: CGFloat {
-        switch layout {
-        case .list: return 180
-        case .grid2x2: return 140
-        case .grid3x3: return 100
-        }
-    }
-    
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             CameraThumbnail(camera: camera)
-                .frame(height: cardHeight)
+                .frame(height: 140)
                 .cornerRadius(12)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12)
@@ -296,9 +358,9 @@ struct CameraCard: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(camera.displayName)
-                    .font(layout == .list ? .body : (layout == .grid2x2 ? .caption : .caption2))
+                    .font(.caption)
                     .fontWeight(.medium)
-                    .lineLimit(layout == .grid3x3 ? 1 : 2)
+                    .lineLimit(2)
                     .foregroundColor(.primary)
                 
                 HStack(spacing: 4) {
@@ -307,13 +369,13 @@ struct CameraCard: View {
                         .frame(width: 6, height: 6)
                     
                     Text(camera.location.isEmpty ? camera.area : camera.location)
-                        .font(.system(size: layout == .grid3x3 ? 9 : 11))
+                        .font(.system(size: 11))
                         .foregroundColor(.secondary)
                         .lineLimit(1)
                 }
             }
         }
-        .padding(layout == .grid3x3 ? 8 : 12)
+        .padding(12)
         .background(Color(.systemBackground))
         .cornerRadius(16)
         .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)

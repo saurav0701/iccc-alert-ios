@@ -12,11 +12,10 @@ struct ICCCAlertApp: App {
         setupAppearance()
         _ = BackgroundWebSocketManager.shared
         
-        // ✅ Setup notifications
         NotificationManager.shared.requestAuthorization()
         NotificationManager.shared.setupNotificationCategories()
         
-        // ✅ Register for app termination notification
+        // ✅ Register for app termination
         NotificationCenter.default.addObserver(
             forName: UIApplication.willTerminateNotification,
             object: nil,
@@ -24,9 +23,18 @@ struct ICCCAlertApp: App {
         ) { _ in
             ICCCAlertApp.handleAppTermination()
         }
+        
+        // ✅ Register for memory warnings
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            ICCCAlertApp.handleMemoryWarning()
+        }
     }
     
-   var body: some Scene {
+    var body: some Scene {
         WindowGroup {
             if authManager.isAuthenticated {
                 ContentView()
@@ -44,10 +52,6 @@ struct ICCCAlertApp: App {
                         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                         print("🔐 LOGIN VIEW APPEARED")
                         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                        print("   - User not authenticated")
-                        print("   - WebSocket NOT connected (waiting for login)")
-                        print("   - WebSocket will connect after OTP verification")
-                        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                     }
                     .onChange(of: authManager.isAuthenticated) { isAuth in
                         if isAuth {
@@ -61,22 +65,17 @@ struct ICCCAlertApp: App {
                             print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                             print("✅ OTP VERIFIED - USER AUTHENTICATED")
                             print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                            print("   - isAuthenticated: true")
-                            print("   - Same clientId will be used: \(deviceClientId)")
-                            print("   - Backend will send pending events")
-                            print("   - Connecting WebSocket in 0.5s...")
+                            print("   - clientId: \(deviceClientId)")
+                            print("   - Connecting WebSocket...")
                             print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                             
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                                 self.connectWebSocket()
                             }
                         } else {
-                            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                             print("🔐 USER LOGGED OUT")
-                            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                            print("   - isAuthenticated: false")
-                            print("   - WebSocket should be disconnected")
-                            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                            // Clean up all resources
+                            PlayerManager.shared.clearAll()
                         }
                     }
             }
@@ -108,18 +107,20 @@ struct ICCCAlertApp: App {
                 print("🔄 Reconnecting WebSocket...")
                 webSocketService.connect()
             }
-            
-            // ✅ Clear badge when app opens
             NotificationManager.shared.updateBadgeCount()
             
         case .inactive:
             print("📱 App became inactive")
+            // Pause all video players
+            PlayerManager.shared.clearAll()
             
         case .background:
             print("📱 App moved to background")
             saveAppState()
             
-            // ✅ Update badge count
+            // ✅ CRITICAL: Clean up all video players
+            PlayerManager.shared.clearAll()
+            
             NotificationManager.shared.updateBadgeCount()
             
         @unknown default:
@@ -129,16 +130,32 @@ struct ICCCAlertApp: App {
     
     // ✅ Handle app termination
     private static func handleAppTermination() {
-        print("🛑 App will terminate - saving state")
+        print("🛑 App will terminate - cleaning up resources")
         
+        // Clean up video players
+        PlayerManager.shared.clearAll()
+        
+        // Save state
         SubscriptionManager.shared.forceSave()
         ChannelSyncState.shared.forceSave()
         WebSocketService.shared.disconnect()
         
-        print("✅ App state saved on termination")
+        print("✅ Resources cleaned up")
     }
     
-    // ✅ Force save app state
+    // ✅ Handle memory warnings
+    private static func handleMemoryWarning() {
+        print("⚠️ MEMORY WARNING - Aggressive cleanup")
+        
+        // Clear all video players immediately
+        PlayerManager.shared.clearAll()
+        
+        // Clear image caches
+        EventImageLoader.shared.clearCache()
+        
+        print("🧹 Memory cleanup complete")
+    }
+    
     private func saveAppState() {
         print("💾 Saving app state...")
         subscriptionManager.forceSave()
