@@ -69,6 +69,10 @@ struct HLSWebViewPlayer: UIViewRepresentable {
         config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
         config.processPool = WKProcessPool()
         
+        // Add message handler for logging
+        let contentController = config.userContentController
+        contentController.add(context.coordinator, name: "logger")
+        
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.scrollView.isScrollEnabled = false
         webView.scrollView.bounces = false
@@ -215,6 +219,17 @@ struct HLSWebViewPlayer: UIViewRepresentable {
                         status.textContent = msg;
                         status.style.color = color || '#4CAF50';
                         console.log('[Player]', msg);
+                        
+                        // Send to Swift DebugLogger
+                        try {
+                            window.webkit.messageHandlers.logger.postMessage({
+                                camera: '\(cameraId)',
+                                status: msg,
+                                url: streamUrl
+                            });
+                        } catch(e) {
+                            // Silent fail if handler not available
+                        }
                     }
                     
                     function showLoading() {
@@ -488,23 +503,47 @@ struct HLSWebViewPlayer: UIViewRepresentable {
         webView.loadHTMLString(html, baseURL: nil)
     }
     
-    class Coordinator: NSObject, WKNavigationDelegate {
+    class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var parent: HLSWebViewPlayer
         
         init(_ parent: HLSWebViewPlayer) {
             self.parent = parent
         }
         
+        // Message handler for JavaScript logs
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            if message.name == "logger", let body = message.body as? [String: Any] {
+                let camera = body["camera"] as? String ?? "unknown"
+                let status = body["status"] as? String ?? "unknown"
+                let url = body["url"] as? String ?? "unknown"
+                
+                let logMessage = "[\(camera)] \(status)"
+                
+                if status.contains("Error") || status.contains("Codec Not Supported") {
+                    DebugLogger.shared.log(logMessage, emoji: "❌", color: .red)
+                } else if status.contains("Playing") {
+                    DebugLogger.shared.log(logMessage, emoji: "✅", color: .green)
+                } else if status.contains("Buffering") {
+                    DebugLogger.shared.log(logMessage, emoji: "⏳", color: .orange)
+                } else {
+                    DebugLogger.shared.log(logMessage, emoji: "📹", color: .blue)
+                }
+            }
+        }
+        
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             print("✅ WebView loaded for: \(parent.cameraId)")
+            DebugLogger.shared.log("WebView loaded: \(parent.cameraId)", emoji: "📱", color: .blue)
         }
         
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             print("❌ WebView navigation failed: \(error.localizedDescription)")
+            DebugLogger.shared.log("WebView failed: \(parent.cameraId) - \(error.localizedDescription)", emoji: "❌", color: .red)
         }
         
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
             print("⚠️ WebView process terminated for: \(parent.cameraId)")
+            DebugLogger.shared.log("WebView crashed: \(parent.cameraId)", emoji: "💥", color: .red)
             // Prevent crash by reloading
             DispatchQueue.main.async {
                 PlayerManager.shared.releaseWebView(self.parent.cameraId)
