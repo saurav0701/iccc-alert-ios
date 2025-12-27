@@ -45,7 +45,7 @@ class PlayerManager: ObservableObject {
         
         // Create player item with proper configuration for HLS
         let asset = AVURLAsset(url: url, options: [
-            AVURLAssetHTTPHeaderFieldsKey: [
+            "AVURLAssetHTTPHeaderFieldsKey": [
                 "User-Agent": "ICCCAlert/1.0",
                 "Accept": "*/*"
             ],
@@ -295,7 +295,7 @@ struct NativeVideoPlayer: UIViewControllerRepresentable {
                     print("❌ Error Log for \(self.parent.cameraId):")
                     print("   Error: \(lastEvent.errorComment ?? "N/A")")
                     print("   Status Code: \(lastEvent.errorStatusCode)")
-                    print("   Domain: \(lastEvent.errorDomain ?? "N/A")")
+                    print("   Domain: \(lastEvent.errorDomain)")
                     
                     DispatchQueue.main.async {
                         if lastEvent.errorStatusCode == -12938 {
