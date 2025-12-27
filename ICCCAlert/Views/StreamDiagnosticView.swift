@@ -165,6 +165,8 @@ struct StreamDiagnosticView: View {
                 if let error = error {
                     result.manifestError = error.localizedDescription
                     result.manifestAccessible = false
+                    diagnosticResult = result
+                    isRunning = false
                 } else if let httpResponse = response as? HTTPURLResponse {
                     result.responseTime = Date().timeIntervalSince(startTime)
                     result.contentType = httpResponse.mimeType
@@ -174,7 +176,15 @@ struct StreamDiagnosticView: View {
                         
                         // Try to parse manifest and check first segment
                         if let data = data, let manifest = String(data: data, encoding: .utf8) {
-                            checkFirstSegment(manifest: manifest, baseURL: streamURL, result: &result)
+                            checkFirstSegment(manifest: manifest, baseURL: streamURL) { accessible, error in
+                                result.segmentAccessible = accessible
+                                result.segmentError = error
+                                diagnosticResult = result
+                                isRunning = false
+                            }
+                        } else {
+                            diagnosticResult = result
+                            isRunning = false
                         }
                     } else {
                         result.manifestError = "HTTP \(httpResponse.statusCode)"
@@ -188,7 +198,7 @@ struct StreamDiagnosticView: View {
         }.resume()
     }
     
-    private func checkFirstSegment(manifest: String, baseURL: String, result: inout DiagnosticResult) {
+    private func checkFirstSegment(manifest: String, baseURL: String, completion: @escaping (Bool, String?) -> Void) {
         // Parse manifest for first .ts segment
         let lines = manifest.components(separatedBy: .newlines)
         var segmentURL: String?
@@ -201,7 +211,7 @@ struct StreamDiagnosticView: View {
         }
         
         guard let segment = segmentURL else {
-            result.segmentError = "No segments found in manifest"
+            completion(false, "No segments found in manifest")
             return
         }
         
@@ -215,31 +225,29 @@ struct StreamDiagnosticView: View {
                let segmentURLObj = URL(string: segment, relativeTo: baseURLObj) {
                 fullSegmentURL = segmentURLObj.absoluteString
             } else {
-                result.segmentError = "Could not construct segment URL"
+                completion(false, "Could not construct segment URL")
                 return
             }
         }
         
         // Test segment access
         guard let url = URL(string: fullSegmentURL) else {
-            result.segmentError = "Invalid segment URL"
+            completion(false, "Invalid segment URL")
             return
         }
         
         var request = URLRequest(url: url)
         request.timeoutInterval = 10
-        request.httpMethod = "HEAD" // Just check if accessible
+        request.httpMethod = "HEAD"
         
         URLSession.shared.dataTask(with: request) { _, response, error in
             DispatchQueue.main.async {
                 if let error = error {
-                    result.segmentError = error.localizedDescription
-                    result.segmentAccessible = false
+                    completion(false, error.localizedDescription)
                 } else if let httpResponse = response as? HTTPURLResponse {
-                    result.segmentAccessible = (httpResponse.statusCode == 200)
-                    if !result.segmentAccessible {
-                        result.segmentError = "HTTP \(httpResponse.statusCode)"
-                    }
+                    let accessible = (httpResponse.statusCode == 200)
+                    let errorMsg = accessible ? nil : "HTTP \(httpResponse.statusCode)"
+                    completion(accessible, errorMsg)
                 }
             }
         }.resume()
