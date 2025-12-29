@@ -5,8 +5,8 @@ struct AreaCamerasView: View {
     @StateObject private var cameraManager = CameraManager.shared
     
     @State private var searchText = ""
-    @State private var showOnlineOnly = true // ✅ Default to online only
-    @State private var gridLayout: GridLayout = .list // ✅ Start with list for best performance
+    @State private var showOnlineOnly = true
+    @State private var gridLayout: GridLayout = .list
     
     @Binding var selectedCamera: Camera?
     
@@ -91,14 +91,17 @@ struct AreaCamerasView: View {
         }
         .onDisappear {
             DebugLogger.shared.log("📤 AreaCamerasView disappeared for \(area)", emoji: "📤", color: .gray)
-            // Clean up all players when leaving
-            PlayerManager.shared.clearAll()
+            // Pause all players when leaving
+            PlayerManager.shared.pauseAll()
         }
         .onChange(of: scenePhase) { newPhase in
             if newPhase == .background {
-                // Pause all players when app goes to background
                 PlayerManager.shared.clearAll()
             }
+        }
+        .onChange(of: gridLayout) { _ in
+            // Clear players when switching layouts
+            PlayerManager.shared.clearAll()
         }
     }
 
@@ -171,7 +174,6 @@ struct AreaCamerasView: View {
                 }
                 .toggleStyle(SwitchToggleStyle(tint: .green))
                 .onChange(of: showOnlineOnly) { _ in
-                    // Clear players when filter changes
                     PlayerManager.shared.clearAll()
                 }
             }
@@ -181,21 +183,20 @@ struct AreaCamerasView: View {
         .background(Color(.systemGroupedBackground))
     }
 
+    @ViewBuilder
     private var cameraGridView: some View {
         ScrollView {
-            LazyVStack(spacing: 12) {
-                ForEach(cameras, id: \.id) { camera in
-                    if gridLayout == .list {
+            if gridLayout == .list {
+                LazyVStack(spacing: 12) {
+                    ForEach(cameras, id: \.id) { camera in
                         CameraListItem(camera: camera)
                             .onTapGesture {
                                 handleCameraTap(camera)
                             }
                     }
                 }
-            }
-            .padding()
-            
-            if gridLayout == .grid2x2 {
+                .padding()
+            } else {
                 LazyVGrid(
                     columns: Array(
                         repeating: GridItem(.flexible(), spacing: 12),
@@ -204,7 +205,7 @@ struct AreaCamerasView: View {
                     spacing: 12
                 ) {
                     ForEach(cameras, id: \.id) { camera in
-                        CameraCard(camera: camera, layout: .grid2x2)
+                        CameraCard2x2(camera: camera)
                             .onTapGesture {
                                 handleCameraTap(camera)
                             }
@@ -219,7 +220,7 @@ struct AreaCamerasView: View {
     private func handleCameraTap(_ camera: Camera) {
         if camera.isOnline {
             // Pause all current players before opening fullscreen
-            PlayerManager.shared.clearAll()
+            PlayerManager.shared.pauseAll()
             selectedCamera = camera
         } else {
             let generator = UINotificationFeedbackGenerator()
@@ -284,7 +285,7 @@ struct AreaCamerasView: View {
     }
 }
 
-// MARK: - List View Item (Optimized for single column)
+// MARK: - List View Item
 struct CameraListItem: View {
     let camera: Camera
     
@@ -326,6 +327,11 @@ struct CameraListItem: View {
                             .font(.caption)
                             .foregroundColor(.blue)
                     }
+                } else {
+                    Text("Offline")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                        .italic()
                 }
             }
             
@@ -342,43 +348,83 @@ struct CameraListItem: View {
     }
 }
 
-struct CameraCard: View {
+// MARK: - 2x2 Grid Card
+struct CameraCard2x2: View {
     let camera: Camera
-    let layout: AreaCamerasView.GridLayout
+    @State private var isHovered = false
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            CameraThumbnail(camera: camera)
-                .frame(height: 140)
-                .cornerRadius(12)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(camera.isOnline ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
-                )
-
+        VStack(alignment: .leading, spacing: 0) {
+            // Video thumbnail
+            ZStack {
+                CameraThumbnail(camera: camera)
+                    .aspectRatio(4/3, contentMode: .fill)
+                    .clipped()
+                
+                // Overlay with status
+                VStack {
+                    HStack {
+                        Spacer()
+                        
+                        // Online indicator
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(camera.isOnline ? Color.green : Color.gray)
+                                .frame(width: 6, height: 6)
+                            
+                            if camera.isOnline {
+                                Text("LIVE")
+                                    .font(.system(size: 8, weight: .bold))
+                                    .foregroundColor(.white)
+                            }
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Color.black.opacity(0.7))
+                        .cornerRadius(4)
+                        .padding(6)
+                    }
+                    
+                    Spacer()
+                    
+                    // Bottom gradient for text readability
+                    LinearGradient(
+                        gradient: Gradient(colors: [Color.clear, Color.black.opacity(0.6)]),
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 40)
+                }
+            }
+            .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(camera.isOnline ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
+            )
+            
+            // Camera info
             VStack(alignment: .leading, spacing: 4) {
                 Text(camera.displayName)
                     .font(.caption)
-                    .fontWeight(.medium)
+                    .fontWeight(.semibold)
                     .lineLimit(2)
                     .foregroundColor(.primary)
+                    .frame(height: 32, alignment: .topLeading)
                 
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(camera.isOnline ? Color.green : Color.gray)
-                        .frame(width: 6, height: 6)
-                    
-                    Text(camera.location.isEmpty ? camera.area : camera.location)
-                        .font(.system(size: 11))
+                if !camera.location.isEmpty {
+                    Text(camera.location)
+                        .font(.system(size: 10))
                         .foregroundColor(.secondary)
                         .lineLimit(1)
                 }
             }
+            .padding(8)
         }
-        .padding(12)
         .background(Color(.systemBackground))
         .cornerRadius(16)
         .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
-        .opacity(camera.isOnline ? 1 : 0.6)
+        .opacity(camera.isOnline ? 1 : 0.65)
+        .scaleEffect(isHovered ? 1.02 : 1.0)
+        .animation(.easeInOut(duration: 0.2), value: isHovered)
     }
 }
