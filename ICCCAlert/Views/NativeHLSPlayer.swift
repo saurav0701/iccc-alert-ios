@@ -1,13 +1,13 @@
 import SwiftUI
 import AVKit
 import AVFoundation
+import Combine
 
 // MARK: - Native Player Manager (H.265 Compatible)
 class NativePlayerManager: ObservableObject {
     static let shared = NativePlayerManager()
     
     private var activePlayers: [String: AVPlayer] = [:]
-    private var playerObservers: [String: NSKeyValueObservation] = [:]
     private let lock = NSLock()
     private let maxPlayers = 2
     
@@ -50,10 +50,6 @@ class NativePlayerManager: ObservableObject {
         if let player = activePlayers.removeValue(forKey: cameraId) {
             player.pause()
             player.replaceCurrentItem(with: nil)
-            
-            // Remove observer
-            playerObservers.removeValue(forKey: cameraId)
-            
             print("🗑️ Released native player: \(cameraId)")
         }
     }
@@ -73,14 +69,46 @@ class NativePlayerManager: ObservableObject {
     }
 }
 
+// MARK: - Player Observer (Separate class for KVO)
+class PlayerObserver: NSObject {
+    var onStatusChange: ((AVPlayerItem.Status) -> Void)?
+    var onError: ((Error?) -> Void)?
+    
+    private var statusObservation: NSKeyValueObservation?
+    
+    func observe(playerItem: AVPlayerItem) {
+        statusObservation = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
+            DispatchQueue.main.async {
+                self?.onStatusChange?(item.status)
+                
+                if item.status == .failed, let error = item.error {
+                    self?.onError?(error)
+                }
+            }
+        }
+    }
+    
+    func stopObserving() {
+        statusObservation?.invalidate()
+        statusObservation = nil
+    }
+    
+    deinit {
+        stopObserving()
+    }
+}
+
 // MARK: - Native HLS Player (Thumbnail View)
 struct NativeHLSPlayerThumbnail: View {
     let streamURL: String
     let cameraId: String
+    
     @State private var player: AVPlayer?
     @State private var isLoading = true
     @State private var hasError = false
     @State private var statusMessage = "Initializing..."
+    @State private var observer: PlayerObserver?
+    @State private var cancellables = Set<AnyCancellable>()
     
     var body: some View {
         ZStack {
@@ -131,7 +159,7 @@ struct NativeHLSPlayerThumbnail: View {
                 .cornerRadius(10)
             }
             
-            // LIVE indicator (only show when playing)
+            // LIVE indicator
             if !isLoading && !hasError {
                 VStack {
                     HStack {
@@ -170,81 +198,26 @@ struct NativeHLSPlayerThumbnail: View {
         }
         
         DebugLogger.shared.log("📹 Setting up native player for: \(cameraId)", emoji: "📹", color: .blue)
-        DebugLogger.shared.log("   URL: \(streamURL)", emoji: "🔗", color: .gray)
         
         // Get player from manager
         let avPlayer = NativePlayerManager.shared.getPlayer(for: cameraId, url: url)
         self.player = avPlayer
         
-        // Observe player status
-        avPlayer.currentItem?.addObserver(self, forKeyPath: "status", options: [.new], context: nil)
-        
-        // Monitor playback
-        NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemFailedToPlayToEndTime,
-            object: avPlayer.currentItem,
-            queue: .main
-        ) { notification in
-            handlePlaybackError(notification)
-        }
-        
-        NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemNewAccessLogEntry,
-            object: avPlayer.currentItem,
-            queue: .main
-        ) { _ in
-            isLoading = false
-            hasError = false
-            DebugLogger.shared.log("✅ Stream playing: \(cameraId)", emoji: "✅", color: .green)
-        }
-        
-        // Auto-play
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            avPlayer.play()
-        }
-    }
-    
-    private func handlePlaybackError(_ notification: Notification) {
-        isLoading = false
-        hasError = true
-        
-        if let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error {
-            statusMessage = error.localizedDescription
-            DebugLogger.shared.log("❌ Playback error: \(error.localizedDescription)", emoji: "❌", color: .red)
-        } else {
-            statusMessage = "Cannot load stream"
-            DebugLogger.shared.log("❌ Unknown playback error", emoji: "❌", color: .red)
-        }
-    }
-    
-    private func cleanup() {
-        player?.pause()
-        NativePlayerManager.shared.releasePlayer(cameraId)
-        player = nil
-        
-        NotificationCenter.default.removeObserver(self)
-    }
-    
-    override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
-        if keyPath == "status",
-           let playerItem = object as? AVPlayerItem {
-            
-            switch playerItem.status {
+        // Setup observer
+        let newObserver = PlayerObserver()
+        newObserver.onStatusChange = { [weak avPlayer] status in
+            switch status {
             case .readyToPlay:
                 isLoading = false
                 hasError = false
                 DebugLogger.shared.log("✅ Player ready: \(cameraId)", emoji: "✅", color: .green)
+                avPlayer?.play()
                 
             case .failed:
                 isLoading = false
                 hasError = true
-                
-                if let error = playerItem.error {
-                    statusMessage = error.localizedDescription
-                    DebugLogger.shared.log("❌ Player failed: \(error.localizedDescription)", emoji: "❌", color: .red)
-                } else {
-                    statusMessage = "Playback failed"
-                }
+                statusMessage = "Playback failed"
+                DebugLogger.shared.log("❌ Player failed: \(cameraId)", emoji: "❌", color: .red)
                 
             case .unknown:
                 isLoading = true
@@ -253,6 +226,52 @@ struct NativeHLSPlayerThumbnail: View {
                 break
             }
         }
+        
+        newObserver.onError = { error in
+            if let error = error {
+                statusMessage = error.localizedDescription
+                DebugLogger.shared.log("❌ Error: \(error.localizedDescription)", emoji: "❌", color: .red)
+            }
+        }
+        
+        if let playerItem = avPlayer.currentItem {
+            newObserver.observe(playerItem: playerItem)
+        }
+        
+        self.observer = newObserver
+        
+        // Monitor notifications
+        NotificationCenter.default.publisher(for: .AVPlayerItemFailedToPlayToEndTime, object: avPlayer.currentItem)
+            .sink { notification in
+                isLoading = false
+                hasError = true
+                
+                if let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error {
+                    statusMessage = error.localizedDescription
+                }
+            }
+            .store(in: &cancellables)
+        
+        NotificationCenter.default.publisher(for: .AVPlayerItemNewAccessLogEntry, object: avPlayer.currentItem)
+            .sink { _ in
+                isLoading = false
+                hasError = false
+            }
+            .store(in: &cancellables)
+        
+        // Auto-play after slight delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            avPlayer.play()
+        }
+    }
+    
+    private func cleanup() {
+        player?.pause()
+        observer?.stopObserving()
+        observer = nil
+        NativePlayerManager.shared.releasePlayer(cameraId)
+        player = nil
+        cancellables.removeAll()
     }
 }
 
@@ -260,10 +279,13 @@ struct NativeHLSPlayerThumbnail: View {
 struct NativeHLSPlayerFullscreen: View {
     let camera: Camera
     @Environment(\.presentationMode) var presentationMode
+    
     @State private var player: AVPlayer?
     @State private var isLoading = true
     @State private var hasError = false
     @State private var errorMessage = ""
+    @State private var observer: PlayerObserver?
+    @State private var cancellables = Set<AnyCancellable>()
     
     var body: some View {
         ZStack {
@@ -312,9 +334,7 @@ struct NativeHLSPlayerFullscreen: View {
                         .multilineTextAlignment(.center)
                         .padding(.horizontal)
                     
-                    Button(action: {
-                        retry()
-                    }) {
+                    Button(action: retry) {
                         HStack {
                             Image(systemName: "arrow.clockwise")
                             Text("Retry")
@@ -332,7 +352,7 @@ struct NativeHLSPlayerFullscreen: View {
                 .cornerRadius(16)
             }
             
-            // Top bar (camera info + close button)
+            // Top bar
             VStack {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
@@ -390,50 +410,71 @@ struct NativeHLSPlayerFullscreen: View {
         }
         
         DebugLogger.shared.log("📹 Opening fullscreen player: \(camera.displayName)", emoji: "📹", color: .blue)
-        DebugLogger.shared.log("   URL: \(streamURL)", emoji: "🔗", color: .gray)
         
         // Get player from manager
         let avPlayer = NativePlayerManager.shared.getPlayer(for: camera.id, url: url)
         self.player = avPlayer
         
-        // Observe player status
-        avPlayer.currentItem?.addObserver(self, forKeyPath: "status", options: [.new], context: nil)
-        
-        // Monitor errors
-        NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemFailedToPlayToEndTime,
-            object: avPlayer.currentItem,
-            queue: .main
-        ) { notification in
-            handlePlaybackError(notification)
+        // Setup observer
+        let newObserver = PlayerObserver()
+        newObserver.onStatusChange = { [weak avPlayer] status in
+            switch status {
+            case .readyToPlay:
+                isLoading = false
+                hasError = false
+                DebugLogger.shared.log("✅ Fullscreen player ready", emoji: "✅", color: .green)
+                avPlayer?.play()
+                
+            case .failed:
+                isLoading = false
+                hasError = true
+                errorMessage = "Playback failed"
+                DebugLogger.shared.log("❌ Fullscreen player failed", emoji: "❌", color: .red)
+                
+            case .unknown:
+                isLoading = true
+                
+            @unknown default:
+                break
+            }
         }
         
-        // Monitor successful playback
-        NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemNewAccessLogEntry,
-            object: avPlayer.currentItem,
-            queue: .main
-        ) { _ in
-            isLoading = false
-            hasError = false
-            DebugLogger.shared.log("✅ Fullscreen stream playing", emoji: "✅", color: .green)
+        newObserver.onError = { error in
+            if let error = error {
+                errorMessage = error.localizedDescription
+            }
         }
+        
+        if let playerItem = avPlayer.currentItem {
+            newObserver.observe(playerItem: playerItem)
+        }
+        
+        self.observer = newObserver
+        
+        // Monitor notifications
+        NotificationCenter.default.publisher(for: .AVPlayerItemFailedToPlayToEndTime, object: avPlayer.currentItem)
+            .sink { notification in
+                isLoading = false
+                hasError = true
+                
+                if let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error {
+                    errorMessage = error.localizedDescription
+                } else {
+                    errorMessage = "Cannot load stream. Check your network connection."
+                }
+            }
+            .store(in: &cancellables)
+        
+        NotificationCenter.default.publisher(for: .AVPlayerItemNewAccessLogEntry, object: avPlayer.currentItem)
+            .sink { _ in
+                isLoading = false
+                hasError = false
+            }
+            .store(in: &cancellables)
         
         // Auto-play
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             avPlayer.play()
-        }
-    }
-    
-    private func handlePlaybackError(_ notification: Notification) {
-        isLoading = false
-        hasError = true
-        
-        if let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error {
-            errorMessage = error.localizedDescription
-            DebugLogger.shared.log("❌ Fullscreen playback error: \(error.localizedDescription)", emoji: "❌", color: .red)
-        } else {
-            errorMessage = "Cannot load stream. Check your network connection."
         }
     }
     
@@ -449,44 +490,15 @@ struct NativeHLSPlayerFullscreen: View {
     
     private func cleanup() {
         player?.pause()
+        observer?.stopObserving()
+        observer = nil
         NativePlayerManager.shared.releasePlayer(camera.id)
         player = nil
-        
-        NotificationCenter.default.removeObserver(self)
-    }
-    
-    override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
-        if keyPath == "status",
-           let playerItem = object as? AVPlayerItem {
-            
-            switch playerItem.status {
-            case .readyToPlay:
-                isLoading = false
-                hasError = false
-                DebugLogger.shared.log("✅ Fullscreen player ready", emoji: "✅", color: .green)
-                
-            case .failed:
-                isLoading = false
-                hasError = true
-                
-                if let error = playerItem.error {
-                    errorMessage = error.localizedDescription
-                    DebugLogger.shared.log("❌ Fullscreen player failed: \(error.localizedDescription)", emoji: "❌", color: .red)
-                } else {
-                    errorMessage = "Playback failed"
-                }
-                
-            case .unknown:
-                isLoading = true
-                
-            @unknown default:
-                break
-            }
-        }
+        cancellables.removeAll()
     }
 }
 
-// MARK: - Camera Thumbnail (Updated to use Native Player)
+// MARK: - Camera Thumbnail (Updated)
 struct CameraThumbnail: View {
     let camera: Camera
     @State private var shouldLoad = false
