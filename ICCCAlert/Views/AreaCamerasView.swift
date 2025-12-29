@@ -15,6 +15,7 @@ struct AreaCamerasView: View {
     enum GridLayout: String, CaseIterable, Identifiable {
         case list = "List"
         case grid2x2 = "2×2 Grid"
+        case grid3x3 = "3×3 Grid"
         
         var id: String { rawValue }
         
@@ -22,6 +23,7 @@ struct AreaCamerasView: View {
             switch self {
             case .list: return 1
             case .grid2x2: return 2
+            case .grid3x3: return 3
             }
         }
         
@@ -29,6 +31,7 @@ struct AreaCamerasView: View {
             switch self {
             case .list: return "list.bullet"
             case .grid2x2: return "square.grid.2x2"
+            case .grid3x3: return "square.grid.3x3"
             }
         }
     }
@@ -91,7 +94,6 @@ struct AreaCamerasView: View {
         }
         .onDisappear {
             DebugLogger.shared.log("📤 AreaCamerasView disappeared for \(area)", emoji: "📤", color: .gray)
-            // Pause all players when leaving
             PlayerManager.shared.pauseAll()
         }
         .onChange(of: scenePhase) { newPhase in
@@ -100,7 +102,6 @@ struct AreaCamerasView: View {
             }
         }
         .onChange(of: gridLayout) { _ in
-            // Clear players when switching layouts
             PlayerManager.shared.clearAll()
         }
     }
@@ -200,12 +201,12 @@ struct AreaCamerasView: View {
                 LazyVGrid(
                     columns: Array(
                         repeating: GridItem(.flexible(), spacing: 12),
-                        count: 2
+                        count: gridLayout.columns
                     ),
                     spacing: 12
                 ) {
                     ForEach(cameras, id: \.id) { camera in
-                        CameraCard2x2(camera: camera)
+                        CameraGridCard(camera: camera, isCompact: gridLayout == .grid3x3)
                             .onTapGesture {
                                 handleCameraTap(camera)
                             }
@@ -219,7 +220,6 @@ struct AreaCamerasView: View {
     
     private func handleCameraTap(_ camera: Camera) {
         if camera.isOnline {
-            // Pause all current players before opening fullscreen
             PlayerManager.shared.pauseAll()
             selectedCamera = camera
         } else {
@@ -348,10 +348,11 @@ struct CameraListItem: View {
     }
 }
 
-// MARK: - 2x2 Grid Card
-struct CameraCard2x2: View {
+// MARK: - Grid Card (2x2 and 3x3)
+struct CameraGridCard: View {
     let camera: Camera
-    @State private var isHovered = false
+    let isCompact: Bool
+    @State private var isPressed = false
     
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -370,30 +371,22 @@ struct CameraCard2x2: View {
                         HStack(spacing: 4) {
                             Circle()
                                 .fill(camera.isOnline ? Color.green : Color.gray)
-                                .frame(width: 6, height: 6)
+                                .frame(width: isCompact ? 5 : 6, height: isCompact ? 5 : 6)
                             
                             if camera.isOnline {
                                 Text("LIVE")
-                                    .font(.system(size: 8, weight: .bold))
+                                    .font(.system(size: isCompact ? 7 : 8, weight: .bold))
                                     .foregroundColor(.white)
                             }
                         }
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
+                        .padding(.horizontal, isCompact ? 4 : 6)
+                        .padding(.vertical, isCompact ? 2 : 3)
                         .background(Color.black.opacity(0.7))
                         .cornerRadius(4)
-                        .padding(6)
+                        .padding(isCompact ? 4 : 6)
                     }
                     
                     Spacer()
-                    
-                    // Bottom gradient for text readability
-                    LinearGradient(
-                        gradient: Gradient(colors: [Color.clear, Color.black.opacity(0.6)]),
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(height: 40)
                 }
             }
             .cornerRadius(12)
@@ -405,25 +398,30 @@ struct CameraCard2x2: View {
             // Camera info
             VStack(alignment: .leading, spacing: 4) {
                 Text(camera.displayName)
-                    .font(.system(size: 12, weight: .semibold))
-                    .lineLimit(2)
+                    .font(.system(size: isCompact ? 11 : 12, weight: .semibold))
+                    .lineLimit(isCompact ? 1 : 2)
                     .foregroundColor(.primary)
-                    .frame(height: 32, alignment: .topLeading)
+                    .frame(height: isCompact ? 16 : 32, alignment: .topLeading)
                 
-                if !camera.location.isEmpty {
+                if !camera.location.isEmpty && !isCompact {
                     Text(camera.location)
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
                         .lineLimit(1)
                 }
             }
-            .padding(8)
+            .padding(isCompact ? 6 : 8)
         }
         .background(Color(.systemBackground))
         .cornerRadius(16)
         .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
         .opacity(camera.isOnline ? 1 : 0.65)
-        .scaleEffect(isHovered ? 1.02 : 1.0)
-        .animation(.easeInOut(duration: 0.2), value: isHovered)
+        .scaleEffect(isPressed ? 0.95 : 1.0)
+        .animation(.easeInOut(duration: 0.1), value: isPressed)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded { _ in isPressed = false }
+        )
     }
 }
