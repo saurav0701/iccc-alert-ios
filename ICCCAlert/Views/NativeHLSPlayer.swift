@@ -284,22 +284,98 @@ struct HLSWebViewPlayer: UIViewRepresentable {
                     function initPlayer() {
                         if (isDestroyed) return;
                         
-                        if (typeof Hls === 'undefined') {
-                            setTimeout(initPlayer, 100);
-                            return;
-                        }
-                        
                         updateStatus('Starting player...');
                         
-                        if (Hls.isSupported()) {
-                            updateStatus('Using HLS.js');
-                            useHlsJs();
-                        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                            updateStatus('Using native HLS');
+                        // ✅ CRITICAL FIX: Prefer native HLS on iOS for H.265 support
+                        // iPhone 7 has native HEVC hardware decode, which works better than HLS.js
+                        if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                            updateStatus('Using native HLS (iPhone 7 H.265 ready)');
                             useNativeHls();
+                        } else if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                            updateStatus('Using HLS.js fallback');
+                            useHlsJs();
                         } else {
                             showError('Not Supported', 'HLS playback unavailable on this device');
                         }
+                    }
+                    
+                    function useNativeHls() {
+                        if (isDestroyed) return;
+                        
+                        showLoading();
+                        
+                        // ✅ Critical attributes for H.265 playback
+                        video.setAttribute('playsinline', '');
+                        video.setAttribute('webkit-playsinline', '');
+                        video.setAttribute('preload', 'auto');
+                        video.muted = true; // Start muted for autoplay
+                        
+                        video.src = streamUrl;
+                        
+                        video.addEventListener('loadedmetadata', function() {
+                            if (isDestroyed) return;
+                            updateStatus('Stream metadata loaded');
+                            
+                            // Log codec info
+                            if (video.videoTracks && video.videoTracks.length > 0) {
+                                const track = video.videoTracks[0];
+                                console.log('Video codec:', track.label || 'unknown');
+                                updateStatus('Codec: ' + (track.label || 'H.265/H.264'));
+                            }
+                        });
+                        
+                        video.addEventListener('loadeddata', function() {
+                            if (isDestroyed) return;
+                            hideLoading();
+                            updateStatus('Native HLS ready, starting playback');
+                            
+                            video.play().then(function() {
+                                updateStatus('Playing ✓ (Native HLS - H.265 supported)');
+                                startHealthCheck();
+                            }).catch(function(e) {
+                                console.error('Play failed:', e);
+                                updateStatus('Retrying playback...', '#ff9800');
+                                setTimeout(function() {
+                                    if (!isDestroyed) video.play();
+                                }, 500);
+                            });
+                        });
+                        
+                        video.addEventListener('error', function() {
+                            if (isDestroyed) return;
+                            
+                            let msg = 'Stream Error';
+                            let detail = 'Unknown error';
+                            
+                            if (video.error) {
+                                console.error('Video error:', video.error.code, video.error.message);
+                                
+                                switch(video.error.code) {
+                                    case 1: // MEDIA_ERR_ABORTED
+                                        msg = 'Playback Aborted';
+                                        detail = 'Stream loading was interrupted';
+                                        break;
+                                    case 2: // MEDIA_ERR_NETWORK
+                                        msg = 'Network Error';
+                                        detail = 'Cannot access stream from server';
+                                        break;
+                                    case 3: // MEDIA_ERR_DECODE
+                                        msg = 'Decode Error';
+                                        detail = 'Stream decode failed. May be stream packaging or server issue.';
+                                        break;
+                                    case 4: // MEDIA_ERR_SRC_NOT_SUPPORTED
+                                        msg = 'Stream Not Supported';
+                                        detail = 'Stream format or URL invalid';
+                                        break;
+                                    default:
+                                        detail = 'Error code: ' + video.error.code;
+                                }
+                            }
+                            
+                            showError(msg, detail);
+                        });
+                        
+                        video.load();
                     }
                     
                     function useHlsJs() {
@@ -381,14 +457,14 @@ struct HLSWebViewPlayer: UIViewRepresentable {
                                             
                                         case Hls.ErrorTypes.MEDIA_ERROR:
                                             if (data.details.includes('Decode')) {
-                                                // Codec not supported
-                                                showError('Codec Not Supported', 'This camera uses H.265/HEVC codec which is not supported on this device');
+                                                // Decode error - could be stream format issue
+                                                showError('Decode Error', 'Stream decode failed. May be stream packaging issue.');
                                             } else if (retryCount < maxRetries) {
                                                 retryCount++;
                                                 updateStatus('Media error, recovering...', '#ff9800');
                                                 hls.recoverMediaError();
                                             } else {
-                                                showError('Media Error', 'Stream format incompatible with device');
+                                                showError('Media Error', 'Stream format issue or packaging problem');
                                             }
                                             break;
                                             
@@ -407,47 +483,6 @@ struct HLSWebViewPlayer: UIViewRepresentable {
                             console.error('HLS setup error:', e);
                             showError('Setup Failed', e.message);
                         }
-                    }
-                    
-                    function useNativeHls() {
-                        if (isDestroyed) return;
-                        
-                        showLoading();
-                        video.src = streamUrl;
-                        
-                        video.addEventListener('loadeddata', function() {
-                            if (isDestroyed) return;
-                            hideLoading();
-                            updateStatus('Native HLS playing');
-                            video.play();
-                            startHealthCheck();
-                        });
-                        
-                        video.addEventListener('error', function() {
-                            if (isDestroyed) return;
-                            
-                            let msg = 'Stream Error';
-                            let detail = 'Unknown error';
-                            
-                            if (video.error) {
-                                switch(video.error.code) {
-                                    case 3:
-                                        msg = 'Codec Not Supported';
-                                        detail = 'Camera codec (likely H.265) not supported on this device';
-                                        break;
-                                    case 4:
-                                        msg = 'Stream Not Found';
-                                        detail = 'Cannot access stream URL';
-                                        break;
-                                    default:
-                                        detail = 'Error code: ' + video.error.code;
-                                }
-                            }
-                            
-                            showError(msg, detail);
-                        });
-                        
-                        video.load();
                     }
                     
                     function startHealthCheck() {
@@ -519,7 +554,15 @@ struct HLSWebViewPlayer: UIViewRepresentable {
                 
                 let logMessage = "[\(camera)] \(status)"
                 
-                if status.contains("Error") || status.contains("Codec Not Supported") {
+                // Update DebugLogger with camera stream status
+                DebugLogger.shared.updateCameraStatus(
+                    cameraId: camera,
+                    status: status,
+                    streamURL: url,
+                    error: status.contains("Error") ? status : nil
+                )
+                
+                if status.contains("Error") {
                     DebugLogger.shared.log(logMessage, emoji: "❌", color: .red)
                 } else if status.contains("Playing") {
                     DebugLogger.shared.log(logMessage, emoji: "✅", color: .green)
