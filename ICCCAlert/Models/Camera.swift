@@ -47,6 +47,11 @@ struct Camera: Codable, Identifiable, Equatable {
         transporter = try container.decodeIfPresent(String.self, forKey: .transporter) ?? ""
         location = try container.decodeIfPresent(String.self, forKey: .location) ?? ""
         lastUpdate = try container.decodeIfPresent(String.self, forKey: .lastUpdate) ?? ""
+        
+        // ✅ DEBUG: Log if IP is missing
+        if ip.isEmpty {
+            print("⚠️ Camera \(id) has NO IP address!")
+        }
     }
     
     // ✅ Memberwise initializer for manual camera creation
@@ -104,11 +109,12 @@ struct Camera: Codable, Identifiable, Equatable {
         return Name.isEmpty ? "Camera \(id)" : Name
     }
     
+    // ✅ CRITICAL FIX: Use IP address as stream path
     var streamURL: String? {
-        return getStreamURL(for: groupId, cameraId: id)
+        return getStreamURL(for: groupId, cameraIp: ip, cameraId: id)
     }
 
-    private func getStreamURL(for groupId: Int, cameraId: String) -> String? {
+    private func getStreamURL(for groupId: Int, cameraIp: String, cameraId: String) -> String? {
         let serverURLs: [Int: String] = [
             5: "http://103.208.173.131:8888",
             6: "http://103.208.173.147:8888",
@@ -126,10 +132,22 @@ struct Camera: Codable, Identifiable, Equatable {
         ]
         
         guard let serverURL = serverURLs[groupId] else {
+            print("❌ No server URL for groupId: \(groupId)")
             return nil
         }
         
-        return "\(serverURL)/\(cameraId)/index.m3u8"
+        // ✅ CRITICAL FIX: Use camera IP as stream path (MediaMTX format)
+        // Example: http://a6va.bccliccc.in:8888/172.16.16.99/index.m3u8
+        if !cameraIp.isEmpty {
+            let url = "\(serverURL)/\(cameraIp)/index.m3u8"
+            print("✅ Stream URL (IP-based): \(url)")
+            return url
+        }
+        
+        // Fallback to camera ID if IP is missing
+        let fallbackUrl = "\(serverURL)/\(cameraId)/index.m3u8"
+        print("⚠️ Stream URL (ID-based fallback): \(fallbackUrl)")
+        return fallbackUrl
     }
     
     // ✅ CORRECTED: Compare both ID and status for proper change detection
@@ -195,6 +213,18 @@ extension Camera {
             location: location ?? self.location,
             lastUpdate: lastUpdate ?? self.lastUpdate
         )
+    }
+    
+    // ✅ DEBUG: Print camera stream info
+    func printStreamInfo() {
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print("📹 Camera: \(displayName)")
+        print("   ID: \(id)")
+        print("   IP: \(ip.isEmpty ? "MISSING!" : ip)")
+        print("   Group: \(groupId)")
+        print("   Stream URL: \(streamURL ?? "nil")")
+        print("   Online: \(isOnline)")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     }
 }
 
