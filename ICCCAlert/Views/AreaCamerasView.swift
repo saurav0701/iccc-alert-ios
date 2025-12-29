@@ -5,8 +5,8 @@ struct AreaCamerasView: View {
     @StateObject private var cameraManager = CameraManager.shared
     
     @State private var searchText = ""
-    @State private var showOnlineOnly = true
-    @State private var gridLayout: GridLayout = .list
+    @State private var showOnlineOnly = true // ✅ Default to online only
+    @State private var gridLayout: GridLayout = .list // ✅ Start with list for best performance
     
     @Binding var selectedCamera: Camera?
     
@@ -15,7 +15,6 @@ struct AreaCamerasView: View {
     enum GridLayout: String, CaseIterable, Identifiable {
         case list = "List"
         case grid2x2 = "2×2 Grid"
-        case grid3x3 = "3×3 Grid"
         
         var id: String { rawValue }
         
@@ -23,7 +22,6 @@ struct AreaCamerasView: View {
             switch self {
             case .list: return 1
             case .grid2x2: return 2
-            case .grid3x3: return 3
             }
         }
         
@@ -31,7 +29,6 @@ struct AreaCamerasView: View {
             switch self {
             case .list: return "list.bullet"
             case .grid2x2: return "square.grid.2x2"
-            case .grid3x3: return "square.grid.3x3"
             }
         }
     }
@@ -94,15 +91,14 @@ struct AreaCamerasView: View {
         }
         .onDisappear {
             DebugLogger.shared.log("📤 AreaCamerasView disappeared for \(area)", emoji: "📤", color: .gray)
-            PlayerManager.shared.pauseAll()
+            // Clean up all players when leaving
+            PlayerManager.shared.clearAll()
         }
         .onChange(of: scenePhase) { newPhase in
             if newPhase == .background {
+                // Pause all players when app goes to background
                 PlayerManager.shared.clearAll()
             }
-        }
-        .onChange(of: gridLayout) { _ in
-            PlayerManager.shared.clearAll()
         }
     }
 
@@ -175,6 +171,7 @@ struct AreaCamerasView: View {
                 }
                 .toggleStyle(SwitchToggleStyle(tint: .green))
                 .onChange(of: showOnlineOnly) { _ in
+                    // Clear players when filter changes
                     PlayerManager.shared.clearAll()
                 }
             }
@@ -184,29 +181,30 @@ struct AreaCamerasView: View {
         .background(Color(.systemGroupedBackground))
     }
 
-    @ViewBuilder
     private var cameraGridView: some View {
         ScrollView {
-            if gridLayout == .list {
-                LazyVStack(spacing: 12) {
-                    ForEach(cameras, id: \.id) { camera in
+            LazyVStack(spacing: 12) {
+                ForEach(cameras, id: \.id) { camera in
+                    if gridLayout == .list {
                         CameraListItem(camera: camera)
                             .onTapGesture {
                                 handleCameraTap(camera)
                             }
                     }
                 }
-                .padding()
-            } else {
+            }
+            .padding()
+            
+            if gridLayout == .grid2x2 {
                 LazyVGrid(
                     columns: Array(
                         repeating: GridItem(.flexible(), spacing: 12),
-                        count: gridLayout.columns
+                        count: 2
                     ),
                     spacing: 12
                 ) {
                     ForEach(cameras, id: \.id) { camera in
-                        CameraGridCard(camera: camera, isCompact: gridLayout == .grid3x3)
+                        CameraCard(camera: camera, layout: .grid2x2)
                             .onTapGesture {
                                 handleCameraTap(camera)
                             }
@@ -220,7 +218,8 @@ struct AreaCamerasView: View {
     
     private func handleCameraTap(_ camera: Camera) {
         if camera.isOnline {
-            PlayerManager.shared.pauseAll()
+            // Pause all current players before opening fullscreen
+            PlayerManager.shared.clearAll()
             selectedCamera = camera
         } else {
             let generator = UINotificationFeedbackGenerator()
@@ -285,7 +284,7 @@ struct AreaCamerasView: View {
     }
 }
 
-// MARK: - List View Item
+// MARK: - List View Item (Optimized for single column)
 struct CameraListItem: View {
     let camera: Camera
     
@@ -327,11 +326,6 @@ struct CameraListItem: View {
                             .font(.caption)
                             .foregroundColor(.blue)
                     }
-                } else {
-                    Text("Offline")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                        .italic()
                 }
             }
             
@@ -348,80 +342,43 @@ struct CameraListItem: View {
     }
 }
 
-// MARK: - Grid Card (2x2 and 3x3)
-struct CameraGridCard: View {
+struct CameraCard: View {
     let camera: Camera
-    let isCompact: Bool
-    @State private var isPressed = false
+    let layout: AreaCamerasView.GridLayout
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Video thumbnail
-            ZStack {
-                CameraThumbnail(camera: camera)
-                    .aspectRatio(4/3, contentMode: .fill)
-                    .clipped()
-                
-                // Overlay with status
-                VStack {
-                    HStack {
-                        Spacer()
-                        
-                        // Online indicator
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(camera.isOnline ? Color.green : Color.gray)
-                                .frame(width: isCompact ? 5 : 6, height: isCompact ? 5 : 6)
-                            
-                            if camera.isOnline {
-                                Text("LIVE")
-                                    .font(.system(size: isCompact ? 7 : 8, weight: .bold))
-                                    .foregroundColor(.white)
-                            }
-                        }
-                        .padding(.horizontal, isCompact ? 4 : 6)
-                        .padding(.vertical, isCompact ? 2 : 3)
-                        .background(Color.black.opacity(0.7))
-                        .cornerRadius(4)
-                        .padding(isCompact ? 4 : 6)
-                    }
-                    
-                    Spacer()
-                }
-            }
-            .cornerRadius(12)
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(camera.isOnline ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
-            )
-            
-            // Camera info
+        VStack(alignment: .leading, spacing: 8) {
+            CameraThumbnail(camera: camera)
+                .frame(height: 140)
+                .cornerRadius(12)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(camera.isOnline ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
+                )
+
             VStack(alignment: .leading, spacing: 4) {
                 Text(camera.displayName)
-                    .font(.system(size: isCompact ? 11 : 12, weight: .semibold))
-                    .lineLimit(isCompact ? 1 : 2)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .lineLimit(2)
                     .foregroundColor(.primary)
-                    .frame(height: isCompact ? 16 : 32, alignment: .topLeading)
                 
-                if !camera.location.isEmpty && !isCompact {
-                    Text(camera.location)
-                        .font(.system(size: 10))
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(camera.isOnline ? Color.green : Color.gray)
+                        .frame(width: 6, height: 6)
+                    
+                    Text(camera.location.isEmpty ? camera.area : camera.location)
+                        .font(.system(size: 11))
                         .foregroundColor(.secondary)
                         .lineLimit(1)
                 }
             }
-            .padding(isCompact ? 6 : 8)
         }
+        .padding(12)
         .background(Color(.systemBackground))
         .cornerRadius(16)
         .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
-        .opacity(camera.isOnline ? 1 : 0.65)
-        .scaleEffect(isPressed ? 0.95 : 1.0)
-        .animation(.easeInOut(duration: 0.1), value: isPressed)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
-                .onEnded { _ in isPressed = false }
-        )
+        .opacity(camera.isOnline ? 1 : 0.6)
     }
 }

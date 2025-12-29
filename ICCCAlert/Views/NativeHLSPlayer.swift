@@ -1,551 +1,475 @@
 import SwiftUI
 import AVKit
 import AVFoundation
+import WebKit
 import Combine
 
-// MARK: - Crash-Proof Player Manager
+// MARK: - Player Manager
 class PlayerManager: ObservableObject {
     static let shared = PlayerManager()
     
-    private var players: [String: PlayerContainer] = [:]
-    private let queue = DispatchQueue(label: "com.app.playermanager", attributes: .concurrent)
+    private var activePlayers: [String: Any] = [:] // Can hold AVPlayer or WKWebView
+    private let lock = NSLock()
+    private let maxPlayers = 2
     
     private init() {}
     
-    func getOrCreatePlayer(for cameraId: String, url: String) -> PlayerContainer? {
-        var container: PlayerContainer?
+    func registerPlayer(_ player: Any, for cameraId: String) {
+        lock.lock()
+        defer { lock.unlock() }
         
-        queue.sync {
-            if let existing = players[cameraId] {
-                container = existing
-            } else {
-                container = PlayerContainer(cameraId: cameraId, url: url)
-                queue.async(flags: .barrier) { [weak self] in
-                    self?.players[cameraId] = container
-                }
+        if activePlayers.count >= maxPlayers {
+            if let oldestKey = activePlayers.keys.first {
+                releasePlayerInternal(oldestKey)
             }
         }
         
-        return container
+        activePlayers[cameraId] = player
+        print("📹 Registered player for: \(cameraId)")
     }
     
-    func removePlayer(for cameraId: String) {
-        queue.async(flags: .barrier) { [weak self] in
-            if let container = self?.players.removeValue(forKey: cameraId) {
-                DispatchQueue.main.async {
-                    container.destroy()
-                }
+    private func releasePlayerInternal(_ cameraId: String) {
+        if let player = activePlayers.removeValue(forKey: cameraId) {
+            if let avPlayer = player as? AVPlayer {
+                avPlayer.pause()
+                avPlayer.replaceCurrentItem(with: nil)
+            } else if let webView = player as? WKWebView {
+                webView.stopLoading()
+                webView.loadHTMLString("", baseURL: nil)
             }
+            print("🗑️ Released player: \(cameraId)")
         }
     }
     
-    func removeAll() {
-        queue.async(flags: .barrier) { [weak self] in
-            let containers = self?.players.values ?? []
-            self?.players.removeAll()
-            
-            DispatchQueue.main.async {
-                containers.forEach { $0.destroy() }
-            }
-        }
+    func releasePlayer(_ cameraId: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        releasePlayerInternal(cameraId)
     }
     
-    func pauseAll() {
-        queue.sync {
-            players.values.forEach { $0.pause() }
-        }
+    func releaseWebView(_ cameraId: String) {
+        releasePlayer(cameraId)
+    }
+    
+    func clearAll() {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        activePlayers.keys.forEach { releasePlayerInternal($0) }
+        print("🧹 Cleared all players")
     }
 }
 
-// MARK: - Player Container (Safe wrapper)
-class PlayerContainer {
-    let cameraId: String
-    let url: String
-    private(set) var player: AVPlayer?
-    private var statusObserver: NSKeyValueObservation?
-    private var timeObserver: Any?
-    private var isDestroyed = false
-    
-    init(cameraId: String, url: String) {
-        self.cameraId = cameraId
-        self.url = url
-    }
-    
-    func setupIfNeeded() -> AVPlayer? {
-        guard !isDestroyed, player == nil else { return player }
-        
-        guard let videoURL = URL(string: url) else {
-            print("❌ Invalid URL: \(url)")
-            return nil
-        }
-        
-        let asset = AVURLAsset(url: videoURL)
-        let playerItem = AVPlayerItem(asset: asset)
-        
-        let newPlayer = AVPlayer(playerItem: playerItem)
-        newPlayer.allowsExternalPlayback = false
-        newPlayer.automaticallyWaitsToMinimizeStalling = false
-        
-        self.player = newPlayer
-        return newPlayer
-    }
-    
-    func pause() {
-        guard !isDestroyed else { return }
-        player?.pause()
-    }
-    
-    func play() {
-        guard !isDestroyed else { return }
-        player?.play()
-    }
-    
-    func destroy() {
-        guard !isDestroyed else { return }
-        isDestroyed = true
-        
-        // Remove observers first
-        statusObserver?.invalidate()
-        statusObserver = nil
-        
-        if let observer = timeObserver {
-            player?.removeTimeObserver(observer)
-            timeObserver = nil
-        }
-        
-        // Stop playback
-        player?.pause()
-        player?.replaceCurrentItem(with: nil)
-        player = nil
-        
-        print("🗑️ Destroyed player: \(cameraId)")
-    }
-    
-    deinit {
-        destroy()
-    }
-}
-
-// MARK: - Safe Video Player View
-struct SafeVideoPlayerView: UIViewControllerRepresentable {
-    let player: AVPlayer
-    
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let controller = AVPlayerViewController()
-        controller.player = player
-        controller.showsPlaybackControls = false
-        controller.videoGravity = .resizeAspect
-        controller.view.backgroundColor = .black
-        return controller
-    }
-    
-    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
-        // Only update if different
-        if uiViewController.player !== player {
-            uiViewController.player = player
-        }
-    }
-    
-    static func dismantleUIViewController(_ uiViewController: AVPlayerViewController, coordinator: ()) {
-        uiViewController.player = nil
-    }
-}
-
-// MARK: - Simplified Player State
-enum StreamState: Equatable {
-    case idle
-    case loading
-    case playing
-    case buffering
-    case error(String)
-    case failed(String)
-}
-
-// MARK: - H.264 Player View (Crash-Proof)
-struct H264PlayerView: View {
+// MARK: - Hybrid Player (Native with WebView Fallback)
+struct HybridHLSPlayer: View {
     let streamURL: String
     let cameraId: String
     let isFullscreen: Bool
     
-    @StateObject private var viewModel: StreamViewModel
+    @State private var playerMode: PlayerMode = .native
+    @State private var hasNativeFailed = false
     
-    init(streamURL: String, cameraId: String, isFullscreen: Bool) {
-        self.streamURL = streamURL
-        self.cameraId = cameraId
-        self.isFullscreen = isFullscreen
-        self._viewModel = StateObject(wrappedValue: StreamViewModel(
-            streamURL: streamURL,
-            cameraId: cameraId
-        ))
+    enum PlayerMode {
+        case native
+        case webview
     }
     
     var body: some View {
         ZStack {
-            Color.black
-            
-            if let player = viewModel.player {
-                SafeVideoPlayerView(player: player)
+            if playerMode == .native && !hasNativeFailed {
+                NativeAVPlayerView(
+                    streamURL: streamURL,
+                    cameraId: cameraId,
+                    isFullscreen: isFullscreen,
+                    onFatalError: {
+                        // Native player failed, switch to WebView
+                        print("⚠️ Native player failed for \(cameraId), switching to WebView")
+                        hasNativeFailed = true
+                        playerMode = .webview
+                    }
+                )
+            } else {
+                SimpleWebViewPlayer(
+                    streamURL: streamURL,
+                    cameraId: cameraId,
+                    isFullscreen: isFullscreen
+                )
             }
-            
-            overlayView
-        }
-        .onAppear {
-            viewModel.start()
-        }
-        .onDisappear {
-            viewModel.stop()
         }
     }
+}
+
+// MARK: - Native AVPlayer View
+struct NativeAVPlayerView: View {
+    let streamURL: String
+    let cameraId: String
+    let isFullscreen: Bool
+    let onFatalError: () -> Void
     
-    @ViewBuilder
-    private var overlayView: some View {
-        switch viewModel.state {
-        case .idle:
-            EmptyView()
-            
-        case .loading:
-            VStack(spacing: 12) {
-                ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    .scaleEffect(1.5)
-                Text("Connecting...")
-                    .foregroundColor(.white)
-                    .font(.caption)
+    @State private var player: AVPlayer?
+    @State private var isLoading = true
+    @State private var hasError = false
+    @State private var errorMessage = ""
+    @State private var observer: PlayerObserver?
+    @State private var cancellables = Set<AnyCancellable>()
+    @State private var retryCount = 0
+    
+    var body: some View {
+        ZStack {
+            if let player = player {
+                VideoPlayer(player: player)
+            } else {
+                Color.black
             }
-            .padding(24)
-            .background(Color.black.opacity(0.7))
-            .cornerRadius(12)
             
-        case .playing:
-            if !isFullscreen {
+            // Loading overlay
+            if isLoading && !hasError {
+                VStack(spacing: 8) {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    Text("Loading...")
+                        .font(.caption)
+                        .foregroundColor(.white)
+                }
+                .padding()
+                .background(Color.black.opacity(0.7))
+                .cornerRadius(10)
+            }
+            
+            // Error overlay
+            if hasError {
+                VStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 24))
+                        .foregroundColor(.orange)
+                    Text("Stream Error")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(.white)
+                    Text(errorMessage)
+                        .font(.system(size: 10))
+                        .foregroundColor(.white.opacity(0.8))
+                        .multilineTextAlignment(.center)
+                }
+                .padding()
+                .background(Color.black.opacity(0.8))
+                .cornerRadius(10)
+            }
+            
+            // LIVE indicator
+            if !isLoading && !hasError && !isFullscreen {
                 VStack {
                     HStack {
                         Spacer()
-                        liveIndicator
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(Color.red)
+                                .frame(width: 6, height: 6)
+                            Text("LIVE")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundColor(.white)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Color.black.opacity(0.7))
+                        .cornerRadius(4)
+                        .padding(6)
                     }
                     Spacer()
                 }
             }
-            
-        case .buffering:
-            VStack(spacing: 8) {
-                ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                Text("Buffering...")
-                    .foregroundColor(.white)
-                    .font(.caption)
-            }
-            .padding(16)
-            .background(Color.black.opacity(0.6))
-            .cornerRadius(8)
-            
-        case .error(let message):
-            VStack(spacing: 16) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 32))
-                    .foregroundColor(.orange)
-                
-                Text("Connection Issue")
-                    .font(.headline)
-                    .foregroundColor(.white)
-                
-                Text(message)
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.8))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
-                
-                Button(action: { viewModel.retry() }) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "arrow.clockwise")
-                        Text("Retry")
-                    }
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
-                    .background(Color.blue)
-                    .cornerRadius(8)
-                }
-            }
-            .padding(24)
-            .background(Color.black.opacity(0.8))
-            .cornerRadius(12)
-            
-        case .failed(let message):
-            VStack(spacing: 16) {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 40))
-                    .foregroundColor(.red)
-                
-                Text("Stream Unavailable")
-                    .font(.headline)
-                    .foregroundColor(.white)
-                
-                Text(message)
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.8))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
-                
-                Button(action: { viewModel.retry() }) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "arrow.clockwise")
-                        Text("Try Again")
-                    }
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
-                    .background(Color.blue)
-                    .cornerRadius(8)
-                }
-            }
-            .padding(24)
-            .background(Color.black.opacity(0.85))
-            .cornerRadius(12)
         }
-    }
-    
-    private var liveIndicator: some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(Color.red)
-                .frame(width: 6, height: 6)
-            Text("LIVE")
-                .font(.system(size: 8, weight: .bold))
-                .foregroundColor(.white)
+        .onAppear {
+            setupPlayer()
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 3)
-        .background(Color.black.opacity(0.7))
-        .cornerRadius(4)
-        .padding(8)
-    }
-}
-
-// MARK: - Stream ViewModel (Simplified & Safe)
-class StreamViewModel: ObservableObject {
-    @Published var state: StreamState = .idle
-    @Published var player: AVPlayer?
-    
-    private let streamURL: String
-    private let cameraId: String
-    private var container: PlayerContainer?
-    private var cancellables = Set<AnyCancellable>()
-    private var retryCount = 0
-    private let maxRetries = 3
-    private var workItem: DispatchWorkItem?
-    
-    // Observers
-    private var statusObserver: NSKeyValueObservation?
-    private var timeObserver: Any?
-    private var notificationObservers: [NSObjectProtocol] = []
-    
-    init(streamURL: String, cameraId: String) {
-        self.streamURL = streamURL
-        self.cameraId = cameraId
-    }
-    
-    func start() {
-        guard state == .idle || state == .failed("") else { return }
-        
-        state = .loading
-        setupPlayer()
-    }
-    
-    func stop() {
-        cleanup()
-    }
-    
-    func retry() {
-        retryCount = 0
-        cleanup()
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.start()
+        .onDisappear {
+            cleanup()
         }
     }
     
     private func setupPlayer() {
-        // Get or create container
-        container = PlayerManager.shared.getOrCreatePlayer(for: cameraId, url: streamURL)
-        
-        guard let container = container,
-              let player = container.setupIfNeeded() else {
-            state = .failed("Invalid stream configuration")
+        guard let url = URL(string: streamURL) else {
+            triggerFatalError("Invalid URL")
             return
         }
         
-        self.player = player
+        print("📹 Setting up native AVPlayer for: \(cameraId)")
         
-        // Setup observers safely
-        setupObservers(for: player)
+        let playerItem = AVPlayerItem(url: url)
+        playerItem.preferredForwardBufferDuration = 3.0
         
-        // Start playback
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            player.play()
-            self?.scheduleTimeout()
-        }
-    }
-    
-    private func setupObservers(for player: AVPlayer) {
-        guard let item = player.currentItem else { return }
+        let avPlayer = AVPlayer(playerItem: playerItem)
+        avPlayer.allowsExternalPlayback = false
+        avPlayer.automaticallyWaitsToMinimizeStalling = true
         
-        // Status observer
-        statusObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
-            DispatchQueue.main.async {
-                self?.handleStatusChange(item.status, item: item)
-            }
-        }
+        self.player = avPlayer
+        PlayerManager.shared.registerPlayer(avPlayer, for: cameraId)
         
-        // Time observer (check if actually playing)
-        let interval = CMTime(seconds: 1.0, preferredTimescale: 600)
-        timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] _ in
-            guard let self = self else { return }
-            
-            if player.rate > 0 && self.state != .playing {
-                self.state = .playing
-                self.retryCount = 0
-                self.cancelTimeout()
-            }
-        }
-        
-        // Notifications
-        let stalled = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemPlaybackStalled,
-            object: item,
-            queue: .main
-        ) { [weak self] _ in
-            self?.handleStall()
-        }
-        
-        let failed = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemFailedToPlayToEndTime,
-            object: item,
-            queue: .main
-        ) { [weak self] notification in
-            let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
-            self?.handleError(error?.localizedDescription ?? "Playback failed")
-        }
-        
-        notificationObservers = [stalled, failed]
-    }
-    
-    private func handleStatusChange(_ status: AVPlayerItem.Status, item: AVPlayerItem) {
-        switch status {
-        case .readyToPlay:
-            print("✅ Player ready: \(cameraId)")
-            // State will be set to playing by time observer
-            
-        case .failed:
-            let error = item.error?.localizedDescription ?? "Unknown error"
-            print("❌ Player failed: \(error)")
-            handleError(error)
-            
-        case .unknown:
-            break
-            
-        @unknown default:
-            break
-        }
-    }
-    
-    private func handleStall() {
-        print("⚠️ Playback stalled: \(cameraId)")
-        
-        if state == .playing {
-            state = .buffering
-            
-            // Try to recover
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-                guard let self = self, self.state == .buffering else { return }
+        // Setup observer
+        let newObserver = PlayerObserver()
+        newObserver.onStatusChange = { status in
+            switch status {
+            case .readyToPlay:
+                isLoading = false
+                hasError = false
+                retryCount = 0
+                print("✅ Native player ready: \(cameraId)")
+                avPlayer.play()
                 
-                self.player?.pause()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    self.player?.play()
+            case .failed:
+                handleFailure(playerItem.error)
+                
+            case .unknown:
+                isLoading = true
+                
+            @unknown default:
+                break
+            }
+        }
+        
+        newObserver.onError = { error in
+            handleFailure(error)
+        }
+        
+        newObserver.observe(playerItem: playerItem)
+        self.observer = newObserver
+        
+        // Monitor notifications
+        NotificationCenter.default.publisher(for: .AVPlayerItemFailedToPlayToEndTime, object: playerItem)
+            .sink { notification in
+                if let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error {
+                    handleFailure(error)
+                }
+            }
+            .store(in: &cancellables)
+        
+        NotificationCenter.default.publisher(for: .AVPlayerItemNewAccessLogEntry, object: playerItem)
+            .sink { _ in
+                isLoading = false
+                hasError = false
+            }
+            .store(in: &cancellables)
+        
+        // Auto-play
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            avPlayer.play()
+        }
+        
+        // Timeout fallback (switch to WebView if native fails after 10 seconds)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
+            if isLoading {
+                print("⏱️ Native player timeout, switching to WebView")
+                triggerFatalError("Native player timeout")
+            }
+        }
+    }
+    
+    private func handleFailure(_ error: Error?) {
+        isLoading = false
+        hasError = true
+        
+        let nsError = error as NSError?
+        let errorCode = nsError?.code ?? 0
+        
+        print("❌ Native player error: \(errorCode) - \(error?.localizedDescription ?? "unknown")")
+        
+        // Error -12642: kCMFormatDescriptionError (incompatible format)
+        // Error -11800: AVFoundation generic error
+        // These indicate the stream format is incompatible with AVPlayer
+        if errorCode == -12642 || errorCode == -11800 || errorCode == -12645 {
+            errorMessage = "Format incompatible"
+            
+            // Immediate fallback to WebView for format errors
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                triggerFatalError("Incompatible stream format")
+            }
+        } else {
+            errorMessage = error?.localizedDescription ?? "Playback failed"
+            
+            // Retry once for network errors
+            if retryCount < 1 {
+                retryCount += 1
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    cleanup()
+                    setupPlayer()
+                }
+            } else {
+                // After retry, fall back to WebView
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    triggerFatalError("Playback failed after retry")
                 }
             }
         }
     }
     
-    private func handleError(_ message: String) {
-        cancelTimeout()
-        
-        if retryCount < maxRetries {
-            retryCount += 1
-            state = .error(message)
-            
-            print("⚠️ Retry \(retryCount)/\(maxRetries): \(message)")
-            
-            // Auto-retry
-            let delay = Double(retryCount) * 2.0
-            workItem = DispatchWorkItem { [weak self] in
-                self?.attemptRetry()
-            }
-            
-            if let workItem = workItem {
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
-            }
-        } else {
-            state = .failed("Connection failed after \(maxRetries) attempts")
-        }
+    private func triggerFatalError(_ reason: String) {
+        print("🔄 Triggering fallback to WebView: \(reason)")
+        cleanup()
+        onFatalError()
     }
     
-    private func attemptRetry() {
-        cleanup(keepState: false)
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.setupPlayer()
-        }
-    }
-    
-    private func scheduleTimeout() {
-        cancelTimeout()
-        
-        workItem = DispatchWorkItem { [weak self] in
-            guard let self = self, self.state == .loading else { return }
-            self.handleError("Connection timeout")
-        }
-        
-        if let workItem = workItem {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 15.0, execute: workItem)
-        }
-    }
-    
-    private func cancelTimeout() {
-        workItem?.cancel()
-        workItem = nil
-    }
-    
-    private func cleanup(keepState: Bool = true) {
-        cancelTimeout()
-        
-        // Remove time observer
-        if let observer = timeObserver {
-            player?.removeTimeObserver(observer)
-            timeObserver = nil
-        }
-        
-        // Remove status observer
-        statusObserver?.invalidate()
-        statusObserver = nil
-        
-        // Remove notification observers
-        notificationObservers.forEach { NotificationCenter.default.removeObserver($0) }
-        notificationObservers.removeAll()
-        
-        // Stop player
+    private func cleanup() {
         player?.pause()
+        observer?.stopObserving()
+        observer = nil
+        PlayerManager.shared.releasePlayer(cameraId)
+        player = nil
+        cancellables.removeAll()
+    }
+}
+
+// MARK: - Simple WebView Player (Fallback)
+struct SimpleWebViewPlayer: UIViewRepresentable {
+    let streamURL: String
+    let cameraId: String
+    let isFullscreen: Bool
+    
+    func makeUIView(context: Context) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        config.allowsInlineMediaPlayback = true
+        config.mediaTypesRequiringUserActionForPlayback = []
+        config.allowsPictureInPictureMediaPlayback = false
         
-        if !keepState {
-            state = .idle
+        let webView = WKWebView(frame: .zero, configuration: config)
+        webView.scrollView.isScrollEnabled = false
+        webView.scrollView.bounces = false
+        webView.backgroundColor = .black
+        webView.isOpaque = false
+        webView.navigationDelegate = context.coordinator
+        
+        PlayerManager.shared.registerPlayer(webView, for: cameraId)
+        
+        loadPlayer(in: webView)
+        
+        return webView
+    }
+    
+    func updateUIView(_ uiView: WKWebView, context: Context) {}
+    
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        uiView.stopLoading()
+        uiView.loadHTMLString("", baseURL: nil)
+    }
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    private func loadPlayer(in webView: WKWebView) {
+        let html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+            <style>
+                * { margin: 0; padding: 0; box-sizing: border-box; }
+                html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+                #container { width: 100vw; height: 100vh; position: relative; }
+                video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+                #status {
+                    position: absolute; bottom: 10px; left: 10px;
+                    background: rgba(0,0,0,0.7); color: #4CAF50;
+                    padding: 6px 10px; font-size: 11px; border-radius: 4px;
+                    font-family: monospace; z-index: 10;
+                }
+            </style>
+        </head>
+        <body>
+            <div id="container">
+                <video id="video" playsinline webkit-playsinline muted autoplay controls></video>
+                <div id="status">WebView Fallback</div>
+            </div>
+            
+            <script>
+                (function() {
+                    'use strict';
+                    
+                    const video = document.getElementById('video');
+                    const status = document.getElementById('status');
+                    const streamUrl = '\(streamURL)';
+                    
+                    function log(msg) {
+                        console.log('[WebView Player]', msg);
+                        status.textContent = msg;
+                    }
+                    
+                    // Use native iOS HLS player (supports H.265)
+                    log('Loading stream...');
+                    video.src = streamUrl;
+                    
+                    video.addEventListener('loadeddata', function() {
+                        log('✅ Playing (WebView)');
+                        video.play().catch(e => {
+                            log('Play error: ' + e.message);
+                        });
+                    });
+                    
+                    video.addEventListener('error', function(e) {
+                        log('❌ Error: ' + (video.error ? video.error.code : 'unknown'));
+                    });
+                    
+                    video.addEventListener('playing', function() {
+                        log('✅ Playing');
+                    });
+                    
+                    video.addEventListener('waiting', function() {
+                        log('⏳ Buffering...');
+                    });
+                    
+                    video.load();
+                    
+                })();
+            </script>
+        </body>
+        </html>
+        """
+        
+        webView.loadHTMLString(html, baseURL: nil)
+    }
+    
+    class Coordinator: NSObject, WKNavigationDelegate {
+        var parent: SimpleWebViewPlayer
+        
+        init(_ parent: SimpleWebViewPlayer) {
+            self.parent = parent
         }
         
-        cancellables.removeAll()
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            print("✅ WebView loaded for: \(parent.cameraId)")
+        }
+        
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            print("❌ WebView failed: \(error.localizedDescription)")
+        }
+    }
+}
+
+// MARK: - Player Observer
+class PlayerObserver: NSObject {
+    var onStatusChange: ((AVPlayerItem.Status) -> Void)?
+    var onError: ((Error?) -> Void)?
+    
+    private var statusObservation: NSKeyValueObservation?
+    
+    func observe(playerItem: AVPlayerItem) {
+        statusObservation = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
+            DispatchQueue.main.async {
+                self?.onStatusChange?(item.status)
+                
+                if item.status == .failed, let error = item.error {
+                    self?.onError?(error)
+                }
+            }
+        }
+    }
+    
+    func stopObserving() {
+        statusObservation?.invalidate()
+        statusObservation = nil
     }
     
     deinit {
-        cleanup()
-        PlayerManager.shared.removePlayer(for: cameraId)
+        stopObserving()
     }
 }
 
@@ -558,7 +482,7 @@ struct CameraThumbnail: View {
         ZStack {
             if let streamURL = camera.streamURL, camera.isOnline {
                 if shouldLoad {
-                    H264PlayerView(
+                    HybridHLSPlayer(
                         streamURL: streamURL,
                         cameraId: camera.id,
                         isFullscreen: false
@@ -570,9 +494,12 @@ struct CameraThumbnail: View {
                 offlineView
             }
         }
+        .onAppear {
+            shouldLoad = false
+        }
         .onDisappear {
             shouldLoad = false
-            PlayerManager.shared.removePlayer(for: camera.id)
+            PlayerManager.shared.releasePlayer(camera.id)
         }
     }
     
@@ -591,12 +518,11 @@ struct CameraThumbnail: View {
                 Image(systemName: "play.circle.fill")
                     .font(.system(size: 32))
                     .foregroundColor(.blue)
-                Text("Tap to load")
+                Text("Tap to preview")
                     .font(.caption)
                     .foregroundColor(.blue)
             }
         }
-        .contentShape(Rectangle())
         .onTapGesture {
             shouldLoad = true
         }
@@ -615,7 +541,7 @@ struct CameraThumbnail: View {
             
             VStack(spacing: 8) {
                 Image(systemName: "video.slash.fill")
-                    .font(.system(size: 28))
+                    .font(.system(size: 24))
                     .foregroundColor(.gray)
                 Text("Offline")
                     .font(.caption)
@@ -635,7 +561,7 @@ struct HLSPlayerView: View {
             Color.black.ignoresSafeArea()
             
             if let streamURL = camera.streamURL {
-                H264PlayerView(
+                HybridHLSPlayer(
                     streamURL: streamURL,
                     cameraId: camera.id,
                     isFullscreen: true
@@ -643,6 +569,7 @@ struct HLSPlayerView: View {
                 .ignoresSafeArea()
             }
             
+            // Top bar
             VStack {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
@@ -654,27 +581,26 @@ struct HLSPlayerView: View {
                             Circle()
                                 .fill(camera.isOnline ? Color.green : Color.red)
                                 .frame(width: 8, height: 8)
+                            
                             Text(camera.area)
                                 .font(.caption)
                                 .foregroundColor(.white.opacity(0.8))
                         }
                     }
-                    .padding(12)
+                    .padding()
                     .background(Color.black.opacity(0.6))
                     .cornerRadius(10)
                     
                     Spacer()
                     
                     Button(action: {
-                        PlayerManager.shared.removePlayer(for: camera.id)
+                        PlayerManager.shared.releasePlayer(camera.id)
                         presentationMode.wrappedValue.dismiss()
                     }) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 32))
                             .foregroundColor(.white)
                             .padding()
-                            .background(Color.black.opacity(0.3))
-                            .clipShape(Circle())
                     }
                 }
                 .padding()
@@ -685,7 +611,7 @@ struct HLSPlayerView: View {
         .navigationBarHidden(true)
         .statusBarHidden(true)
         .onDisappear {
-            PlayerManager.shared.removePlayer(for: camera.id)
+            PlayerManager.shared.releasePlayer(camera.id)
         }
     }
 }
