@@ -405,8 +405,7 @@ struct CameraCard2x2: View {
             // Camera info
             VStack(alignment: .leading, spacing: 4) {
                 Text(camera.displayName)
-                    .font(.caption)
-                    .fontWeight(.semibold)
+                    .font(.system(size: 12, weight: .semibold))
                     .lineLimit(2)
                     .foregroundColor(.primary)
                     .frame(height: 32, alignment: .topLeading)

@@ -59,37 +59,27 @@ class PlayerManager: ObservableObject {
     }
 }
 
-// MARK: - H.264 Player View (Production-Ready)
+// MARK: - H.264 Player View (Production-Ready, iOS 14+ Compatible)
 struct H264PlayerView: View {
     let streamURL: String
     let cameraId: String
     let isFullscreen: Bool
     
-    @State private var player: AVPlayer?
-    @State private var playerState: PlayerState = .loading
-    @State private var observer: PlayerObserver?
-    @State private var cancellables = Set<AnyCancellable>()
-    @State private var retryCount = 0
-    @State private var errorMessage = ""
-    @State private var showRetryButton = false
+    @StateObject private var viewModel: PlayerViewModel
     
-    private let maxRetries = 3
-    private let retryDelay: TimeInterval = 2.0
-    
-    enum PlayerState {
-        case loading
-        case playing
-        case paused
-        case error
-        case failed
+    init(streamURL: String, cameraId: String, isFullscreen: Bool) {
+        self.streamURL = streamURL
+        self.cameraId = cameraId
+        self.isFullscreen = isFullscreen
+        self._viewModel = StateObject(wrappedValue: PlayerViewModel(streamURL: streamURL, cameraId: cameraId))
     }
     
     var body: some View {
         ZStack {
             // Video Layer
-            if let player = player {
+            if let player = viewModel.player {
                 VideoPlayer(player: player)
-                    .disabled(true) // Prevent tap interference
+                    .disabled(true)
             } else {
                 Color.black
             }
@@ -98,16 +88,16 @@ struct H264PlayerView: View {
             overlayContent
         }
         .onAppear {
-            setupPlayer()
+            viewModel.setupPlayer()
         }
         .onDisappear {
-            cleanup()
+            viewModel.cleanup()
         }
     }
     
     @ViewBuilder
     private var overlayContent: some View {
-        switch playerState {
+        switch viewModel.playerState {
         case .loading:
             loadingOverlay
             
@@ -137,8 +127,8 @@ struct H264PlayerView: View {
                 .font(.caption)
                 .foregroundColor(.white)
             
-            if retryCount > 0 {
-                Text("Attempt \(retryCount + 1) of \(maxRetries)")
+            if viewModel.retryCount > 0 {
+                Text("Attempt \(viewModel.retryCount + 1) of 3")
                     .font(.caption2)
                     .foregroundColor(.white.opacity(0.7))
             }
@@ -158,20 +148,20 @@ struct H264PlayerView: View {
                 .font(.headline)
                 .foregroundColor(.white)
             
-            Text(errorMessage)
+            Text(viewModel.errorMessage)
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.8))
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
             
-            if showRetryButton {
-                Button(action: retryConnection) {
+            if viewModel.showRetryButton {
+                Button(action: { viewModel.retryConnection() }) {
                     HStack(spacing: 8) {
                         Image(systemName: "arrow.clockwise")
                         Text("Retry")
+                            .font(.subheadline)
+                            .bold()
                     }
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
                     .foregroundColor(.white)
                     .padding(.horizontal, 20)
                     .padding(.vertical, 10)
@@ -195,18 +185,18 @@ struct H264PlayerView: View {
                 .font(.headline)
                 .foregroundColor(.white)
             
-            Text("Unable to connect after \(maxRetries) attempts")
+            Text("Unable to connect after 3 attempts")
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.8))
                 .multilineTextAlignment(.center)
             
-            Button(action: retryConnection) {
+            Button(action: { viewModel.retryConnection() }) {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.clockwise")
                     Text("Try Again")
+                        .font(.subheadline)
+                        .bold()
                 }
-                .font(.subheadline)
-                .fontWeight(.semibold)
                 .foregroundColor(.white)
                 .padding(.horizontal, 20)
                 .padding(.vertical, 10)
@@ -240,8 +230,37 @@ struct H264PlayerView: View {
             Spacer()
         }
     }
+}
+
+// MARK: - Player ViewModel (iOS 14+ Compatible)
+class PlayerViewModel: ObservableObject {
+    @Published var player: AVPlayer?
+    @Published var playerState: PlayerState = .loading
+    @Published var retryCount = 0
+    @Published var errorMessage = ""
+    @Published var showRetryButton = false
     
-    private func setupPlayer() {
+    private let streamURL: String
+    private let cameraId: String
+    private var observer: PlayerObserver?
+    private var cancellables = Set<AnyCancellable>()
+    private let maxRetries = 3
+    private let retryDelay: TimeInterval = 2.0
+    
+    enum PlayerState {
+        case loading
+        case playing
+        case paused
+        case error
+        case failed
+    }
+    
+    init(streamURL: String, cameraId: String) {
+        self.streamURL = streamURL
+        self.cameraId = cameraId
+    }
+    
+    func setupPlayer() {
         guard let url = URL(string: streamURL) else {
             handleError("Invalid stream URL", canRetry: false)
             return
@@ -254,7 +273,7 @@ struct H264PlayerView: View {
         
         // Create player item with optimized settings for H.264
         let playerItem = AVPlayerItem(url: url)
-        playerItem.preferredForwardBufferDuration = 2.0 // Shorter buffer for live streams
+        playerItem.preferredForwardBufferDuration = 2.0
         
         // Create player
         let avPlayer = AVPlayer(playerItem: playerItem)
@@ -276,9 +295,9 @@ struct H264PlayerView: View {
         }
         
         // Timeout check
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15.0) {
-            if self.playerState == .loading {
-                self.handleError("Connection timeout", canRetry: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15.0) { [weak self] in
+            if self?.playerState == .loading {
+                self?.handleError("Connection timeout", canRetry: true)
             }
         }
     }
@@ -333,14 +352,15 @@ struct H264PlayerView: View {
         // Handle stalled playback
         NotificationCenter.default.publisher(for: .AVPlayerItemPlaybackStalled, object: playerItem)
             .sink { [weak self] _ in
-                print("⚠️ Playback stalled for: \(self?.cameraId ?? "unknown")")
-                self?.playerState = .error
-                self?.errorMessage = "Stream buffering..."
+                guard let self = self else { return }
+                print("⚠️ Playback stalled for: \(self.cameraId)")
+                self.playerState = .error
+                self.errorMessage = "Stream buffering..."
                 
                 // Auto-retry after brief delay
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                    if self?.playerState == .error {
-                        self?.player?.play()
+                    if self.playerState == .error {
+                        self.player?.play()
                     }
                 }
             }
@@ -369,8 +389,8 @@ struct H264PlayerView: View {
             // Auto-retry with exponential backoff
             let delay = retryDelay * Double(retryCount + 1)
             
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                self.retryConnection()
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.retryConnection()
             }
         } else {
             playerState = .failed
@@ -378,24 +398,28 @@ struct H264PlayerView: View {
         }
     }
     
-    private func retryConnection() {
+    func retryConnection() {
         print("🔄 Retrying connection for: \(cameraId) (attempt \(retryCount + 1))")
         
         retryCount += 1
         cleanup()
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            setupPlayer()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.setupPlayer()
         }
     }
     
-    private func cleanup() {
+    func cleanup() {
         player?.pause()
         observer?.stopObserving()
         observer = nil
         PlayerManager.shared.releasePlayer(cameraId)
         player = nil
         cancellables.removeAll()
+    }
+    
+    deinit {
+        cleanup()
     }
 }
 
@@ -450,10 +474,7 @@ struct CameraThumbnail: View {
             }
         }
         .onAppear {
-            // Stagger loading slightly for grid views
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                shouldLoad = false
-            }
+            shouldLoad = false
         }
         .onDisappear {
             shouldLoad = false
