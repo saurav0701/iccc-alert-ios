@@ -109,7 +109,7 @@ struct Camera: Codable, Identifiable, Equatable {
         return Name.isEmpty ? "Camera \(id)" : Name
     }
     
-    // ✅ CRITICAL FIX: Use IP address as stream path
+    // ✅ HLS Stream URL (for compatibility)
     var streamURL: String? {
         return getStreamURL(for: groupId, cameraIp: ip, cameraId: id)
     }
@@ -136,8 +136,7 @@ struct Camera: Codable, Identifiable, Equatable {
             return nil
         }
         
-        // ✅ CRITICAL FIX: Use camera IP as stream path (MediaMTX format)
-        // Example: http://a6va.bccliccc.in:8888/172.16.16.99/index.m3u8
+        // Use camera IP as stream path (MediaMTX format)
         if !cameraIp.isEmpty {
             let url = "\(serverURL)/\(cameraIp)/index.m3u8"
             print("✅ Stream URL (IP-based): \(url)")
@@ -147,6 +146,46 @@ struct Camera: Codable, Identifiable, Equatable {
         // Fallback to camera ID if IP is missing
         let fallbackUrl = "\(serverURL)/\(cameraId)/index.m3u8"
         print("⚠️ Stream URL (ID-based fallback): \(fallbackUrl)")
+        return fallbackUrl
+    }
+    
+    // ✅ WebRTC Stream URL (WHEP endpoint) - NEW!
+    var webrtcStreamURL: String? {
+        return getWebRTCStreamURL(for: groupId, cameraIp: ip, cameraId: id)
+    }
+    
+    private func getWebRTCStreamURL(for groupId: Int, cameraIp: String, cameraId: String) -> String? {
+        let serverURLs: [Int: String] = [
+            5: "http://103.208.173.131:8889",
+            6: "http://103.208.173.147:8889",
+            7: "http://103.208.173.163:8889",
+            8: "http://a5va.bccliccc.in:8889",
+            9: "http://a5va.bccliccc.in:8889",
+            10: "http://a6va.bccliccc.in:8889",
+            11: "http://103.208.173.195:8889",
+            12: "http://a9va.bccliccc.in:8889",
+            13: "http://a10va.bccliccc.in:8889",
+            14: "http://103.210.88.195:8889",
+            15: "http://103.210.88.211:8889",
+            16: "http://103.208.173.179:8889",
+            22: "http://103.208.173.211:8889"
+        ]
+        
+        guard let serverURL = serverURLs[groupId] else {
+            print("❌ No WebRTC server URL for groupId: \(groupId)")
+            return nil
+        }
+        
+        // Use camera IP as stream path (WHEP protocol)
+        if !cameraIp.isEmpty {
+            let url = "\(serverURL)/\(cameraIp)/whep"
+            print("✅ WebRTC URL (IP-based): \(url)")
+            return url
+        }
+        
+        // Fallback to camera ID if IP is missing
+        let fallbackUrl = "\(serverURL)/\(cameraId)/whep"
+        print("⚠️ WebRTC URL (ID-based fallback): \(fallbackUrl)")
         return fallbackUrl
     }
     
@@ -222,7 +261,8 @@ extension Camera {
         print("   ID: \(id)")
         print("   IP: \(ip.isEmpty ? "MISSING!" : ip)")
         print("   Group: \(groupId)")
-        print("   Stream URL: \(streamURL ?? "nil")")
+        print("   HLS URL: \(streamURL ?? "nil")")
+        print("   WebRTC URL: \(webrtcStreamURL ?? "nil")")
         print("   Online: \(isOnline)")
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     }
