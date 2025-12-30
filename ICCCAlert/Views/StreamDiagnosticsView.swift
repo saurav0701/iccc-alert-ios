@@ -320,7 +320,6 @@ struct CameraDetailDiagnostics: View {
                     Text(streamURL)
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundColor(.blue)
-                        .textSelection(.enabled)
                         .padding(8)
                         .background(Color(.systemGray6))
                         .cornerRadius(6)
