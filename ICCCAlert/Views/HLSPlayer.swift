@@ -8,7 +8,7 @@ import Combine
 class PlayerManager: ObservableObject {
     static let shared = PlayerManager()
     
-    private var activePlayers: [String: Any] = [:] // Can hold AVPlayer or WKWebView
+    private var activePlayers: [String: Any] = [:]
     private let lock = NSLock()
     private let maxPlayers = 2
     
@@ -47,10 +47,6 @@ class PlayerManager: ObservableObject {
         releasePlayerInternal(cameraId)
     }
     
-    func releaseWebView(_ cameraId: String) {
-        releasePlayer(cameraId)
-    }
-    
     func clearAll() {
         lock.lock()
         defer { lock.unlock() }
@@ -60,266 +56,24 @@ class PlayerManager: ObservableObject {
     }
 }
 
-// MARK: - Hybrid Player (Native with WebView Fallback)
+// MARK: - Main Player (WebView-First for Live Streaming)
 struct HybridHLSPlayer: View {
     let streamURL: String
     let cameraId: String
     let isFullscreen: Bool
     
-    @State private var playerMode: PlayerMode = .native
-    @State private var hasNativeFailed = false
-    
-    enum PlayerMode {
-        case native
-        case webview
-    }
-    
     var body: some View {
-        ZStack {
-            if playerMode == .native && !hasNativeFailed {
-                NativeAVPlayerView(
-                    streamURL: streamURL,
-                    cameraId: cameraId,
-                    isFullscreen: isFullscreen,
-                    onFatalError: {
-                        // Native player failed, switch to WebView
-                        print("⚠️ Native player failed for \(cameraId), switching to WebView")
-                        hasNativeFailed = true
-                        playerMode = .webview
-                    }
-                )
-            } else {
-                SimpleWebViewPlayer(
-                    streamURL: streamURL,
-                    cameraId: cameraId,
-                    isFullscreen: isFullscreen
-                )
-            }
-        }
+        // Always use WebView with HLS.js for live streaming
+        HLSJSPlayer(
+            streamURL: streamURL,
+            cameraId: cameraId,
+            isFullscreen: isFullscreen
+        )
     }
 }
 
-// MARK: - Native AVPlayer View
-struct NativeAVPlayerView: View {
-    let streamURL: String
-    let cameraId: String
-    let isFullscreen: Bool
-    let onFatalError: () -> Void
-    
-    @State private var player: AVPlayer?
-    @State private var isLoading = true
-    @State private var hasError = false
-    @State private var errorMessage = ""
-    @State private var observer: PlayerObserver?
-    @State private var cancellables = Set<AnyCancellable>()
-    @State private var retryCount = 0
-    
-    var body: some View {
-        ZStack {
-            if let player = player {
-                VideoPlayer(player: player)
-            } else {
-                Color.black
-            }
-            
-            // Loading overlay
-            if isLoading && !hasError {
-                VStack(spacing: 8) {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    Text("Loading...")
-                        .font(.caption)
-                        .foregroundColor(.white)
-                }
-                .padding()
-                .background(Color.black.opacity(0.7))
-                .cornerRadius(10)
-            }
-            
-            // Error overlay
-            if hasError {
-                VStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 24))
-                        .foregroundColor(.orange)
-                    Text("Stream Error")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .foregroundColor(.white)
-                    Text(errorMessage)
-                        .font(.system(size: 10))
-                        .foregroundColor(.white.opacity(0.8))
-                        .multilineTextAlignment(.center)
-                }
-                .padding()
-                .background(Color.black.opacity(0.8))
-                .cornerRadius(10)
-            }
-            
-            // LIVE indicator
-            if !isLoading && !hasError && !isFullscreen {
-                VStack {
-                    HStack {
-                        Spacer()
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(Color.red)
-                                .frame(width: 6, height: 6)
-                            Text("LIVE")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundColor(.white)
-                        }
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(Color.black.opacity(0.7))
-                        .cornerRadius(4)
-                        .padding(6)
-                    }
-                    Spacer()
-                }
-            }
-        }
-        .onAppear {
-            setupPlayer()
-        }
-        .onDisappear {
-            cleanup()
-        }
-    }
-    
-    private func setupPlayer() {
-        guard let url = URL(string: streamURL) else {
-            triggerFatalError("Invalid URL")
-            return
-        }
-        
-        print("📹 Setting up native AVPlayer for: \(cameraId)")
-        
-        let playerItem = AVPlayerItem(url: url)
-        playerItem.preferredForwardBufferDuration = 3.0
-        
-        let avPlayer = AVPlayer(playerItem: playerItem)
-        avPlayer.allowsExternalPlayback = false
-        avPlayer.automaticallyWaitsToMinimizeStalling = true
-        
-        self.player = avPlayer
-        PlayerManager.shared.registerPlayer(avPlayer, for: cameraId)
-        
-        // Setup observer
-        let newObserver = PlayerObserver()
-        newObserver.onStatusChange = { status in
-            switch status {
-            case .readyToPlay:
-                isLoading = false
-                hasError = false
-                retryCount = 0
-                print("✅ Native player ready: \(cameraId)")
-                avPlayer.play()
-                
-            case .failed:
-                handleFailure(playerItem.error)
-                
-            case .unknown:
-                isLoading = true
-                
-            @unknown default:
-                break
-            }
-        }
-        
-        newObserver.onError = { error in
-            handleFailure(error)
-        }
-        
-        newObserver.observe(playerItem: playerItem)
-        self.observer = newObserver
-        
-        // Monitor notifications
-        NotificationCenter.default.publisher(for: .AVPlayerItemFailedToPlayToEndTime, object: playerItem)
-            .sink { notification in
-                if let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error {
-                    handleFailure(error)
-                }
-            }
-            .store(in: &cancellables)
-        
-        NotificationCenter.default.publisher(for: .AVPlayerItemNewAccessLogEntry, object: playerItem)
-            .sink { _ in
-                isLoading = false
-                hasError = false
-            }
-            .store(in: &cancellables)
-        
-        // Auto-play
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            avPlayer.play()
-        }
-        
-        // Timeout fallback (switch to WebView if native fails after 10 seconds)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
-            if isLoading {
-                print("⏱️ Native player timeout, switching to WebView")
-                triggerFatalError("Native player timeout")
-            }
-        }
-    }
-    
-    private func handleFailure(_ error: Error?) {
-        isLoading = false
-        hasError = true
-        
-        let nsError = error as NSError?
-        let errorCode = nsError?.code ?? 0
-        
-        print("❌ Native player error: \(errorCode) - \(error?.localizedDescription ?? "unknown")")
-        
-        // Error -12642: kCMFormatDescriptionError (incompatible format)
-        // Error -11800: AVFoundation generic error
-        // These indicate the stream format is incompatible with AVPlayer
-        if errorCode == -12642 || errorCode == -11800 || errorCode == -12645 {
-            errorMessage = "Format incompatible"
-            
-            // Immediate fallback to WebView for format errors
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                triggerFatalError("Incompatible stream format")
-            }
-        } else {
-            errorMessage = error?.localizedDescription ?? "Playback failed"
-            
-            // Retry once for network errors
-            if retryCount < 1 {
-                retryCount += 1
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    cleanup()
-                    setupPlayer()
-                }
-            } else {
-                // After retry, fall back to WebView
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    triggerFatalError("Playback failed after retry")
-                }
-            }
-        }
-    }
-    
-    private func triggerFatalError(_ reason: String) {
-        print("🔄 Triggering fallback to WebView: \(reason)")
-        cleanup()
-        onFatalError()
-    }
-    
-    private func cleanup() {
-        player?.pause()
-        observer?.stopObserving()
-        observer = nil
-        PlayerManager.shared.releasePlayer(cameraId)
-        player = nil
-        cancellables.removeAll()
-    }
-}
-
-// MARK: - Simple WebView Player (Fallback)
-struct SimpleWebViewPlayer: UIViewRepresentable {
+// MARK: - HLS.js WebView Player (Optimized for Live)
+struct HLSJSPlayer: UIViewRepresentable {
     let streamURL: String
     let cameraId: String
     let isFullscreen: Bool
@@ -329,6 +83,9 @@ struct SimpleWebViewPlayer: UIViewRepresentable {
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
         config.allowsPictureInPictureMediaPlayback = false
+        
+        // Disable caching for live streams
+        config.websiteDataStore = .nonPersistent()
         
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.scrollView.isScrollEnabled = false
@@ -361,23 +118,83 @@ struct SimpleWebViewPlayer: UIViewRepresentable {
         <html>
         <head>
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+            <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8"></script>
             <style>
-                * { margin: 0; padding: 0; box-sizing: border-box; }
-                html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
-                #container { width: 100vw; height: 100vh; position: relative; }
-                video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+                * { 
+                    margin: 0; 
+                    padding: 0; 
+                    box-sizing: border-box; 
+                    -webkit-tap-highlight-color: transparent;
+                }
+                html, body { 
+                    width: 100%; 
+                    height: 100%; 
+                    overflow: hidden; 
+                    background: #000; 
+                    position: fixed;
+                }
+                #container { 
+                    width: 100vw; 
+                    height: 100vh; 
+                    position: relative; 
+                }
+                video { 
+                    width: 100%; 
+                    height: 100%; 
+                    object-fit: contain; 
+                    background: #000; 
+                }
                 #status {
-                    position: absolute; bottom: 10px; left: 10px;
-                    background: rgba(0,0,0,0.7); color: #4CAF50;
-                    padding: 6px 10px; font-size: 11px; border-radius: 4px;
-                    font-family: monospace; z-index: 10;
+                    position: absolute; 
+                    bottom: 10px; 
+                    left: 10px;
+                    background: rgba(0,0,0,0.8); 
+                    color: #4CAF50;
+                    padding: 4px 8px; 
+                    font-size: 10px; 
+                    border-radius: 4px;
+                    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                    z-index: 10;
+                    pointer-events: none;
+                }
+                #live-indicator {
+                    position: absolute;
+                    top: 10px;
+                    right: 10px;
+                    background: rgba(255,0,0,0.8);
+                    color: white;
+                    padding: 4px 8px;
+                    font-size: 10px;
+                    border-radius: 4px;
+                    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                    font-weight: bold;
+                    z-index: 10;
+                    display: none;
+                    pointer-events: none;
+                }
+                #live-indicator.active {
+                    display: block;
+                }
+                .dot {
+                    width: 6px;
+                    height: 6px;
+                    background: white;
+                    border-radius: 50%;
+                    display: inline-block;
+                    margin-right: 4px;
+                    animation: pulse 1.5s ease-in-out infinite;
+                }
+                @keyframes pulse {
+                    0%, 100% { opacity: 1; }
+                    50% { opacity: 0.3; }
                 }
             </style>
         </head>
         <body>
             <div id="container">
-                <video id="video" playsinline webkit-playsinline muted autoplay controls></video>
-                <div id="status">WebView Fallback</div>
+                <video id="video" playsinline webkit-playsinline muted autoplay></video>
+                <div id="live-indicator"><span class="dot"></span>LIVE</div>
+                <div id="status">Initializing...</div>
             </div>
             
             <script>
@@ -386,37 +203,178 @@ struct SimpleWebViewPlayer: UIViewRepresentable {
                     
                     const video = document.getElementById('video');
                     const status = document.getElementById('status');
+                    const liveIndicator = document.getElementById('live-indicator');
                     const streamUrl = '\(streamURL)';
                     
-                    function log(msg) {
-                        console.log('[WebView Player]', msg);
+                    let hls = null;
+                    let isPlaying = false;
+                    
+                    function log(msg, isError = false) {
+                        console.log('[HLS.js]', msg);
                         status.textContent = msg;
+                        status.style.color = isError ? '#f44336' : '#4CAF50';
                     }
                     
-                    // Use native iOS HLS player (supports H.265)
-                    log('Loading stream...');
-                    video.src = streamUrl;
+                    function initHLS() {
+                        if (Hls.isSupported()) {
+                            log('HLS.js supported ✓');
+                            
+                            hls = new Hls({
+                                // Low-latency live streaming configuration
+                                enableWorker: true,
+                                lowLatencyMode: true,
+                                backBufferLength: 10,           // Keep minimal back buffer
+                                maxBufferLength: 3,             // Very small forward buffer (3 seconds)
+                                maxMaxBufferLength: 5,          // Cap at 5 seconds
+                                maxBufferSize: 5 * 1000 * 1000, // 5MB buffer
+                                maxBufferHole: 0.2,             // Tolerate small gaps
+                                highBufferWatchdogPeriod: 1,    // Monitor buffer frequently
+                                liveSyncDurationCount: 2,       // Stay close to live edge
+                                liveMaxLatencyDurationCount: 5, // Max latency before sync
+                                liveDurationInfinity: false,
+                                manifestLoadingTimeOut: 10000,
+                                manifestLoadingMaxRetry: 3,
+                                manifestLoadingRetryDelay: 500,
+                                levelLoadingTimeOut: 10000,
+                                levelLoadingMaxRetry: 4,
+                                levelLoadingRetryDelay: 500,
+                                fragLoadingTimeOut: 20000,
+                                fragLoadingMaxRetry: 6,
+                                fragLoadingRetryDelay: 500,
+                                startPosition: -1,              // Start at live edge
+                                autoStartLoad: true,
+                                debug: false
+                            });
+                            
+                            hls.loadSource(streamUrl);
+                            hls.attachMedia(video);
+                            
+                            // HLS.js event handlers
+                            hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                                log('Stream ready');
+                                video.play().then(() => {
+                                    log('Playing');
+                                    isPlaying = true;
+                                    liveIndicator.classList.add('active');
+                                }).catch(e => {
+                                    log('Play failed: ' + e.message, true);
+                                });
+                            });
+                            
+                            hls.on(Hls.Events.ERROR, function(event, data) {
+                                if (data.fatal) {
+                                    switch(data.type) {
+                                        case Hls.ErrorTypes.NETWORK_ERROR:
+                                            log('Network error, retrying...', true);
+                                            hls.startLoad();
+                                            break;
+                                        case Hls.ErrorTypes.MEDIA_ERROR:
+                                            log('Media error, recovering...', true);
+                                            hls.recoverMediaError();
+                                            break;
+                                        default:
+                                            log('Fatal error: ' + data.type, true);
+                                            liveIndicator.classList.remove('active');
+                                            setTimeout(() => {
+                                                log('Restarting stream...');
+                                                hls.destroy();
+                                                initHLS();
+                                            }, 3000);
+                                            break;
+                                    }
+                                } else if (data.details === 'bufferStalledError') {
+                                    log('Buffer stalled, syncing...');
+                                    // Force sync to live edge
+                                    const duration = video.duration;
+                                    if (duration && isFinite(duration)) {
+                                        const liveEdge = duration - 0.5;
+                                        if (video.currentTime < liveEdge - 2) {
+                                            video.currentTime = liveEdge;
+                                        }
+                                    }
+                                }
+                            });
+                            
+                            hls.on(Hls.Events.FRAG_LOADED, function() {
+                                // Keep near live edge
+                                const duration = video.duration;
+                                if (duration && isFinite(duration) && isPlaying) {
+                                    const lag = duration - video.currentTime;
+                                    if (lag > 5) {
+                                        // More than 5 seconds behind, jump to live
+                                        video.currentTime = duration - 1;
+                                        log('Synced to live');
+                                    }
+                                }
+                            });
+                            
+                        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                            // iOS native HLS
+                            log('Using native HLS');
+                            video.src = streamUrl;
+                            video.load();
+                            
+                            video.addEventListener('loadedmetadata', function() {
+                                log('Stream ready');
+                                video.play().then(() => {
+                                    log('Playing (native)');
+                                    isPlaying = true;
+                                    liveIndicator.classList.add('active');
+                                }).catch(e => {
+                                    log('Play failed: ' + e.message, true);
+                                });
+                            });
+                            
+                            video.addEventListener('error', function() {
+                                log('Playback error', true);
+                                liveIndicator.classList.remove('active');
+                            });
+                        }
+                    }
                     
-                    video.addEventListener('loadeddata', function() {
-                        log('✅ Playing (WebView)');
-                        video.play().catch(e => {
-                            log('Play error: ' + e.message);
-                        });
-                    });
-                    
-                    video.addEventListener('error', function(e) {
-                        log('❌ Error: ' + (video.error ? video.error.code : 'unknown'));
-                    });
-                    
+                    // Video event handlers
                     video.addEventListener('playing', function() {
-                        log('✅ Playing');
+                        log('Playing');
+                        liveIndicator.classList.add('active');
                     });
                     
                     video.addEventListener('waiting', function() {
-                        log('⏳ Buffering...');
+                        log('Buffering...');
                     });
                     
-                    video.load();
+                    video.addEventListener('pause', function() {
+                        if (isPlaying) {
+                            // Auto-resume if unintentional pause
+                            video.play();
+                        }
+                    });
+                    
+                    video.addEventListener('stalled', function() {
+                        log('Stream stalled, recovering...');
+                        if (hls) {
+                            hls.startLoad();
+                        }
+                    });
+                    
+                    // Monitor buffer health
+                    setInterval(() => {
+                        if (hls && isPlaying) {
+                            const bufferInfo = hls.bufferLength;
+                            if (bufferInfo < 0.5) {
+                                log('Low buffer: ' + bufferInfo.toFixed(1) + 's');
+                            }
+                        }
+                    }, 2000);
+                    
+                    // Initialize
+                    initHLS();
+                    
+                    // Cleanup on page unload
+                    window.addEventListener('beforeunload', function() {
+                        if (hls) {
+                            hls.destroy();
+                        }
+                    });
                     
                 })();
             </script>
@@ -428,48 +386,19 @@ struct SimpleWebViewPlayer: UIViewRepresentable {
     }
     
     class Coordinator: NSObject, WKNavigationDelegate {
-        var parent: SimpleWebViewPlayer
+        var parent: HLSJSPlayer
         
-        init(_ parent: SimpleWebViewPlayer) {
+        init(_ parent: HLSJSPlayer) {
             self.parent = parent
         }
         
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            print("✅ WebView loaded for: \(parent.cameraId)")
+            print("✅ HLS.js player loaded for: \(parent.cameraId)")
         }
         
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             print("❌ WebView failed: \(error.localizedDescription)")
         }
-    }
-}
-
-// MARK: - Player Observer
-class PlayerObserver: NSObject {
-    var onStatusChange: ((AVPlayerItem.Status) -> Void)?
-    var onError: ((Error?) -> Void)?
-    
-    private var statusObservation: NSKeyValueObservation?
-    
-    func observe(playerItem: AVPlayerItem) {
-        statusObservation = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
-            DispatchQueue.main.async {
-                self?.onStatusChange?(item.status)
-                
-                if item.status == .failed, let error = item.error {
-                    self?.onError?(error)
-                }
-            }
-        }
-    }
-    
-    func stopObserving() {
-        statusObservation?.invalidate()
-        statusObservation = nil
-    }
-    
-    deinit {
-        stopObserving()
     }
 }
 
