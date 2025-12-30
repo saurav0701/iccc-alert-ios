@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - Camera Model with H.264 Stream Support
+// MARK: - Camera Model (matches backend exactly, with defaults for optional fields)
 
 struct Camera: Codable, Identifiable, Equatable {
     let category: String
@@ -48,12 +48,13 @@ struct Camera: Codable, Identifiable, Equatable {
         location = try container.decodeIfPresent(String.self, forKey: .location) ?? ""
         lastUpdate = try container.decodeIfPresent(String.self, forKey: .lastUpdate) ?? ""
         
+        // ✅ DEBUG: Log if IP is missing
         if ip.isEmpty {
             print("⚠️ Camera \(id) has NO IP address!")
         }
     }
     
-    // Memberwise initializer
+    // ✅ Memberwise initializer for manual camera creation
     init(category: String, id: String, ip: String, Id: Int, deviceId: Int,
          Name: String, name: String, latitude: String, longitude: String,
          status: String, groupId: Int, area: String, transporter: String,
@@ -75,6 +76,7 @@ struct Camera: Codable, Identifiable, Equatable {
         self.lastUpdate = lastUpdate
     }
     
+    // Standard encoder
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         
@@ -100,19 +102,19 @@ struct Camera: Codable, Identifiable, Equatable {
     }
     
     var displayName: String {
+        // Prefer 'name' field, fallback to 'Name'
         if !name.isEmpty {
             return name
         }
         return Name.isEmpty ? "Camera \(id)" : Name
     }
     
-    // H.264 Stream URL with proper MediaMTX path
+    // ✅ CRITICAL FIX: Use IP address as stream path
     var streamURL: String? {
-        return getH264StreamURL(for: groupId, cameraIp: ip, cameraId: id)
+        return getStreamURL(for: groupId, cameraIp: ip, cameraId: id)
     }
 
-    private func getH264StreamURL(for groupId: Int, cameraIp: String, cameraId: String) -> String? {
-        // MediaMTX server URLs mapped by group ID
+    private func getStreamURL(for groupId: Int, cameraIp: String, cameraId: String) -> String? {
         let serverURLs: [Int: String] = [
             5: "http://103.208.173.131:8888",
             6: "http://103.208.173.147:8888",
@@ -134,28 +136,29 @@ struct Camera: Codable, Identifiable, Equatable {
             return nil
         }
         
-        // Use IP address as stream path (MediaMTX format for H.264)
-        // Format: http://server:port/camera_ip/index.m3u8
+        // ✅ CRITICAL FIX: Use camera IP as stream path (MediaMTX format)
+        // Example: http://a6va.bccliccc.in:8888/172.16.16.99/index.m3u8
         if !cameraIp.isEmpty {
             let url = "\(serverURL)/\(cameraIp)/index.m3u8"
-            print("✅ H.264 Stream URL: \(url)")
+            print("✅ Stream URL (IP-based): \(url)")
             return url
         }
         
         // Fallback to camera ID if IP is missing
         let fallbackUrl = "\(serverURL)/\(cameraId)/index.m3u8"
-        print("⚠️ H.264 Stream URL (fallback): \(fallbackUrl)")
+        print("⚠️ Stream URL (ID-based fallback): \(fallbackUrl)")
         return fallbackUrl
     }
     
-    // Compare both ID and status for change detection
+    // ✅ CORRECTED: Compare both ID and status for proper change detection
     static func == (lhs: Camera, rhs: Camera) -> Bool {
         return lhs.id == rhs.id && lhs.status == rhs.status
     }
 }
 
+
 extension Camera {
-    // Efficient status update
+    // ✅ Efficient status update without recreating entire object
     func withUpdatedStatus(_ newStatus: String) -> Camera {
         return Camera(
             category: self.category,
@@ -167,7 +170,7 @@ extension Camera {
             name: self.name,
             latitude: self.latitude,
             longitude: self.longitude,
-            status: newStatus,
+            status: newStatus,  // ← Only this changes
             groupId: self.groupId,
             area: self.area,
             transporter: self.transporter,
@@ -176,7 +179,7 @@ extension Camera {
         )
     }
 
-    // Flexible update method
+    // ✅ Flexible update method for any field changes
     func updated(
         category: String? = nil,
         ip: String? = nil,
@@ -195,7 +198,7 @@ extension Camera {
     ) -> Camera {
         return Camera(
             category: category ?? self.category,
-            id: self.id,
+            id: self.id, // ID never changes
             ip: ip ?? self.ip,
             Id: Id ?? self.Id,
             deviceId: deviceId ?? self.deviceId,
@@ -212,7 +215,7 @@ extension Camera {
         )
     }
     
-    // Debug print stream info
+    // ✅ DEBUG: Print camera stream info
     func printStreamInfo() {
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         print("📹 Camera: \(displayName)")
@@ -221,53 +224,11 @@ extension Camera {
         print("   Group: \(groupId)")
         print("   Stream URL: \(streamURL ?? "nil")")
         print("   Online: \(isOnline)")
-        print("   Expected Format: H.264")
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    }
-    
-    // Validate stream availability
-    func validateStream() -> StreamValidation {
-        guard !ip.isEmpty else {
-            return .invalid(reason: "No IP address")
-        }
-        
-        guard streamURL != nil else {
-            return .invalid(reason: "No server for group \(groupId)")
-        }
-        
-        guard isOnline else {
-            return .offline
-        }
-        
-        return .valid
-    }
-    
-    enum StreamValidation {
-        case valid
-        case offline
-        case invalid(reason: String)
-        
-        var isValid: Bool {
-            if case .valid = self {
-                return true
-            }
-            return false
-        }
-        
-        var errorMessage: String? {
-            switch self {
-            case .valid:
-                return nil
-            case .offline:
-                return "Camera is offline"
-            case .invalid(let reason):
-                return reason
-            }
-        }
     }
 }
 
-// MARK: - Camera Response
+// MARK: - Camera Response (from WebSocket)
 
 struct CameraListResponse: Codable {
     let cameras: [Camera]
