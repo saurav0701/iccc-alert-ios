@@ -349,8 +349,8 @@ struct ImprovedAVPlayerView: View {
     
     private func startStallMonitoring() {
         stallTimer?.invalidate()
-        stallTimer = Timer.scheduledTimer(withTimeInterval: stallCheckInterval, repeats: true) { [weak self] _ in
-            guard let self = self, let player = self.player else { return }
+        stallTimer = Timer.scheduledTimer(withTimeInterval: stallCheckInterval, repeats: true) { [self] _ in
+            guard let player = self.player else { return }
             
             let currentTime = player.currentTime()
             if currentTime == self.lastPlaybackTime && player.rate == 0 {

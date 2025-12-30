@@ -292,13 +292,13 @@ struct CameraDetailDiagnostics: View {
             Text("Camera Information")
                 .font(.headline)
             
-            InfoRow(label: "Name", value: camera.displayName)
-            InfoRow(label: "ID", value: camera.id)
-            InfoRow(label: "Area", value: camera.area)
-            InfoRow(label: "Location", value: camera.location.isEmpty ? "N/A" : camera.location)
-            InfoRow(label: "IP Address", value: camera.ip.isEmpty ? "⚠️ Missing" : camera.ip)
-            InfoRow(label: "Group ID", value: "\(camera.groupId)")
-            InfoRow(label: "Status", value: camera.status, valueColor: camera.isOnline ? .green : .red)
+            DiagnosticInfoRow(label: "Name", value: camera.displayName)
+            DiagnosticInfoRow(label: "ID", value: camera.id)
+            DiagnosticInfoRow(label: "Area", value: camera.area)
+            DiagnosticInfoRow(label: "Location", value: camera.location.isEmpty ? "N/A" : camera.location)
+            DiagnosticInfoRow(label: "IP Address", value: camera.ip.isEmpty ? "⚠️ Missing" : camera.ip)
+            DiagnosticInfoRow(label: "Group ID", value: "\(camera.groupId)")
+            DiagnosticInfoRow(label: "Status", value: camera.status, valueColor: camera.isOnline ? .green : .red)
         }
         .padding()
         .background(Color(.systemBackground))
@@ -326,9 +326,9 @@ struct CameraDetailDiagnostics: View {
                         .cornerRadius(6)
                 }
                 
-                InfoRow(label: "Protocol", value: "HLS (HTTP Live Streaming)")
-                InfoRow(label: "Format", value: "H.264 (All profiles supported)")
-                InfoRow(label: "Container", value: "MPEG-TS")
+                DiagnosticInfoRow(label: "Protocol", value: "HLS (HTTP Live Streaming)")
+                DiagnosticInfoRow(label: "Format", value: "H.264 (All profiles supported)")
+                DiagnosticInfoRow(label: "Container", value: "MPEG-TS")
             } else {
                 Text("⚠️ No stream URL available")
                     .foregroundColor(.orange)
@@ -411,7 +411,7 @@ struct CameraDetailDiagnostics: View {
                     .foregroundColor(result.success ? .green : .red)
             }
             
-            InfoRow(label: "Status", 
+            DiagnosticInfoRow(label: "Status", 
                    value: result.success ? "✅ Success" : "❌ Failed",
                    valueColor: result.success ? .green : .red)
             
@@ -424,7 +424,7 @@ struct CameraDetailDiagnostics: View {
                     .cornerRadius(6)
             }
             
-            InfoRow(label: "Test Duration", value: String(format: "%.2f seconds", result.duration))
+            DiagnosticInfoRow(label: "Test Duration", value: String(format: "%.2f seconds", result.duration))
         }
         .padding()
         .background(Color(.systemBackground))
@@ -488,7 +488,7 @@ struct CameraDetailDiagnostics: View {
 }
 
 // MARK: - Helper Views
-struct InfoRow: View {
+struct DiagnosticInfoRow: View {
     let label: String
     let value: String
     var valueColor: Color = .primary
