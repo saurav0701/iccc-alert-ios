@@ -148,10 +148,12 @@ struct ImprovedAVPlayerView: View {
     @State private var retryCount = 0
     @State private var stallTimer: Timer?
     @State private var lastPlaybackTime: CMTime = .zero
+    @State private var playbackStartTime: Date?
     
-    private let maxRetries = 3
-    private let retryDelay: TimeInterval = 2.0
-    private let stallCheckInterval: TimeInterval = 5.0
+    private let maxRetries = 5
+    private let retryDelay: TimeInterval = 3.0
+    private let stallCheckInterval: TimeInterval = 8.0
+    private let initialLoadTimeout: TimeInterval = 30.0
     
     var body: some View {
         ZStack {
@@ -300,10 +302,23 @@ struct ImprovedAVPlayerView: View {
             switch status {
             case .readyToPlay:
                 print("✅ H.264 stream ready: \(self.cameraId)")
+                print("   Duration: \(playerItem.duration.seconds)s")
+                print("   Tracks: \(playerItem.tracks.count)")
+                
                 self.isLoading = false
                 self.hasError = false
                 self.retryCount = 0
-                self.attemptPlayback(player: player)
+                
+                // Start playback
+                player.play()
+                
+                // Verify playback started
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    if player.rate == 0 {
+                        print("⚠️ Playback didn't start, trying again...")
+                        player.play()
+                    }
+                }
                 
             case .failed:
                 self.handlePlaybackError(playerItem.error)
@@ -386,14 +401,19 @@ struct ImprovedAVPlayerView: View {
     }
     
     private func setupTimeoutProtection() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15.0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + initialLoadTimeout) {
             if self.isLoading && !self.hasError {
-                print("⏱️ Playback timeout for: \(self.cameraId)")
-                self.handlePlaybackError(NSError(
-                    domain: "AVPlayer",
-                    code: -1,
-                    userInfo: [NSLocalizedDescriptionKey: "Stream timeout"]
-                ))
+                print("⏱️ Initial load timeout (\(self.initialLoadTimeout)s) for: \(self.cameraId)")
+                
+                // Check if we've made any progress
+                if let startTime = self.playbackStartTime,
+                   Date().timeIntervalSince(startTime) > self.initialLoadTimeout {
+                    self.handlePlaybackError(NSError(
+                        domain: "AVPlayer",
+                        code: -1,
+                        userInfo: [NSLocalizedDescriptionKey: "Stream load timeout"]
+                    ))
+                }
             }
         }
     }
@@ -412,10 +432,16 @@ struct ImprovedAVPlayerView: View {
             let errorType = self.categorizeError(errorCode)
             self.errorMessage = self.getUserFriendlyError(errorType, code: errorCode)
             
+            // For decode errors during initial load, be more patient
+            if errorType == .format && self.retryCount == 0 {
+                print("🔄 First format error, will retry before switching to WebView")
+            }
+            
             // Decide on retry strategy
             if self.shouldRetry(errorType) && self.retryCount < self.maxRetries {
                 self.scheduleRetry()
-            } else if self.shouldFallbackToWebView(errorType) {
+            } else if self.shouldFallbackToWebView(errorType) && self.retryCount >= 2 {
+                // Only fallback to WebView after at least 2 retries
                 self.handleFatalError(self.errorMessage)
             } else {
                 // Show retry button
@@ -447,13 +473,16 @@ struct ImprovedAVPlayerView: View {
     private func getUserFriendlyError(_ type: ErrorType, code: Int) -> String {
         switch type {
         case .network:
-            return "Network error. Check connection."
+            return "Network error. Retrying..."
         case .format:
-            return "H.264 format issue. Trying alternative..."
+            if retryCount < 2 {
+                return "Loading H.264 stream..."
+            }
+            return "Switching to WebView player..."
         case .timeout:
             return "Stream timeout. Retrying..."
         case .unknown:
-            return "Playback error [\(code)]"
+            return "Loading stream..."
         }
     }
     
@@ -462,20 +491,24 @@ struct ImprovedAVPlayerView: View {
         case .network, .timeout, .unknown:
             return true
         case .format:
-            return false // Format errors won't fix with retry
+            return retryCount < 3 // Try 3 times before giving up on native player
         }
     }
     
     private func shouldFallbackToWebView(_ type: ErrorType) -> Bool {
-        return type == .format
+        // Only fallback for format errors after multiple retries
+        return type == .format && retryCount >= 2
     }
     
     private func scheduleRetry() {
         retryCount += 1
-        print("🔄 Scheduling retry \(retryCount)/\(maxRetries)")
+        let delay = retryDelay + Double(retryCount - 1) // Increasing delay
+        print("🔄 Scheduling retry \(retryCount)/\(maxRetries) in \(delay)s")
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + retryDelay) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            print("🔄 Executing retry \(self.retryCount)")
             self.hasError = false
+            self.isLoading = true
             self.cleanup()
             self.setupPlayer()
         }
@@ -714,6 +747,7 @@ struct H264WebViewPlayer: UIViewRepresentable {
                         log('❌ ' + errorMsg, 'error');
                         showLoading(false);
                         
+                        // Always retry on error for H.264 WebView
                         if (shouldRetry(errorCode)) {
                             retryStream();
                         }
@@ -730,13 +764,14 @@ struct H264WebViewPlayer: UIViewRepresentable {
                     }
                     
                     function shouldRetry(code) {
-                        // Retry on network errors, not on format errors
-                        return code === 2;
+                        // Always retry - all H.264 errors are potentially recoverable
+                        return true;
                     }
                     
                     // Auto-resume on visibility change
                     document.addEventListener('visibilitychange', function() {
                         if (!document.hidden && video.paused) {
+                            log('⏯️ Resuming playback');
                             video.play().catch(e => console.log('Resume failed:', e));
                         }
                     });
