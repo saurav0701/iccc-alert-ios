@@ -1,6 +1,6 @@
 import SwiftUI
 
-// MARK: - Area Cameras View (with Thumbnail Prefetching)
+// MARK: - Area Cameras View (Optimized Thumbnail Management)
 struct AreaCamerasView: View {
     let area: String
     @StateObject private var cameraManager = CameraManager.shared
@@ -9,6 +9,7 @@ struct AreaCamerasView: View {
     @State private var showOnlineOnly = true
     @State private var gridMode: GridViewMode = .grid2x2
     @State private var selectedCamera: Camera? = nil
+    @State private var visibleCameraIds: Set<String> = []
     @Environment(\.scenePhase) var scenePhase
     
     var cameras: [Camera] {
@@ -45,9 +46,7 @@ struct AreaCamerasView: View {
             }
             
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: {
-                    refreshThumbnails()
-                }) {
+                Button(action: refreshThumbnails) {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 16))
                 }
@@ -55,21 +54,25 @@ struct AreaCamerasView: View {
         }
         .fullScreenCover(item: $selectedCamera) { FullscreenPlayerView(camera: $0) }
         .onAppear {
-            prefetchVisibleThumbnails()
+            DebugLogger.shared.log("📹 AreaCamerasView appeared: \(area)", emoji: "📹", color: .blue)
+            loadInitialThumbnails()
         }
-        .onDisappear { 
-            PlayerManager.shared.clearAll() 
+        .onDisappear {
+            DebugLogger.shared.log("🚪 AreaCamerasView disappeared: \(area)", emoji: "🚪", color: .orange)
+            // Clean up all active streams
+            PlayerManager.shared.clearAll()
+            // Clear thumbnails from memory (keep on disk)
+            thumbnailCache.clearChannelThumbnails()
         }
-        .onChange(of: scenePhase) { 
-            if $0 == .background { 
-                PlayerManager.shared.clearAll() 
-            } else if $0 == .active {
-                prefetchVisibleThumbnails()
+        .onChange(of: scenePhase) { phase in
+            if phase == .background {
+                PlayerManager.shared.clearAll()
+            } else if phase == .active {
+                loadInitialThumbnails()
             }
         }
-        .onChange(of: gridMode) { _ in 
+        .onChange(of: gridMode) { _ in
             PlayerManager.shared.clearAll()
-            prefetchVisibleThumbnails()
         }
     }
     
@@ -119,9 +122,8 @@ struct AreaCamerasView: View {
                     }
                 }
                 .toggleStyle(SwitchToggleStyle(tint: .green))
-                .onChange(of: showOnlineOnly) { _ in 
+                .onChange(of: showOnlineOnly) { _ in
                     PlayerManager.shared.clearAll()
-                    prefetchVisibleThumbnails()
                 }
             }
             .padding(.horizontal)
@@ -143,12 +145,10 @@ struct AreaCamerasView: View {
                             }
                         }
                         .onAppear {
-                            // Prefetch thumbnail for cameras that come into view
-                            if camera.isOnline && thumbnailCache.getThumbnail(for: camera.id) == nil {
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                    thumbnailCache.fetchThumbnail(for: camera)
-                                }
-                            }
+                            handleCameraAppear(camera)
+                        }
+                        .onDisappear {
+                            handleCameraDisappear(camera)
                         }
                 }
             }
@@ -176,24 +176,30 @@ struct AreaCamerasView: View {
     
     // MARK: - Thumbnail Management
     
-    private func prefetchVisibleThumbnails() {
-        // Only prefetch first 10 visible cameras to avoid overwhelming the system
-        let visibleCameras = Array(cameras.prefix(10))
+    private func loadInitialThumbnails() {
+        // Only load first 10 visible cameras
+        thumbnailCache.prefetchVisibleThumbnails(for: cameras)
+    }
+    
+    private func handleCameraAppear(_ camera: Camera) {
+        visibleCameraIds.insert(camera.id)
         
-        // Stagger the prefetch requests
-        for (index, camera) in visibleCameras.enumerated() {
-            if camera.isOnline && thumbnailCache.getThumbnail(for: camera.id) == nil {
-                let delay = Double(index) * 0.5 // 500ms between each request
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                    thumbnailCache.fetchThumbnail(for: camera)
-                }
+        // Fetch thumbnail if not already loaded
+        if camera.isOnline && thumbnailCache.getThumbnail(for: camera.id) == nil {
+            // Add small delay to avoid overwhelming the system
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                thumbnailCache.fetchThumbnail(for: camera)
             }
         }
     }
     
+    private func handleCameraDisappear(_ camera: Camera) {
+        visibleCameraIds.remove(camera.id)
+    }
+    
     private func refreshThumbnails() {
-        // Clear and refresh thumbnails for visible cameras
-        let visibleCameras = Array(cameras.prefix(10))
+        // Clear only visible camera thumbnails
+        let visibleCameras = cameras.filter { visibleCameraIds.contains($0.id) }
         
         for camera in visibleCameras where camera.isOnline {
             thumbnailCache.clearThumbnail(for: camera.id)
@@ -202,9 +208,14 @@ struct AreaCamerasView: View {
         // Trigger haptic feedback
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         
-        // Prefetch again
+        // Reload visible thumbnails
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            prefetchVisibleThumbnails()
+            for (index, camera) in visibleCameras.enumerated() {
+                let delay = Double(index) * 0.5
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    thumbnailCache.fetchThumbnail(for: camera, force: true)
+                }
+            }
         }
     }
 }

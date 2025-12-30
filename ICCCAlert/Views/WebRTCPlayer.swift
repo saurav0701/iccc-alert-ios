@@ -301,90 +301,154 @@ struct WebRTCPlayerView: UIViewRepresentable {
     }
 }
 
-// MARK: - Camera Thumbnail (Static Image)
+// MARK: - Camera Thumbnail (Static Image Only - No Streaming)
 struct CameraThumbnail: View {
     let camera: Camera
     let isGridView: Bool
     @StateObject private var thumbnailCache = ThumbnailCacheManager.shared
     @State private var isLoading = false
+    @State private var hasFailed = false
     
     var body: some View {
         ZStack {
             if let thumbnail = thumbnailCache.getThumbnail(for: camera.id) {
-                Image(uiImage: thumbnail)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else if camera.isOnline {
-                if isLoading {
-                    loadingView
-                } else {
-                    placeholderView
-                }
-            } else {
+                // Show cached thumbnail
+                thumbnailImageView(thumbnail)
+            } else if !camera.isOnline {
+                // Offline state
                 offlineView
+            } else if hasFailed {
+                // Failed to load
+                failedView
+            } else if isLoading {
+                // Loading state
+                loadingView
+            } else {
+                // Placeholder - tap to load
+                placeholderView
             }
         }
-        .onAppear {
-            if camera.isOnline && thumbnailCache.getThumbnail(for: camera.id) == nil {
-                fetchThumbnail()
-            }
-        }
+        .contentShape(Rectangle())
     }
     
-    private func fetchThumbnail() {
-        guard !isLoading else { return }
-        isLoading = true
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            thumbnailCache.fetchThumbnail(for: camera)
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-                isLoading = false
-            }
-        }
+    private func thumbnailImageView(_ image: UIImage) -> some View {
+        Image(uiImage: image)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
+            .clipped()
     }
     
     private var loadingView: some View {
         ZStack {
-            LinearGradient(colors: [Color.blue.opacity(0.3), Color.blue.opacity(0.1)],
-                          startPoint: .topLeading, endPoint: .bottomTrailing)
+            LinearGradient(
+                colors: [Color.blue.opacity(0.3), Color.blue.opacity(0.1)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            
             VStack(spacing: 8) {
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle(tint: .blue))
-                Text("Loading...")
-                    .font(.caption2)
-                    .foregroundColor(.blue)
+                    .scaleEffect(isGridView ? 0.8 : 1.0)
+                
+                if !isGridView {
+                    Text("Loading snapshot...")
+                        .font(.caption2)
+                        .foregroundColor(.blue)
+                }
             }
         }
     }
     
     private var placeholderView: some View {
         ZStack {
-            LinearGradient(colors: [Color.blue.opacity(0.3), Color.blue.opacity(0.1)],
-                          startPoint: .topLeading, endPoint: .bottomTrailing)
+            LinearGradient(
+                colors: [Color.blue.opacity(0.3), Color.blue.opacity(0.1)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            
             VStack(spacing: 6) {
                 Image(systemName: "photo")
                     .font(.system(size: isGridView ? 24 : 32))
                     .foregroundColor(.blue)
+                
                 if !isGridView {
-                    Text("Tap to load").font(.caption).foregroundColor(.blue)
+                    Text("Tap to load")
+                        .font(.caption)
+                        .foregroundColor(.blue)
                 }
             }
         }
         .onTapGesture {
-            fetchThumbnail()
+            loadThumbnail()
+        }
+    }
+    
+    private var failedView: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color.orange.opacity(0.3), Color.orange.opacity(0.1)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            
+            VStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: isGridView ? 20 : 24))
+                    .foregroundColor(.orange)
+                
+                if !isGridView {
+                    Text("Tap to retry")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                }
+            }
+        }
+        .onTapGesture {
+            hasFailed = false
+            loadThumbnail()
         }
     }
     
     private var offlineView: some View {
         ZStack {
-            LinearGradient(colors: [Color.gray.opacity(0.3), Color.gray.opacity(0.1)],
-                          startPoint: .topLeading, endPoint: .bottomTrailing)
+            LinearGradient(
+                colors: [Color.gray.opacity(0.3), Color.gray.opacity(0.1)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            
             VStack(spacing: 6) {
                 Image(systemName: "video.slash.fill")
                     .font(.system(size: isGridView ? 20 : 24))
                     .foregroundColor(.gray)
-                Text("Offline").font(.caption2).foregroundColor(.gray)
+                
+                Text("Offline")
+                    .font(.caption2)
+                    .foregroundColor(.gray)
+            }
+        }
+    }
+    
+    // MARK: - Load Thumbnail
+    
+    private func loadThumbnail() {
+        guard !isLoading, camera.isOnline else { return }
+        
+        isLoading = true
+        hasFailed = false
+        
+        // Start loading
+        thumbnailCache.fetchThumbnail(for: camera)
+        
+        // Timeout after 10 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
+            if isLoading && thumbnailCache.getThumbnail(for: camera.id) == nil {
+                isLoading = false
+                hasFailed = true
+            } else {
+                isLoading = false
             }
         }
     }

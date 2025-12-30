@@ -1,9 +1,8 @@
 import Foundation
 import UIKit
 import Combine
-import WebKit
 
-// MARK: - Thumbnail Cache Manager
+// MARK: - Simple Thumbnail Cache Manager (No WebRTC - Just Static Images)
 class ThumbnailCacheManager: ObservableObject {
     static let shared = ThumbnailCacheManager()
     
@@ -12,24 +11,18 @@ class ThumbnailCacheManager: ObservableObject {
     private let cache = NSCache<NSString, UIImage>()
     private let fileManager = FileManager.default
     private let cacheDirectory: URL
-    private let maxCacheSize = 100 * 1024 * 1024 // 100MB max cache
-    private var activeFetches: [String: Task<Void, Never>] = [:]
-    private let fetchQueue = DispatchQueue(label: "com.iccc.thumbnailFetch", qos: .utility)
+    private var activeFetches: Set<String> = []
     private let lock = NSLock()
     
     private init() {
-        // Setup cache directory
         let paths = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)
         cacheDirectory = paths[0].appendingPathComponent("CameraThumbnails")
         
-        // Create directory if needed
         try? fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
         
-        // Configure NSCache
-        cache.countLimit = 200 // Max 200 images in memory
-        cache.totalCostLimit = maxCacheSize
+        cache.countLimit = 200
+        cache.totalCostLimit = 50 * 1024 * 1024 // 50MB
         
-        // Load existing thumbnails from disk
         loadCachedThumbnails()
         
         DebugLogger.shared.log("🖼️ ThumbnailCacheManager initialized", emoji: "🖼️", color: .blue)
@@ -41,159 +34,123 @@ class ThumbnailCacheManager: ObservableObject {
         lock.lock()
         defer { lock.unlock() }
         
-        // Check memory cache first
         if let cached = cache.object(forKey: cameraId as NSString) {
             return cached
         }
         
-        // Check published dictionary
         return thumbnails[cameraId]
     }
     
-    // MARK: - Fetch Thumbnail from Stream
+    // MARK: - Fetch Thumbnail (Simple HTTP Snapshot)
     
     func fetchThumbnail(for camera: Camera, force: Bool = false) {
         lock.lock()
-        let existingTask = activeFetches[camera.id]
+        let isAlreadyFetching = activeFetches.contains(camera.id)
         lock.unlock()
         
-        // Don't fetch if already in progress
-        if existingTask != nil && !force {
+        if isAlreadyFetching && !force {
             return
         }
         
-        // Don't fetch if we already have a recent thumbnail and not forcing
         if !force && getThumbnail(for: camera.id) != nil {
             return
         }
         
-        let task = Task { @MainActor in
+        lock.lock()
+        activeFetches.insert(camera.id)
+        lock.unlock()
+        
+        Task {
             await performFetch(for: camera)
         }
-        
-        lock.lock()
-        activeFetches[camera.id] = task
-        lock.unlock()
     }
     
     @MainActor
     private func performFetch(for camera: Camera) async {
-        guard let streamURL = camera.webrtcStreamURL else {
-            DebugLogger.shared.log("⚠️ No stream URL for camera: \(camera.id)", emoji: "⚠️", color: .orange)
+        guard let snapshotURL = getSnapshotURL(for: camera) else {
+            DebugLogger.shared.log("⚠️ No snapshot URL for camera: \(camera.id)", emoji: "⚠️", color: .orange)
             removeFetchTask(for: camera.id)
             return
         }
         
         do {
-            // Create a temporary webview to capture frame
-            let image = try await captureFrameFromStream(streamURL: streamURL, cameraId: camera.id)
+            // Simple HTTP GET request for JPEG snapshot
+            let (data, response) = try await URLSession.shared.data(from: URL(string: snapshotURL)!)
+            
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200,
+                  let image = UIImage(data: data) else {
+                DebugLogger.shared.log("❌ Failed to get snapshot: \(camera.id)", emoji: "❌", color: .red)
+                removeFetchTask(for: camera.id)
+                return
+            }
+            
+            // Resize to save memory
+            let resizedImage = resizeImage(image, targetWidth: 320)
             
             // Save to cache
-            saveThumbnail(image, for: camera.id)
+            saveThumbnail(resizedImage, for: camera.id)
             
             // Update published state
-            thumbnails[camera.id] = image
-            cache.setObject(image, forKey: camera.id as NSString)
+            thumbnails[camera.id] = resizedImage
+            cache.setObject(resizedImage, forKey: camera.id as NSString)
             
             DebugLogger.shared.log("✅ Thumbnail captured: \(camera.id)", emoji: "✅", color: .green)
             
         } catch {
-            DebugLogger.shared.log("❌ Failed to capture thumbnail: \(error.localizedDescription)", emoji: "❌", color: .red)
+            DebugLogger.shared.log("❌ Failed to fetch thumbnail: \(error.localizedDescription)", emoji: "❌", color: .red)
         }
         
         removeFetchTask(for: camera.id)
     }
     
-    private func captureFrameFromStream(streamURL: String, cameraId: String) async throws -> UIImage {
-        return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.main.async {
-                let config = WKWebViewConfiguration()
-                config.allowsInlineMediaPlayback = true
-                config.mediaTypesRequiringUserActionForPlayback = []
-                config.websiteDataStore = .nonPersistent()
-                
-                let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 640, height: 360), configuration: config)
-                
-                let html = self.generateCaptureHTML(streamURL: streamURL)
-                webView.loadHTMLString(html, baseURL: nil)
-                
-                // Wait 3 seconds for stream to start, then capture
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                    let captureConfig = WKSnapshotConfiguration()
-                    captureConfig.rect = CGRect(x: 0, y: 0, width: 640, height: 360)
-                    
-                    webView.takeSnapshot(with: captureConfig) { image, error in
-                        // Cleanup immediately
-                        webView.stopLoading()
-                        webView.loadHTMLString("", baseURL: nil)
-                        
-                        if let image = image {
-                            continuation.resume(returning: image)
-                        } else {
-                            continuation.resume(throwing: error ?? NSError(domain: "ThumbnailCapture", code: -1))
-                        }
-                    }
-                }
-                
-                // Timeout after 10 seconds
-                DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
-                    webView.stopLoading()
-                    continuation.resume(throwing: NSError(domain: "ThumbnailCapture", code: -2, userInfo: [NSLocalizedDescriptionKey: "Timeout"]))
-                }
-            }
+    // MARK: - Snapshot URL Generation
+    
+    private func getSnapshotURL(for camera: Camera) -> String? {
+        // MediaMTX provides snapshot endpoints at /[stream]/snapshot.jpg
+        let serverURLs: [Int: String] = [
+            5: "http://103.208.173.131:8888",
+            6: "http://103.208.173.147:8888",
+            7: "http://103.208.173.163:8888",
+            8: "http://a5va.bccliccc.in:8888",
+            9: "http://a5va.bccliccc.in:8888",
+            10: "http://a6va.bccliccc.in:8888",
+            11: "http://103.208.173.195:8888",
+            12: "http://a9va.bccliccc.in:8888",
+            13: "http://a10va.bccliccc.in:8888",
+            14: "http://103.210.88.195:8888",
+            15: "http://103.210.88.211:8888",
+            16: "http://103.208.173.179:8888",
+            22: "http://103.208.173.211:8888"
+        ]
+        
+        guard let serverURL = serverURLs[camera.groupId] else {
+            return nil
         }
+        
+        let streamPath = !camera.ip.isEmpty ? camera.ip : camera.id
+        return "\(serverURL)/\(streamPath)/snapshot.jpg"
     }
     
-    private func generateCaptureHTML(streamURL: String) -> String {
-        return """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <style>
-                * { margin: 0; padding: 0; box-sizing: border-box; }
-                html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
-                video { width: 100%; height: 100%; object-fit: cover; }
-            </style>
-        </head>
-        <body>
-            <video id="video" playsinline autoplay muted></video>
-            <script>
-            (async function() {
-                const video = document.getElementById('video');
-                const pc = new RTCPeerConnection({
-                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-                });
-                
-                pc.ontrack = (e) => { video.srcObject = e.streams[0]; };
-                pc.addTransceiver('video', { direction: 'recvonly' });
-                pc.addTransceiver('audio', { direction: 'recvonly' });
-                
-                const offer = await pc.createOffer();
-                await pc.setLocalDescription(offer);
-                
-                const res = await fetch('\(streamURL)', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/sdp' },
-                    body: offer.sdp
-                });
-                
-                if (res.ok) {
-                    const answer = await res.text();
-                    await pc.setRemoteDescription({ type: 'answer', sdp: answer });
-                }
-            })();
-            </script>
-        </body>
-        </html>
-        """
+    // MARK: - Image Utilities
+    
+    private func resizeImage(_ image: UIImage, targetWidth: CGFloat) -> UIImage {
+        let scale = targetWidth / image.size.width
+        let targetHeight = image.size.height * scale
+        let targetSize = CGSize(width: targetWidth, height: targetHeight)
+        
+        UIGraphicsBeginImageContextWithOptions(targetSize, true, 1.0)
+        image.draw(in: CGRect(origin: .zero, size: targetSize))
+        let resizedImage = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        
+        return resizedImage ?? image
     }
     
     // MARK: - Disk Persistence
     
     private func saveThumbnail(_ image: UIImage, for cameraId: String) {
-        fetchQueue.async {
+        DispatchQueue.global(qos: .background).async {
             guard let data = image.jpegData(compressionQuality: 0.7) else { return }
             
             let fileURL = self.cacheDirectory.appendingPathComponent("\(cameraId).jpg")
@@ -202,8 +159,11 @@ class ThumbnailCacheManager: ObservableObject {
     }
     
     private func loadCachedThumbnails() {
-        fetchQueue.async {
-            guard let files = try? self.fileManager.contentsOfDirectory(at: self.cacheDirectory, includingPropertiesForKeys: nil) else {
+        DispatchQueue.global(qos: .background).async {
+            guard let files = try? self.fileManager.contentsOfDirectory(
+                at: self.cacheDirectory,
+                includingPropertiesForKeys: nil
+            ) else {
                 return
             }
             
@@ -239,6 +199,7 @@ class ThumbnailCacheManager: ObservableObject {
         lock.lock()
         thumbnails.removeAll()
         cache.removeAllObjects()
+        activeFetches.removeAll()
         lock.unlock()
         
         try? fileManager.removeItem(at: cacheDirectory)
@@ -247,22 +208,55 @@ class ThumbnailCacheManager: ObservableObject {
         DebugLogger.shared.log("🗑️ All thumbnails cleared", emoji: "🗑️", color: .red)
     }
     
+    func clearChannelThumbnails() {
+        // Called when user leaves a channel
+        lock.lock()
+        let keysToRemove = Array(thumbnails.keys)
+        lock.unlock()
+        
+        for key in keysToRemove {
+            cache.removeObject(forKey: key as NSString)
+        }
+        
+        DebugLogger.shared.log("🧹 Channel thumbnails cleared from memory", emoji: "🧹", color: .orange)
+    }
+    
     private func removeFetchTask(for cameraId: String) {
         lock.lock()
-        activeFetches.removeValue(forKey: cameraId)
+        activeFetches.remove(cameraId)
         lock.unlock()
     }
     
-    // MARK: - Batch Operations
+    // MARK: - Batch Operations (Throttled)
     
-    func prefetchThumbnails(for cameras: [Camera], maxConcurrent: Int = 3) {
-        let onlineCameras = cameras.filter { $0.isOnline && getThumbnail(for: $0.id) == nil }
+    func prefetchThumbnails(for cameras: [Camera], maxConcurrent: Int = 5) {
+        let onlineCameras = cameras.filter { 
+            $0.isOnline && getThumbnail(for: $0.id) == nil 
+        }
         
-        // Limit concurrent fetches
+        // Take only first N cameras
         let batch = Array(onlineCameras.prefix(maxConcurrent))
         
-        for camera in batch {
-            fetchThumbnail(for: camera)
+        // Stagger requests to avoid overwhelming the server
+        for (index, camera) in batch.enumerated() {
+            let delay = Double(index) * 0.3 // 300ms between requests
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                self.fetchThumbnail(for: camera)
+            }
+        }
+    }
+    
+    func prefetchVisibleThumbnails(for cameras: [Camera]) {
+        // Only fetch first 10 visible cameras
+        let visibleCameras = Array(cameras.prefix(10))
+        
+        for (index, camera) in visibleCameras.enumerated() {
+            if camera.isOnline && getThumbnail(for: camera.id) == nil {
+                let delay = Double(index) * 0.5 // 500ms between requests
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    self.fetchThumbnail(for: camera)
+                }
+            }
         }
     }
 }
