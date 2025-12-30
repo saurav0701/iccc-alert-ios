@@ -110,7 +110,7 @@ struct GPSEventMapView: View {
                     
                     // Vehicle Info
                     VStack(alignment: .leading, spacing: 16) {
-                        InfoRow(label: "Vehicle Number", value: event.vehicleNumber ?? "Unknown")
+                        InfoRow(label: "Vehicle Number", value: event.vehicleNumber ?? "Unknown", icon: "car.fill")
                         InfoRow(label: "Transporter", value: event.vehicleTransporter ?? "Unknown", icon: "building.2.fill")
                     }
                     
@@ -352,6 +352,29 @@ struct GPSEventMapView: View {
         formatter.dateFormat = "MMM dd, yyyy"
         formatter.timeZone = TimeZone.current
         return formatter.string(from: date)
+    }
+}
+
+// MARK: - Info Row Component
+
+struct InfoRow: View {
+    let label: String
+    let value: String
+    let icon: String
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: icon)
+                    .foregroundColor(.blue)
+                Text(label)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+            }
+            Text(value)
+                .font(.body)
+                .fontWeight(.medium)
+        }
     }
 }
 
