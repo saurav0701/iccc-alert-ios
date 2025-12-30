@@ -8,13 +8,13 @@ import Combine
 class PlayerManager: ObservableObject {
     static let shared = PlayerManager()
     
-    private var activePlayers: [String: Any] = [:]
+    private var activePlayers: [String: WKWebView] = [:]
     private let lock = NSLock()
     private let maxPlayers = 2
     
     private init() {}
     
-    func registerPlayer(_ player: Any, for cameraId: String) {
+    func registerPlayer(_ webView: WKWebView, for cameraId: String) {
         lock.lock()
         defer { lock.unlock() }
         
@@ -24,19 +24,14 @@ class PlayerManager: ObservableObject {
             }
         }
         
-        activePlayers[cameraId] = player
+        activePlayers[cameraId] = webView
         print("📹 Registered player for: \(cameraId)")
     }
     
     private func releasePlayerInternal(_ cameraId: String) {
-        if let player = activePlayers.removeValue(forKey: cameraId) {
-            if let avPlayer = player as? AVPlayer {
-                avPlayer.pause()
-                avPlayer.replaceCurrentItem(with: nil)
-            } else if let webView = player as? WKWebView {
-                webView.stopLoading()
-                webView.loadHTMLString("", baseURL: nil)
-            }
+        if let webView = activePlayers.removeValue(forKey: cameraId) {
+            webView.stopLoading()
+            webView.loadHTMLString("", baseURL: nil)
             print("🗑️ Released player: \(cameraId)")
         }
     }
@@ -56,15 +51,14 @@ class PlayerManager: ObservableObject {
     }
 }
 
-// MARK: - Main Player (WebView-First for Live Streaming)
+// MARK: - Main Player Component
 struct HybridHLSPlayer: View {
     let streamURL: String
     let cameraId: String
     let isFullscreen: Bool
     
     var body: some View {
-        // Always use WebView with HLS.js for live streaming
-        HLSJSPlayer(
+        LowLatencyHLSPlayer(
             streamURL: streamURL,
             cameraId: cameraId,
             isFullscreen: isFullscreen
@@ -72,8 +66,8 @@ struct HybridHLSPlayer: View {
     }
 }
 
-// MARK: - HLS.js WebView Player (Optimized for Live)
-struct HLSJSPlayer: UIViewRepresentable {
+// MARK: - Low-Latency HLS Player
+struct LowLatencyHLSPlayer: UIViewRepresentable {
     let streamURL: String
     let cameraId: String
     let isFullscreen: Bool
@@ -83,20 +77,25 @@ struct HLSJSPlayer: UIViewRepresentable {
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
         config.allowsPictureInPictureMediaPlayback = false
-        
-        // Disable caching for live streams
         config.websiteDataStore = .nonPersistent()
+        
+        let prefs = WKWebpagePreferences()
+        prefs.allowsContentJavaScript = true
+        config.defaultWebpagePreferences = prefs
         
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.scrollView.isScrollEnabled = false
         webView.scrollView.bounces = false
         webView.backgroundColor = .black
-        webView.isOpaque = false
+        webView.isOpaque = true
         webView.navigationDelegate = context.coordinator
         
-        PlayerManager.shared.registerPlayer(webView, for: cameraId)
+        if #available(iOS 16.4, *) {
+            webView.isInspectable = true
+        }
         
-        loadPlayer(in: webView)
+        PlayerManager.shared.registerPlayer(webView, for: cameraId)
+        loadPlayer(in: webView, coordinator: context.coordinator)
         
         return webView
     }
@@ -104,6 +103,7 @@ struct HLSJSPlayer: UIViewRepresentable {
     func updateUIView(_ uiView: WKWebView, context: Context) {}
     
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        uiView.configuration.userContentController.removeScriptMessageHandler(forName: "logger")
         uiView.stopLoading()
         uiView.loadHTMLString("", baseURL: nil)
     }
@@ -112,288 +112,442 @@ struct HLSJSPlayer: UIViewRepresentable {
         Coordinator(self)
     }
     
-    private func loadPlayer(in webView: WKWebView) {
+    private func loadPlayer(in webView: WKWebView, coordinator: Coordinator) {
+        guard let url = URL(string: streamURL) else {
+            print("❌ Invalid stream URL: \(streamURL)")
+            return
+        }
+        
+        let scheme = url.scheme ?? "http"
+        let host = url.host ?? ""
+        let port = url.port.map { ":\($0)" } ?? ""
+        let baseURL = "\(scheme)://\(host)\(port)"
+        let pathComponents = url.path.components(separatedBy: "/").filter { !$0.isEmpty && $0 != "index.m3u8" }
+        let streamPath = pathComponents.joined(separator: "/")
+        
+        print("📹 MediaMTX LL-HLS Player:")
+        print("   Base: \(baseURL)")
+        print("   Path: \(streamPath)")
+        print("   Full: \(streamURL)")
+        
         let html = """
         <!DOCTYPE html>
         <html>
         <head>
+            <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-            <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8"></script>
+            <title>LL-HLS Player</title>
+            <script src="\(baseURL)/\(streamPath)/hls.min.js"></script>
             <style>
-                * { 
-                    margin: 0; 
-                    padding: 0; 
-                    box-sizing: border-box; 
+                * {
+                    margin: 0;
+                    padding: 0;
+                    box-sizing: border-box;
                     -webkit-tap-highlight-color: transparent;
                 }
-                html, body { 
-                    width: 100%; 
-                    height: 100%; 
-                    overflow: hidden; 
-                    background: #000; 
+                
+                html, body {
+                    width: 100%;
+                    height: 100%;
+                    overflow: hidden;
+                    background: #000;
                     position: fixed;
                 }
-                #container { 
-                    width: 100vw; 
-                    height: 100vh; 
-                    position: relative; 
+                
+                #container {
+                    width: 100vw;
+                    height: 100vh;
+                    position: relative;
                 }
-                video { 
-                    width: 100%; 
-                    height: 100%; 
-                    object-fit: contain; 
-                    background: #000; 
+                
+                video {
+                    width: 100%;
+                    height: 100%;
+                    object-fit: contain;
+                    background: #000;
                 }
-                #status {
-                    position: absolute; 
-                    bottom: 10px; 
-                    left: 10px;
-                    background: rgba(0,0,0,0.8); 
-                    color: #4CAF50;
-                    padding: 4px 8px; 
-                    font-size: 10px; 
-                    border-radius: 4px;
-                    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                
+                .badge {
+                    position: absolute;
                     z-index: 10;
                     pointer-events: none;
-                }
-                #live-indicator {
-                    position: absolute;
-                    top: 10px;
-                    right: 10px;
-                    background: rgba(255,0,0,0.8);
-                    color: white;
+                    font-family: -apple-system, sans-serif;
+                    border-radius: 4px;
                     padding: 4px 8px;
                     font-size: 10px;
-                    border-radius: 4px;
-                    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-                    font-weight: bold;
-                    z-index: 10;
+                    font-weight: 600;
+                }
+                
+                #live {
+                    top: 8px;
+                    right: 8px;
+                    background: rgba(244, 67, 54, 0.95);
+                    color: white;
                     display: none;
-                    pointer-events: none;
+                    align-items: center;
+                    gap: 4px;
                 }
-                #live-indicator.active {
-                    display: block;
-                }
+                
+                #live.active { display: flex; }
+                
                 .dot {
                     width: 6px;
                     height: 6px;
                     background: white;
                     border-radius: 50%;
-                    display: inline-block;
-                    margin-right: 4px;
                     animation: pulse 1.5s ease-in-out infinite;
                 }
+                
                 @keyframes pulse {
                     0%, 100% { opacity: 1; }
                     50% { opacity: 0.3; }
+                }
+                
+                #status {
+                    bottom: 8px;
+                    left: 8px;
+                    background: rgba(0, 0, 0, 0.85);
+                    color: #4CAF50;
+                    max-width: 80vw;
+                }
+                
+                #status.error { color: #ff5252; }
+                #status.warning { color: #ffa726; }
+                
+                #loader {
+                    position: absolute;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    display: none;
+                    flex-direction: column;
+                    align-items: center;
+                    gap: 12px;
+                    background: rgba(0, 0, 0, 0.85);
+                    padding: 20px;
+                    border-radius: 12px;
+                }
+                
+                #loader.visible { display: flex; }
+                
+                .spinner {
+                    width: 36px;
+                    height: 36px;
+                    border: 3px solid rgba(255, 255, 255, 0.3);
+                    border-top-color: white;
+                    border-radius: 50%;
+                    animation: spin 0.8s linear infinite;
+                }
+                
+                @keyframes spin {
+                    to { transform: rotate(360deg); }
+                }
+                
+                .loader-text {
+                    color: white;
+                    font-size: 12px;
+                    font-family: -apple-system, sans-serif;
                 }
             </style>
         </head>
         <body>
             <div id="container">
-                <video id="video" playsinline webkit-playsinline muted autoplay></video>
-                <div id="live-indicator"><span class="dot"></span>LIVE</div>
-                <div id="status">Initializing...</div>
+                <video id="video" playsinline webkit-playsinline muted autoplay preload="none"></video>
+                <div id="live" class="badge"><span class="dot"></span>LIVE</div>
+                <div id="status" class="badge">Loading...</div>
+                <div id="loader">
+                    <div class="spinner"></div>
+                    <span class="loader-text">Buffering...</span>
+                </div>
             </div>
             
             <script>
-                (function() {
-                    'use strict';
+            (function() {
+                'use strict';
+                
+                const video = document.getElementById('video');
+                const status = document.getElementById('status');
+                const live = document.getElementById('live');
+                const loader = document.getElementById('loader');
+                
+                const streamUrl = '\(streamURL)';
+                const cameraId = '\(cameraId)';
+                
+                let hls = null;
+                let playing = false;
+                let retries = 0;
+                let maxRetries = 5;
+                let lastBufferTime = 0;
+                
+                function log(msg, level = 'info') {
+                    console.log('[LL-HLS]', msg);
+                    status.textContent = msg;
+                    status.className = 'badge ' + level;
                     
-                    const video = document.getElementById('video');
-                    const status = document.getElementById('status');
-                    const liveIndicator = document.getElementById('live-indicator');
-                    const streamUrl = '\(streamURL)';
-                    
-                    let hls = null;
-                    let isPlaying = false;
-                    
-                    function log(msg, isError = false) {
-                        console.log('[HLS.js]', msg);
-                        status.textContent = msg;
-                        status.style.color = isError ? '#f44336' : '#4CAF50';
+                    try {
+                        window.webkit.messageHandlers.logger.postMessage({
+                            cameraId: cameraId,
+                            status: msg,
+                            level: level,
+                            streamURL: streamUrl
+                        });
+                    } catch(e) {}
+                }
+                
+                function showLoader() {
+                    loader.classList.add('visible');
+                    lastBufferTime = Date.now();
+                }
+                
+                function hideLoader() {
+                    loader.classList.remove('visible');
+                }
+                
+                function init() {
+                    if (Hls.isSupported()) {
+                        log('Starting LL-HLS player...');
+                        
+                        hls = new Hls({
+                            debug: false,
+                            enableWorker: true,
+                            lowLatencyMode: true,
+                            
+                            // CRITICAL: Low-Latency HLS settings
+                            backBufferLength: 0,
+                            maxBufferLength: 2,
+                            maxMaxBufferLength: 3,
+                            maxBufferSize: 5 * 1000 * 1000,
+                            maxBufferHole: 0.3,
+                            highBufferWatchdogPeriod: 1,
+                            nudgeOffset: 0.1,
+                            nudgeMaxRetry: 3,
+                            maxFragLookUpTolerance: 0.1,
+                            
+                            liveSyncDurationCount: 1,
+                            liveMaxLatencyDurationCount: 3,
+                            liveDurationInfinity: false,
+                            
+                            // Start at live edge
+                            startPosition: -1,
+                            autoStartLoad: true,
+                            
+                            // Timeouts
+                            manifestLoadingTimeOut: 8000,
+                            manifestLoadingMaxRetry: 3,
+                            manifestLoadingRetryDelay: 500,
+                            levelLoadingTimeOut: 8000,
+                            levelLoadingMaxRetry: 4,
+                            levelLoadingRetryDelay: 500,
+                            fragLoadingTimeOut: 15000,
+                            fragLoadingMaxRetry: 6,
+                            fragLoadingRetryDelay: 500,
+                            
+                            startLevel: -1,
+                            capLevelToPlayerSize: false,
+                            abrEwmaDefaultEstimate: 500000
+                        });
+                        
+                        setupEvents();
+                        hls.loadSource(streamUrl);
+                        hls.attachMedia(video);
+                        
+                    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                        log('Using native HLS...');
+                        video.src = streamUrl;
+                        setupNativeEvents();
+                        video.load();
+                    } else {
+                        log('HLS not supported', 'error');
                     }
-                    
-                    function initHLS() {
-                        if (Hls.isSupported()) {
-                            log('HLS.js supported ✓');
-                            
-                            hls = new Hls({
-                                // Low-latency live streaming configuration
-                                enableWorker: true,
-                                lowLatencyMode: true,
-                                backBufferLength: 10,           // Keep minimal back buffer
-                                maxBufferLength: 3,             // Very small forward buffer (3 seconds)
-                                maxMaxBufferLength: 5,          // Cap at 5 seconds
-                                maxBufferSize: 5 * 1000 * 1000, // 5MB buffer
-                                maxBufferHole: 0.2,             // Tolerate small gaps
-                                highBufferWatchdogPeriod: 1,    // Monitor buffer frequently
-                                liveSyncDurationCount: 2,       // Stay close to live edge
-                                liveMaxLatencyDurationCount: 5, // Max latency before sync
-                                liveDurationInfinity: false,
-                                manifestLoadingTimeOut: 10000,
-                                manifestLoadingMaxRetry: 3,
-                                manifestLoadingRetryDelay: 500,
-                                levelLoadingTimeOut: 10000,
-                                levelLoadingMaxRetry: 4,
-                                levelLoadingRetryDelay: 500,
-                                fragLoadingTimeOut: 20000,
-                                fragLoadingMaxRetry: 6,
-                                fragLoadingRetryDelay: 500,
-                                startPosition: -1,              // Start at live edge
-                                autoStartLoad: true,
-                                debug: false
-                            });
-                            
-                            hls.loadSource(streamUrl);
-                            hls.attachMedia(video);
-                            
-                            // HLS.js event handlers
-                            hls.on(Hls.Events.MANIFEST_PARSED, function() {
-                                log('Stream ready');
-                                video.play().then(() => {
-                                    log('Playing');
-                                    isPlaying = true;
-                                    liveIndicator.classList.add('active');
-                                }).catch(e => {
-                                    log('Play failed: ' + e.message, true);
-                                });
-                            });
-                            
-                            hls.on(Hls.Events.ERROR, function(event, data) {
-                                if (data.fatal) {
-                                    switch(data.type) {
-                                        case Hls.ErrorTypes.NETWORK_ERROR:
-                                            log('Network error, retrying...', true);
-                                            hls.startLoad();
-                                            break;
-                                        case Hls.ErrorTypes.MEDIA_ERROR:
-                                            log('Media error, recovering...', true);
-                                            hls.recoverMediaError();
-                                            break;
-                                        default:
-                                            log('Fatal error: ' + data.type, true);
-                                            liveIndicator.classList.remove('active');
-                                            setTimeout(() => {
-                                                log('Restarting stream...');
-                                                hls.destroy();
-                                                initHLS();
-                                            }, 3000);
-                                            break;
-                                    }
-                                } else if (data.details === 'bufferStalledError') {
-                                    log('Buffer stalled, syncing...');
-                                    // Force sync to live edge
-                                    const duration = video.duration;
-                                    if (duration && isFinite(duration)) {
-                                        const liveEdge = duration - 0.5;
-                                        if (video.currentTime < liveEdge - 2) {
-                                            video.currentTime = liveEdge;
-                                        }
-                                    }
-                                }
-                            });
-                            
-                            hls.on(Hls.Events.FRAG_LOADED, function() {
-                                // Keep near live edge
-                                const duration = video.duration;
-                                if (duration && isFinite(duration) && isPlaying) {
-                                    const lag = duration - video.currentTime;
-                                    if (lag > 5) {
-                                        // More than 5 seconds behind, jump to live
-                                        video.currentTime = duration - 1;
-                                        log('Synced to live');
-                                    }
-                                }
-                            });
-                            
-                        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                            // iOS native HLS
-                            log('Using native HLS');
-                            video.src = streamUrl;
-                            video.load();
-                            
-                            video.addEventListener('loadedmetadata', function() {
-                                log('Stream ready');
-                                video.play().then(() => {
-                                    log('Playing (native)');
-                                    isPlaying = true;
-                                    liveIndicator.classList.add('active');
-                                }).catch(e => {
-                                    log('Play failed: ' + e.message, true);
-                                });
-                            });
-                            
-                            video.addEventListener('error', function() {
-                                log('Playback error', true);
-                                liveIndicator.classList.remove('active');
-                            });
-                        }
-                    }
-                    
-                    // Video event handlers
-                    video.addEventListener('playing', function() {
-                        log('Playing');
-                        liveIndicator.classList.add('active');
+                }
+                
+                function setupEvents() {
+                    hls.on(Hls.Events.MANIFEST_PARSED, (e, data) => {
+                        log('Stream ready');
+                        video.play()
+                            .then(() => {
+                                playing = true;
+                                retries = 0;
+                                live.classList.add('active');
+                                hideLoader();
+                                log('Playing');
+                            })
+                            .catch(err => log('Play failed: ' + err.message, 'error'));
                     });
                     
-                    video.addEventListener('waiting', function() {
-                        log('Buffering...');
-                    });
-                    
-                    video.addEventListener('pause', function() {
-                        if (isPlaying) {
-                            // Auto-resume if unintentional pause
-                            video.play();
-                        }
-                    });
-                    
-                    video.addEventListener('stalled', function() {
-                        log('Stream stalled, recovering...');
-                        if (hls) {
-                            hls.startLoad();
-                        }
-                    });
-                    
-                    // Monitor buffer health
-                    setInterval(() => {
-                        if (hls && isPlaying) {
-                            const bufferInfo = hls.bufferLength;
-                            if (bufferInfo < 0.5) {
-                                log('Low buffer: ' + bufferInfo.toFixed(1) + 's');
+                    hls.on(Hls.Events.FRAG_LOADED, () => {
+                        hideLoader();
+                        
+                        // Keep at live edge for LL-HLS
+                        if (video.duration && isFinite(video.duration)) {
+                            const lag = video.duration - video.currentTime;
+                            if (lag > 4) {
+                                log('Syncing to live...');
+                                video.currentTime = video.duration - 0.5;
                             }
                         }
-                    }, 2000);
-                    
-                    // Initialize
-                    initHLS();
-                    
-                    // Cleanup on page unload
-                    window.addEventListener('beforeunload', function() {
-                        if (hls) {
-                            hls.destroy();
-                        }
                     });
                     
-                })();
+                    hls.on(Hls.Events.ERROR, (e, data) => {
+                        if (data.fatal) {
+                            live.classList.remove('active');
+                            handleError(data);
+                        } else if (data.details === 'bufferStalledError') {
+                            log('Stalled, syncing...', 'warning');
+                            if (video.duration) {
+                                video.currentTime = Math.max(0, video.duration - 1);
+                            }
+                        }
+                    });
+                }
+                
+                function handleError(data) {
+                    console.error('Fatal error:', data);
+                    
+                    if (retries >= maxRetries) {
+                        log('Max retries reached', 'error');
+                        return;
+                    }
+                    
+                    retries++;
+                    
+                    switch(data.type) {
+                        case Hls.ErrorTypes.NETWORK_ERROR:
+                            log(`Network error, retry ${retries}/${maxRetries}...`, 'warning');
+                            showLoader();
+                            setTimeout(() => hls.startLoad(), 1000 * retries);
+                            break;
+                            
+                        case Hls.ErrorTypes.MEDIA_ERROR:
+                            log('Media error, recovering...', 'warning');
+                            hls.recoverMediaError();
+                            showLoader();
+                            break;
+                            
+                        default:
+                            log('Fatal error: ' + data.details, 'error');
+                            setTimeout(() => {
+                                cleanup();
+                                retries = 0;
+                                init();
+                            }, 3000);
+                            break;
+                    }
+                }
+                
+                function setupNativeEvents() {
+                    video.addEventListener('loadedmetadata', () => {
+                        log('Stream ready (native)');
+                        video.play()
+                            .then(() => {
+                                playing = true;
+                                live.classList.add('active');
+                                hideLoader();
+                                log('Playing (native)');
+                            })
+                            .catch(err => log('Play failed: ' + err.message, 'error'));
+                    });
+                    
+                    video.addEventListener('error', () => {
+                        const err = video.error;
+                        log('Error: ' + (err ? err.code : 'unknown'), 'error');
+                        live.classList.remove('active');
+                    });
+                }
+                
+                // Common video events
+                video.addEventListener('playing', () => {
+                    log('Playing');
+                    playing = true;
+                    live.classList.add('active');
+                    hideLoader();
+                });
+                
+                video.addEventListener('waiting', () => {
+                    showLoader();
+                });
+                
+                video.addEventListener('pause', () => {
+                    if (playing) {
+                        video.play().catch(() => {});
+                    }
+                });
+                
+                video.addEventListener('stalled', () => {
+                    log('Stalled', 'warning');
+                    showLoader();
+                    if (hls) hls.startLoad();
+                });
+                
+                // Monitor buffer health
+                setInterval(() => {
+                    if (hls && playing && video.buffered.length > 0) {
+                        const buffered = video.buffered.end(0) - video.currentTime;
+                        if (buffered < 0.5) {
+                            log('Low buffer: ' + buffered.toFixed(2) + 's', 'warning');
+                        }
+                    }
+                }, 3000);
+                
+                function cleanup() {
+                    if (hls) {
+                        hls.destroy();
+                        hls = null;
+                    }
+                    video.src = '';
+                    playing = false;
+                }
+                
+                document.addEventListener('visibilitychange', () => {
+                    if (!document.hidden && !playing) {
+                        video.play().catch(() => {});
+                    }
+                });
+                
+                window.addEventListener('beforeunload', cleanup);
+                window.addEventListener('pagehide', cleanup);
+                
+                // Start
+                init();
+                
+            })();
             </script>
         </body>
         </html>
         """
         
-        webView.loadHTMLString(html, baseURL: nil)
+        webView.loadHTMLString(html, baseURL: URL(string: baseURL))
     }
     
-    class Coordinator: NSObject, WKNavigationDelegate {
-        var parent: HLSJSPlayer
+    class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+        var parent: LowLatencyHLSPlayer
         
-        init(_ parent: HLSJSPlayer) {
+        init(_ parent: LowLatencyHLSPlayer) {
             self.parent = parent
         }
         
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            if message.name == "logger",
+               let dict = message.body as? [String: Any],
+               let cameraId = dict["cameraId"] as? String,
+               let status = dict["status"] as? String {
+                
+                let level = dict["level"] as? String ?? "info"
+                let streamURL = dict["streamURL"] as? String
+                let error = level == "error" ? status : nil
+                
+                DebugLogger.shared.updateCameraStatus(
+                    cameraId: cameraId,
+                    status: status,
+                    streamURL: streamURL,
+                    error: error
+                )
+            }
+        }
+        
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            print("✅ HLS.js player loaded for: \(parent.cameraId)")
+            print("✅ LL-HLS player loaded: \(parent.cameraId)")
+            webView.configuration.userContentController.add(self, name: "logger")
         }
         
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -498,7 +652,6 @@ struct HLSPlayerView: View {
                 .ignoresSafeArea()
             }
             
-            // Top bar
             VStack {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
