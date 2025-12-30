@@ -110,8 +110,8 @@ struct GPSEventMapView: View {
                     
                     // Vehicle Info
                     VStack(alignment: .leading, spacing: 16) {
-                        InfoRow(label: "Vehicle Number", value: event.vehicleNumber ?? "Unknown", icon: "car.fill")
-                        InfoRow(label: "Transporter", value: event.vehicleTransporter ?? "Unknown", icon: "building.2.fill")
+                        InfoRow(label: "Vehicle Number", value: event.vehicleNumber ?? "Unknown")
+                        InfoRow(label: "Transporter", value: event.vehicleTransporter ?? "Unknown")
                     }
                     
                     Divider()
@@ -142,7 +142,7 @@ struct GPSEventMapView: View {
                             }
                         }
                         
-                        InfoRow(label: "Area", value: event.areaDisplay ?? event.area ?? "Unknown", icon: "map.fill")
+                        InfoRow(label: "Area", value: event.areaDisplay ?? event.area ?? "Unknown")
                     }
                     
                     Divider()
@@ -355,31 +355,24 @@ struct GPSEventMapView: View {
     }
 }
 
-// MARK: - Info Row Component
-
+// MARK: - InfoRow (Simple version for GPS view)
 struct InfoRow: View {
     let label: String
     let value: String
-    let icon: String
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: icon)
-                    .foregroundColor(.blue)
-                Text(label)
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-            }
+        HStack {
+            Text(label)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            Spacer()
             Text(value)
-                .font(.body)
-                .fontWeight(.medium)
+                .font(.subheadline)
         }
     }
 }
 
 // MARK: - Identifiable Annotation
-
 struct IdentifiableAnnotation: Identifiable {
     let id = UUID()
     let coordinate: CLLocationCoordinate2D
@@ -389,7 +382,6 @@ struct IdentifiableAnnotation: Identifiable {
 }
 
 // MARK: - Google Hybrid Map View (FREE Tiles - No API Key Required)
-
 struct GoogleHybridMapView: UIViewRepresentable {
     @Binding var region: MKCoordinateRegion
     let annotations: [IdentifiableAnnotation]
@@ -553,7 +545,6 @@ struct GoogleHybridMapView: UIViewRepresentable {
 }
 
 // MARK: - Google Hybrid Tile Overlay (FREE - No API Key)
-
 class GoogleHybridTileOverlay: MKTileOverlay {
     private let tileServers = [
         "https://mt0.google.com/vt/lyrs=y&hl=en",
@@ -586,7 +577,6 @@ class GoogleHybridTileOverlay: MKTileOverlay {
 }
 
 // MARK: - Custom Map Annotation
-
 class CustomMapAnnotation: NSObject, MKAnnotation {
     let coordinate: CLLocationCoordinate2D
     let title: String?
