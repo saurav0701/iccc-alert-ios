@@ -1,19 +1,18 @@
 import SwiftUI
-import AVKit
-import AVFoundation
+import WebKit
 import Combine
 
 // MARK: - Player Manager
 class PlayerManager: ObservableObject {
     static let shared = PlayerManager()
     
-    private var activePlayers: [String: AVPlayer] = [:]
+    private var activePlayers: [String: WKWebView] = [:]
     private let lock = NSLock()
     private let maxPlayers = 2
     
     private init() {}
     
-    func registerPlayer(_ player: AVPlayer, for cameraId: String) {
+    func registerPlayer(_ webView: WKWebView, for cameraId: String) {
         lock.lock()
         defer { lock.unlock() }
         
@@ -23,14 +22,14 @@ class PlayerManager: ObservableObject {
             }
         }
         
-        activePlayers[cameraId] = player
+        activePlayers[cameraId] = webView
         print("📹 Registered player for: \(cameraId)")
     }
     
     private func releasePlayerInternal(_ cameraId: String) {
-        if let player = activePlayers.removeValue(forKey: cameraId) {
-            player.pause()
-            player.replaceCurrentItem(with: nil)
+        if let webView = activePlayers.removeValue(forKey: cameraId) {
+            webView.stopLoading()
+            webView.loadHTMLString("", baseURL: nil)
             print("🗑️ Released player: \(cameraId)")
         }
     }
@@ -50,372 +49,353 @@ class PlayerManager: ObservableObject {
     }
 }
 
-// MARK: - Live Stream Player
+// MARK: - Simple HTML5 Video Player
 struct HybridHLSPlayer: View {
     let streamURL: String
     let cameraId: String
     let isFullscreen: Bool
     
-    @StateObject private var viewModel = LivePlayerViewModel()
-    
     var body: some View {
-        ZStack {
-            if let player = viewModel.player {
-                VideoPlayer(player: player)
-                    .disabled(true)
-            } else {
-                Color.black
-            }
-            
-            // Status overlay
-            if viewModel.isLoading {
-                VStack(spacing: 12) {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        .scaleEffect(1.5)
-                    Text(viewModel.statusMessage)
-                        .font(.caption)
-                        .foregroundColor(.white)
-                }
-                .padding(20)
-                .background(Color.black.opacity(0.7))
-                .cornerRadius(12)
-            }
-            
-            if viewModel.hasError {
-                VStack(spacing: 12) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 40))
-                        .foregroundColor(.orange)
-                    Text("Connection Issue")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                    Text(viewModel.errorMessage)
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.8))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                    
-                    Button(action: {
-                        viewModel.retry(streamURL: streamURL, cameraId: cameraId)
-                    }) {
-                        Text("Retry")
-                            .font(.caption)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(Color.blue)
-                            .cornerRadius(8)
-                    }
-                }
-                .padding(24)
-                .background(Color.black.opacity(0.85))
-                .cornerRadius(16)
-            }
-            
-            // LIVE indicator
-            if viewModel.isPlaying && !isFullscreen {
-                VStack {
-                    HStack {
-                        Spacer()
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(Color.red)
-                                .frame(width: 6, height: 6)
-                            Text("LIVE")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundColor(.white)
-                        }
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(Color.black.opacity(0.7))
-                        .cornerRadius(4)
-                        .padding(6)
-                    }
-                    Spacer()
-                }
-            }
-        }
-        .onAppear {
-            viewModel.setup(streamURL: streamURL, cameraId: cameraId)
-        }
-        .onDisappear {
-            viewModel.cleanup()
-        }
+        SimpleHTML5Player(
+            streamURL: streamURL,
+            cameraId: cameraId,
+            isFullscreen: isFullscreen
+        )
     }
 }
 
-// MARK: - Live Player ViewModel
-class LivePlayerViewModel: ObservableObject {
-    @Published var player: AVPlayer?
-    @Published var isLoading = true
-    @Published var hasError = false
-    @Published var errorMessage = ""
-    @Published var isPlaying = false
-    @Published var statusMessage = "Connecting..."
+// MARK: - HTML5 Video Player (Native iOS HLS Support)
+struct SimpleHTML5Player: UIViewRepresentable {
+    let streamURL: String
+    let cameraId: String
+    let isFullscreen: Bool
     
-    private var statusObserver: NSKeyValueObservation?
-    private var timeObserver: Any?
-    private var stallObserver: NSKeyValueObservation?
-    private var playbackLikelyToKeepUpObserver: NSKeyValueObservation?
-    private var currentCameraId: String?
-    private var keepAliveTimer: Timer?
-    private var lastPlaybackCheck: Date?
-    
-    func setup(streamURL: String, cameraId: String) {
-        currentCameraId = cameraId
-        lastPlaybackCheck = Date()
+    func makeUIView(context: Context) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        config.allowsInlineMediaPlayback = true
+        config.mediaTypesRequiringUserActionForPlayback = []
+        config.allowsPictureInPictureMediaPlayback = false
         
-        guard let url = URL(string: streamURL) else {
-            showError("Invalid URL")
-            return
-        }
+        let webView = WKWebView(frame: .zero, configuration: config)
+        webView.scrollView.isScrollEnabled = false
+        webView.scrollView.bounces = false
+        webView.backgroundColor = .black
+        webView.isOpaque = true
+        webView.navigationDelegate = context.coordinator
         
-        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        print("📹 Setting up LIVE stream")
-        print("   Camera: \(cameraId)")
-        print("   URL: \(streamURL)")
-        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        PlayerManager.shared.registerPlayer(webView, for: cameraId)
         
-        statusMessage = "Loading stream..."
+        loadPlayer(in: webView)
         
-        // Create asset for live streaming
-        let asset = AVURLAsset(url: url)
-        let playerItem = AVPlayerItem(asset: asset)
-        
-        // CRITICAL: Configure for LIVE streaming
-        playerItem.preferredForwardBufferDuration = 2.0
-        playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
-        
-        // Create player
-        let avPlayer = AVPlayer(playerItem: playerItem)
-        avPlayer.automaticallyWaitsToMinimizeStalling = false
-        avPlayer.allowsExternalPlayback = false
-        
-        // CRITICAL: Set rate to 1.0 for live streams
-        avPlayer.rate = 1.0
-        
-        self.player = avPlayer
-        PlayerManager.shared.registerPlayer(avPlayer, for: cameraId)
-        
-        // Observe player item status
-        statusObserver = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
-            DispatchQueue.main.async {
-                self?.handleStatusChange(item)
-            }
-        }
-        
-        // Observe stalling
-        stallObserver = playerItem.observe(\.isPlaybackBufferEmpty, options: [.new]) { [weak self] item, _ in
-            DispatchQueue.main.async {
-                if item.isPlaybackBufferEmpty {
-                    print("⚠️ Buffer empty - stream stalled")
-                    self?.statusMessage = "Buffering..."
-                    
-                    // Try to restart if stalled for too long
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                        if item.isPlaybackBufferEmpty && self?.player?.rate == 0 {
-                            print("🔄 Forcing playback restart")
-                            self?.player?.play()
-                        }
-                    }
-                }
-            }
-        }
-        
-        // Observe buffer ready
-        playbackLikelyToKeepUpObserver = playerItem.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] item, _ in
-            DispatchQueue.main.async {
-                if item.isPlaybackLikelyToKeepUp {
-                    print("✅ Buffer ready - can play smoothly")
-                    self?.statusMessage = "Playing"
-                    self?.player?.play()
-                }
-            }
-        }
-        
-        // Monitor playback position every second
-        let interval = CMTime(seconds: 1.0, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-        timeObserver = avPlayer.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
-            self?.checkPlaybackHealth(time: time)
-        }
-        
-        // Start playing
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            avPlayer.play()
-        }
-        
-        // Keep-alive timer to ensure continuous playback
-        startKeepAliveTimer()
-        
-        // Connection timeout
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
-            if self.isLoading {
-                self.showError("Connection timeout - stream not responding")
-            }
-        }
-        
-        DebugLogger.shared.updateCameraStatus(
-            cameraId: cameraId,
-            status: "Connecting...",
-            streamURL: streamURL
-        )
+        return webView
     }
     
-    private func handleStatusChange(_ item: AVPlayerItem) {
-        switch item.status {
-        case .readyToPlay:
-            isLoading = false
-            hasError = false
-            isPlaying = true
-            statusMessage = "Playing"
-            
-            print("✅ Stream ready - starting playback")
-            
-            // Ensure playback starts
-            player?.play()
-            
-            if let cameraId = currentCameraId {
-                DebugLogger.shared.updateCameraStatus(
-                    cameraId: cameraId,
-                    status: "Playing ✅"
-                )
-            }
-            
-        case .failed:
-            let error = item.error as NSError?
-            let errorCode = error?.code ?? 0
-            let errorDesc = error?.localizedDescription ?? "Unknown error"
-            
-            print("❌ Stream failed: \(errorCode) - \(errorDesc)")
-            
-            showError("Playback error (\(errorCode))")
-            
-            if let cameraId = currentCameraId {
-                DebugLogger.shared.updateCameraStatus(
-                    cameraId: cameraId,
-                    status: "Error ❌",
-                    error: "Code \(errorCode)"
-                )
-            }
-            
-        case .unknown:
-            isLoading = true
-            statusMessage = "Initializing..."
-            
-        @unknown default:
-            break
-        }
+    func updateUIView(_ uiView: WKWebView, context: Context) {}
+    
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        uiView.stopLoading()
+        uiView.loadHTMLString("", baseURL: nil)
     }
     
-    private func checkPlaybackHealth(time: CMTime) {
-        guard let player = player,
-              let item = player.currentItem,
-              !item.duration.isIndefinite else {
-            return
-        }
-        
-        let currentTime = time.seconds
-        
-        // Check if we're still at live edge for live streams
-        if item.duration.isIndefinite || item.duration.seconds > 86400 { // Likely a live stream
-            // For live streams, ensure we're not falling too far behind
-            if let seekableRange = item.seekableTimeRanges.last?.timeRangeValue {
-                let livePosition = seekableRange.end.seconds
-                let lag = livePosition - currentTime
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    private func loadPlayer(in webView: WKWebView) {
+        let html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+            <style>
+                * {
+                    margin: 0;
+                    padding: 0;
+                    box-sizing: border-box;
+                    -webkit-tap-highlight-color: transparent;
+                }
                 
-                if lag > 10 { // More than 10 seconds behind live
-                    print("⚠️ Falling behind live edge by \(lag) seconds - jumping forward")
-                    player.seek(to: CMTime(seconds: livePosition - 2, preferredTimescale: 1))
+                html, body {
+                    width: 100%;
+                    height: 100%;
+                    overflow: hidden;
+                    background: #000;
+                    position: fixed;
                 }
-            }
-        }
-        
-        // Detect if playback is stuck
-        if let lastCheck = lastPlaybackCheck {
-            if Date().timeIntervalSince(lastCheck) > 3 {
-                // Check if we're actually progressing
-                if player.rate == 0 && !item.isPlaybackBufferEmpty {
-                    print("🔄 Playback stuck - forcing restart")
-                    player.play()
+                
+                #container {
+                    width: 100vw;
+                    height: 100vh;
+                    position: relative;
+                    background: #000;
                 }
-            }
-        }
-        
-        lastPlaybackCheck = Date()
-    }
-    
-    private func startKeepAliveTimer() {
-        keepAliveTimer?.invalidate()
-        keepAliveTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            guard let self = self,
-                  let player = self.player,
-                  let item = player.currentItem else {
-                return
-            }
+                
+                video {
+                    width: 100%;
+                    height: 100%;
+                    object-fit: contain;
+                    background: #000;
+                }
+                
+                #live {
+                    position: absolute;
+                    top: 10px;
+                    right: 10px;
+                    background: rgba(244, 67, 54, 0.9);
+                    color: white;
+                    padding: 4px 8px;
+                    border-radius: 4px;
+                    font-size: 10px;
+                    font-weight: 700;
+                    font-family: -apple-system, sans-serif;
+                    z-index: 10;
+                    display: none;
+                }
+                
+                #live.show {
+                    display: flex;
+                    align-items: center;
+                    gap: 4px;
+                }
+                
+                .dot {
+                    width: 6px;
+                    height: 6px;
+                    background: white;
+                    border-radius: 50%;
+                    animation: pulse 1.5s ease-in-out infinite;
+                }
+                
+                @keyframes pulse {
+                    0%, 100% { opacity: 1; }
+                    50% { opacity: 0.3; }
+                }
+                
+                #status {
+                    position: absolute;
+                    bottom: 10px;
+                    left: 10px;
+                    background: rgba(0, 0, 0, 0.8);
+                    color: #4CAF50;
+                    padding: 6px 10px;
+                    border-radius: 6px;
+                    font-size: 11px;
+                    font-family: -apple-system, sans-serif;
+                    z-index: 10;
+                }
+                
+                #status.error { color: #ff5252; }
+            </style>
+        </head>
+        <body>
+            <div id="container">
+                <video 
+                    id="video"
+                    playsinline
+                    webkit-playsinline
+                    autoplay
+                    muted
+                    preload="none"
+                ></video>
+                <div id="live"><span class="dot"></span>LIVE</div>
+                <div id="status">Loading...</div>
+            </div>
             
-            // Ensure player keeps playing
-            if player.rate == 0 && !item.isPlaybackBufferEmpty && item.isPlaybackLikelyToKeepUp {
-                print("🔄 Keep-alive: restarting playback")
-                player.play()
-            }
-            
-            // Check if player is healthy
-            if item.isPlaybackBufferEmpty {
-                print("⚠️ Keep-alive: buffer empty")
-            }
-        }
+            <script>
+            (function() {
+                'use strict';
+                
+                const video = document.getElementById('video');
+                const status = document.getElementById('status');
+                const live = document.getElementById('live');
+                const streamUrl = '\(streamURL)';
+                
+                let playing = false;
+                let checkInterval = null;
+                let lastTime = 0;
+                let stuckCount = 0;
+                
+                function log(msg, isError = false) {
+                    console.log('[Player]', msg);
+                    status.textContent = msg;
+                    status.className = isError ? 'error' : '';
+                }
+                
+                function init() {
+                    log('Connecting...');
+                    
+                    // Set video source
+                    video.src = streamUrl;
+                    
+                    // Event listeners
+                    video.addEventListener('loadstart', () => {
+                        log('Loading stream...');
+                    });
+                    
+                    video.addEventListener('loadedmetadata', () => {
+                        log('Stream loaded');
+                        console.log('Duration:', video.duration);
+                        console.log('Seekable:', video.seekable.length);
+                    });
+                    
+                    video.addEventListener('loadeddata', () => {
+                        log('Ready to play');
+                        video.play().catch(e => {
+                            log('Play error: ' + e.message, true);
+                        });
+                    });
+                    
+                    video.addEventListener('canplay', () => {
+                        log('Can play');
+                        if (!playing) {
+                            video.play().catch(e => {
+                                log('Play error: ' + e.message, true);
+                            });
+                        }
+                    });
+                    
+                    video.addEventListener('playing', () => {
+                        log('Playing');
+                        playing = true;
+                        live.classList.add('show');
+                        startHealthCheck();
+                    });
+                    
+                    video.addEventListener('waiting', () => {
+                        log('Buffering...');
+                    });
+                    
+                    video.addEventListener('pause', () => {
+                        log('Paused');
+                        // Auto-resume if not intentional
+                        if (playing) {
+                            setTimeout(() => {
+                                video.play().catch(() => {});
+                            }, 100);
+                        }
+                    });
+                    
+                    video.addEventListener('ended', () => {
+                        log('Stream ended - reloading');
+                        setTimeout(() => {
+                            video.load();
+                            video.play();
+                        }, 1000);
+                    });
+                    
+                    video.addEventListener('stalled', () => {
+                        log('Stalled - recovering...');
+                        video.load();
+                        video.play();
+                    });
+                    
+                    video.addEventListener('error', (e) => {
+                        const error = video.error;
+                        let msg = 'Error';
+                        
+                        if (error) {
+                            switch(error.code) {
+                                case 1: msg = 'ABORTED'; break;
+                                case 2: msg = 'NETWORK'; break;
+                                case 3: msg = 'DECODE'; break;
+                                case 4: msg = 'SRC_NOT_SUPPORTED'; break;
+                            }
+                            msg += ' (' + error.code + ')';
+                        }
+                        
+                        log(msg, true);
+                        live.classList.remove('show');
+                    });
+                    
+                    // Start loading
+                    video.load();
+                }
+                
+                function startHealthCheck() {
+                    if (checkInterval) return;
+                    
+                    checkInterval = setInterval(() => {
+                        const currentTime = video.currentTime;
+                        
+                        // Check if video is progressing
+                        if (currentTime === lastTime && !video.paused && !video.ended) {
+                            stuckCount++;
+                            
+                            if (stuckCount >= 3) {
+                                log('Stuck detected - restarting...');
+                                video.load();
+                                video.play();
+                                stuckCount = 0;
+                            }
+                        } else {
+                            stuckCount = 0;
+                        }
+                        
+                        lastTime = currentTime;
+                        
+                        // Keep at live edge for live streams
+                        if (video.seekable.length > 0) {
+                            const liveEnd = video.seekable.end(video.seekable.length - 1);
+                            const lag = liveEnd - currentTime;
+                            
+                            if (lag > 10) {
+                                log('Syncing to live...');
+                                video.currentTime = liveEnd - 2;
+                            }
+                        }
+                        
+                        // Auto-play if paused
+                        if (video.paused && !video.ended && video.readyState >= 2) {
+                            log('Auto-resuming...');
+                            video.play().catch(() => {});
+                        }
+                        
+                    }, 2000);
+                }
+                
+                // Visibility handling
+                document.addEventListener('visibilitychange', () => {
+                    if (!document.hidden && playing && video.paused) {
+                        video.play().catch(() => {});
+                    }
+                });
+                
+                // Cleanup
+                window.addEventListener('beforeunload', () => {
+                    if (checkInterval) {
+                        clearInterval(checkInterval);
+                    }
+                    video.pause();
+                    video.src = '';
+                });
+                
+                // Start
+                init();
+                
+            })();
+            </script>
+        </body>
+        </html>
+        """
+        
+        webView.loadHTMLString(html, baseURL: nil)
     }
     
-    private func showError(_ message: String) {
-        isLoading = false
-        hasError = true
-        errorMessage = message
-        statusMessage = "Error"
-    }
-    
-    func retry(streamURL: String, cameraId: String) {
-        cleanup()
-        hasError = false
-        isLoading = true
-        statusMessage = "Retrying..."
+    class Coordinator: NSObject, WKNavigationDelegate {
+        var parent: SimpleHTML5Player
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.setup(streamURL: streamURL, cameraId: cameraId)
-        }
-    }
-    
-    func cleanup() {
-        keepAliveTimer?.invalidate()
-        keepAliveTimer = nil
-        
-        statusObserver?.invalidate()
-        statusObserver = nil
-        
-        stallObserver?.invalidate()
-        stallObserver = nil
-        
-        playbackLikelyToKeepUpObserver?.invalidate()
-        playbackLikelyToKeepUpObserver = nil
-        
-        if let timeObserver = timeObserver {
-            player?.removeTimeObserver(timeObserver)
-            self.timeObserver = nil
+        init(_ parent: SimpleHTML5Player) {
+            self.parent = parent
         }
         
-        player?.pause()
-        
-        if let cameraId = currentCameraId {
-            PlayerManager.shared.releasePlayer(cameraId)
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            print("✅ HTML5 player loaded: \(parent.cameraId)")
         }
         
-        player = nil
-        currentCameraId = nil
-        lastPlaybackCheck = nil
-    }
-    
-    deinit {
-        cleanup()
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            print("❌ WebView failed: \(error.localizedDescription)")
+        }
     }
 }
 
