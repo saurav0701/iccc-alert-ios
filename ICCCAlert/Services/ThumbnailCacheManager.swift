@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import Combine
+import WebKit
 
 // MARK: - Thumbnail Cache Manager
 class ThumbnailCacheManager: ObservableObject {
