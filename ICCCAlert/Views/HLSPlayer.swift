@@ -23,14 +23,14 @@ class PlayerManager: ObservableObject {
         }
         
         activePlayers[cameraId] = webView
-        print("📹 Registered player for: \(cameraId)")
+        print("📹 Registered WebRTC player for: \(cameraId)")
     }
     
     private func releasePlayerInternal(_ cameraId: String) {
         if let webView = activePlayers.removeValue(forKey: cameraId) {
             webView.stopLoading()
             webView.loadHTMLString("", baseURL: nil)
-            print("🗑️ Released player: \(cameraId)")
+            print("🗑️ Released WebRTC player: \(cameraId)")
         }
     }
     
@@ -45,18 +45,18 @@ class PlayerManager: ObservableObject {
         defer { lock.unlock() }
         
         activePlayers.keys.forEach { releasePlayerInternal($0) }
-        print("🧹 Cleared all players")
+        print("🧹 Cleared all WebRTC players")
     }
 }
 
-// MARK: - Simple HTML5 Video Player
-struct HybridHLSPlayer: View {
+// MARK: - WebRTC Player
+struct WebRTCPlayer: View {
     let streamURL: String
     let cameraId: String
     let isFullscreen: Bool
     
     var body: some View {
-        SimpleHTML5Player(
+        WebRTCPlayerView(
             streamURL: streamURL,
             cameraId: cameraId,
             isFullscreen: isFullscreen
@@ -64,8 +64,8 @@ struct HybridHLSPlayer: View {
     }
 }
 
-// MARK: - HTML5 Video Player (Native iOS HLS Support)
-struct SimpleHTML5Player: UIViewRepresentable {
+// MARK: - WebRTC Player View
+struct WebRTCPlayerView: UIViewRepresentable {
     let streamURL: String
     let cameraId: String
     let isFullscreen: Bool
@@ -76,12 +76,20 @@ struct SimpleHTML5Player: UIViewRepresentable {
         config.mediaTypesRequiringUserActionForPlayback = []
         config.allowsPictureInPictureMediaPlayback = false
         
+        // Enable WebRTC
+        let prefs = WKWebpagePreferences()
+        prefs.allowsContentJavaScript = true
+        config.defaultWebpagePreferences = prefs
+        
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.scrollView.isScrollEnabled = false
         webView.scrollView.bounces = false
         webView.backgroundColor = .black
         webView.isOpaque = true
         webView.navigationDelegate = context.coordinator
+        
+        // Allow camera/mic permissions (needed for WebRTC)
+        webView.configuration.userContentController.add(context.coordinator, name: "logging")
         
         PlayerManager.shared.registerPlayer(webView, for: cameraId)
         
@@ -113,7 +121,6 @@ struct SimpleHTML5Player: UIViewRepresentable {
                     margin: 0;
                     padding: 0;
                     box-sizing: border-box;
-                    -webkit-tap-highlight-color: transparent;
                 }
                 
                 html, body {
@@ -186,6 +193,7 @@ struct SimpleHTML5Player: UIViewRepresentable {
                 }
                 
                 #status.error { color: #ff5252; }
+                #status.warning { color: #FFC107; }
             </style>
         </head>
         <body>
@@ -196,10 +204,9 @@ struct SimpleHTML5Player: UIViewRepresentable {
                     webkit-playsinline
                     autoplay
                     muted
-                    preload="none"
                 ></video>
                 <div id="live"><span class="dot"></span>LIVE</div>
-                <div id="status">Loading...</div>
+                <div id="status">Connecting...</div>
             </div>
             
             <script>
@@ -211,167 +218,140 @@ struct SimpleHTML5Player: UIViewRepresentable {
                 const live = document.getElementById('live');
                 const streamUrl = '\(streamURL)';
                 
-                let playing = false;
-                let checkInterval = null;
-                let lastTime = 0;
-                let stuckCount = 0;
+                let pc = null;
+                let restartTimeout = null;
                 
-                function log(msg, isError = false) {
-                    console.log('[Player]', msg);
+                function log(msg, type = 'info') {
+                    console.log('[WebRTC]', msg);
                     status.textContent = msg;
-                    status.className = isError ? 'error' : '';
+                    status.className = type === 'error' ? 'error' : type === 'warning' ? 'warning' : '';
+                    
+                    // Send to Swift
+                    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.logging) {
+                        window.webkit.messageHandlers.logging.postMessage(msg);
+                    }
                 }
                 
-                function init() {
-                    log('Connecting...');
+                function cleanup() {
+                    if (restartTimeout) {
+                        clearTimeout(restartTimeout);
+                        restartTimeout = null;
+                    }
                     
-                    // Set video source
-                    video.src = streamUrl;
+                    if (pc) {
+                        pc.close();
+                        pc = null;
+                    }
                     
-                    // Event listeners
-                    video.addEventListener('loadstart', () => {
-                        log('Loading stream...');
+                    live.classList.remove('show');
+                }
+                
+                async function start() {
+                    cleanup();
+                    
+                    log('Creating peer connection...');
+                    
+                    pc = new RTCPeerConnection({
+                        iceServers: [{
+                            urls: 'stun:stun.l.google.com:19302'
+                        }]
                     });
                     
-                    video.addEventListener('loadedmetadata', () => {
-                        log('Stream loaded');
-                        console.log('Duration:', video.duration);
-                        console.log('Seekable:', video.seekable.length);
-                    });
+                    pc.ontrack = (evt) => {
+                        log('Received track');
+                        video.srcObject = evt.streams[0];
+                    };
                     
-                    video.addEventListener('loadeddata', () => {
-                        log('Ready to play');
-                        video.play().catch(e => {
-                            log('Play error: ' + e.message, true);
+                    pc.oniceconnectionstatechange = () => {
+                        log('ICE state: ' + pc.iceConnectionState, 'info');
+                        
+                        if (pc.iceConnectionState === 'connected') {
+                            log('Connected');
+                            live.classList.add('show');
+                        } else if (pc.iceConnectionState === 'disconnected' || 
+                                   pc.iceConnectionState === 'failed') {
+                            log('Connection lost - reconnecting...', 'warning');
+                            live.classList.remove('show');
+                            restartTimeout = setTimeout(start, 2000);
+                        }
+                    };
+                    
+                    try {
+                        // Add transceiver for receiving video
+                        pc.addTransceiver('video', { direction: 'recvonly' });
+                        pc.addTransceiver('audio', { direction: 'recvonly' });
+                        
+                        log('Creating offer...');
+                        const offer = await pc.createOffer();
+                        await pc.setLocalDescription(offer);
+                        
+                        log('Sending offer to server...');
+                        const response = await fetch(streamUrl, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/sdp'
+                            },
+                            body: offer.sdp
                         });
-                    });
-                    
-                    video.addEventListener('canplay', () => {
-                        log('Can play');
-                        if (!playing) {
-                            video.play().catch(e => {
-                                log('Play error: ' + e.message, true);
-                            });
-                        }
-                    });
-                    
-                    video.addEventListener('playing', () => {
-                        log('Playing');
-                        playing = true;
-                        live.classList.add('show');
-                        startHealthCheck();
-                    });
-                    
-                    video.addEventListener('waiting', () => {
-                        log('Buffering...');
-                    });
-                    
-                    video.addEventListener('pause', () => {
-                        log('Paused');
-                        // Auto-resume if not intentional
-                        if (playing) {
-                            setTimeout(() => {
-                                video.play().catch(() => {});
-                            }, 100);
-                        }
-                    });
-                    
-                    video.addEventListener('ended', () => {
-                        log('Stream ended - reloading');
-                        setTimeout(() => {
-                            video.load();
-                            video.play();
-                        }, 1000);
-                    });
-                    
-                    video.addEventListener('stalled', () => {
-                        log('Stalled - recovering...');
-                        video.load();
-                        video.play();
-                    });
-                    
-                    video.addEventListener('error', (e) => {
-                        const error = video.error;
-                        let msg = 'Error';
                         
-                        if (error) {
-                            switch(error.code) {
-                                case 1: msg = 'ABORTED'; break;
-                                case 2: msg = 'NETWORK'; break;
-                                case 3: msg = 'DECODE'; break;
-                                case 4: msg = 'SRC_NOT_SUPPORTED'; break;
-                            }
-                            msg += ' (' + error.code + ')';
+                        if (!response.ok) {
+                            throw new Error('Server returned ' + response.status);
                         }
                         
-                        log(msg, true);
-                        live.classList.remove('show');
-                    });
-                    
-                    // Start loading
-                    video.load();
+                        const answer = await response.text();
+                        
+                        log('Received answer, setting remote description...');
+                        await pc.setRemoteDescription({
+                            type: 'answer',
+                            sdp: answer
+                        });
+                        
+                        log('WebRTC negotiation complete');
+                        
+                    } catch (err) {
+                        log('Error: ' + err.message, 'error');
+                        restartTimeout = setTimeout(start, 5000);
+                    }
                 }
                 
-                function startHealthCheck() {
-                    if (checkInterval) return;
-                    
-                    checkInterval = setInterval(() => {
-                        const currentTime = video.currentTime;
-                        
-                        // Check if video is progressing
-                        if (currentTime === lastTime && !video.paused && !video.ended) {
-                            stuckCount++;
-                            
-                            if (stuckCount >= 3) {
-                                log('Stuck detected - restarting...');
-                                video.load();
-                                video.play();
-                                stuckCount = 0;
-                            }
-                        } else {
-                            stuckCount = 0;
-                        }
-                        
-                        lastTime = currentTime;
-                        
-                        // Keep at live edge for live streams
-                        if (video.seekable.length > 0) {
-                            const liveEnd = video.seekable.end(video.seekable.length - 1);
-                            const lag = liveEnd - currentTime;
-                            
-                            if (lag > 10) {
-                                log('Syncing to live...');
-                                video.currentTime = liveEnd - 2;
-                            }
-                        }
-                        
-                        // Auto-play if paused
-                        if (video.paused && !video.ended && video.readyState >= 2) {
-                            log('Auto-resuming...');
+                // Auto-play when video can play
+                video.addEventListener('loadedmetadata', () => {
+                    log('Stream ready');
+                    video.play().catch(e => {
+                        log('Play error: ' + e.message, 'warning');
+                    });
+                });
+                
+                video.addEventListener('playing', () => {
+                    log('Playing');
+                    live.classList.add('show');
+                });
+                
+                video.addEventListener('pause', () => {
+                    log('Paused');
+                    // Auto-resume
+                    setTimeout(() => {
+                        if (!video.ended) {
                             video.play().catch(() => {});
                         }
-                        
-                    }, 2000);
-                }
+                    }, 100);
+                });
+                
+                // Cleanup on page unload
+                window.addEventListener('beforeunload', () => {
+                    cleanup();
+                    video.srcObject = null;
+                });
                 
                 // Visibility handling
                 document.addEventListener('visibilitychange', () => {
-                    if (!document.hidden && playing && video.paused) {
+                    if (!document.hidden && video.paused && !video.ended) {
                         video.play().catch(() => {});
                     }
                 });
                 
-                // Cleanup
-                window.addEventListener('beforeunload', () => {
-                    if (checkInterval) {
-                        clearInterval(checkInterval);
-                    }
-                    video.pause();
-                    video.src = '';
-                });
-                
-                // Start
-                init();
+                // Start WebRTC
+                start();
                 
             })();
             </script>
@@ -382,33 +362,82 @@ struct SimpleHTML5Player: UIViewRepresentable {
         webView.loadHTMLString(html, baseURL: nil)
     }
     
-    class Coordinator: NSObject, WKNavigationDelegate {
-        var parent: SimpleHTML5Player
+    class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+        var parent: WebRTCPlayerView
         
-        init(_ parent: SimpleHTML5Player) {
+        init(_ parent: WebRTCPlayerView) {
             self.parent = parent
         }
         
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            print("✅ HTML5 player loaded: \(parent.cameraId)")
+            print("✅ WebRTC player loaded: \(parent.cameraId)")
         }
         
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             print("❌ WebView failed: \(error.localizedDescription)")
         }
+        
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            if message.name == "logging", let msg = message.body as? String {
+                print("🌐 WebRTC: \(msg)")
+            }
+        }
     }
 }
 
-// MARK: - Camera Thumbnail
+// MARK: - Update Camera Model to use WebRTC
+extension Camera {
+    // WebRTC stream URL
+    var webrtcStreamURL: String? {
+        return getWebRTCStreamURL(for: groupId, cameraIp: ip, cameraId: id)
+    }
+    
+    private func getWebRTCStreamURL(for groupId: Int, cameraIp: String, cameraId: String) -> String? {
+        let serverURLs: [Int: String] = [
+            5: "http://103.208.173.131:8889",
+            6: "http://103.208.173.147:8889",
+            7: "http://103.208.173.163:8889",
+            8: "http://a5va.bccliccc.in:8889",
+            9: "http://a5va.bccliccc.in:8889",
+            10: "http://a6va.bccliccc.in:8889",
+            11: "http://103.208.173.195:8889",
+            12: "http://a9va.bccliccc.in:8889",
+            13: "http://a10va.bccliccc.in:8889",
+            14: "http://103.210.88.195:8889",
+            15: "http://103.210.88.211:8889",
+            16: "http://103.208.173.179:8889",
+            22: "http://103.208.173.211:8889"
+        ]
+        
+        guard let serverURL = serverURLs[groupId] else {
+            print("❌ No WebRTC server URL for groupId: \(groupId)")
+            return nil
+        }
+        
+        // Use camera IP as stream path
+        if !cameraIp.isEmpty {
+            let url = "\(serverURL)/\(cameraIp)/whep"
+            print("✅ WebRTC URL: \(url)")
+            return url
+        }
+        
+        // Fallback to camera ID
+        let fallbackUrl = "\(serverURL)/\(cameraId)/whep"
+        print("⚠️ WebRTC URL (ID-based fallback): \(fallbackUrl)")
+        return fallbackUrl
+    }
+}
+
+// MARK: - Camera Thumbnail (Updated)
 struct CameraThumbnail: View {
     let camera: Camera
     @State private var shouldLoad = false
     
     var body: some View {
         ZStack {
-            if let streamURL = camera.streamURL, camera.isOnline {
+            if let streamURL = camera.webrtcStreamURL, camera.isOnline {
                 if shouldLoad {
-                    HybridHLSPlayer(
+                    WebRTCPlayer(
                         streamURL: streamURL,
                         cameraId: camera.id,
                         isFullscreen: false
@@ -477,7 +506,7 @@ struct CameraThumbnail: View {
     }
 }
 
-// MARK: - Fullscreen Player
+// MARK: - Fullscreen Player (Updated)
 struct HLSPlayerView: View {
     let camera: Camera
     @Environment(\.presentationMode) var presentationMode
@@ -486,8 +515,8 @@ struct HLSPlayerView: View {
         ZStack {
             Color.black.ignoresSafeArea()
             
-            if let streamURL = camera.streamURL {
-                HybridHLSPlayer(
+            if let streamURL = camera.webrtcStreamURL {
+                WebRTCPlayer(
                     streamURL: streamURL,
                     cameraId: camera.id,
                     isFullscreen: true
