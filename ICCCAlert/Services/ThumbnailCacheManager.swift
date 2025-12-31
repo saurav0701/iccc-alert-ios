@@ -89,6 +89,28 @@ class ThumbnailCacheManager: ObservableObject {
         prefs.allowsContentJavaScript = true
         config.defaultWebpagePreferences = prefs
         
+        // Setup capture callback BEFORE creating WebView
+        config.userContentController.add(
+            ThumbnailCaptureHandler(cameraId: camera.id, manager: self),
+            name: "captureComplete"
+        )
+        
+        // Add console log handler
+        let consoleScript = """
+        console.log = function(message) {
+            window.webkit.messageHandlers.consoleLog.postMessage(String(message));
+        };
+        console.error = function(message) {
+            window.webkit.messageHandlers.consoleLog.postMessage('ERROR: ' + String(message));
+        };
+        """
+        let consoleScriptHandler = WKUserScript(source: consoleScript, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        config.userContentController.addUserScript(consoleScriptHandler)
+        config.userContentController.add(
+            ConsoleLogHandler(cameraId: camera.id),
+            name: "consoleLog"
+        )
+        
         let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 320, height: 240), configuration: config)
         webView.scrollView.isScrollEnabled = false
         webView.backgroundColor = .black
@@ -97,12 +119,6 @@ class ThumbnailCacheManager: ObservableObject {
         lock.lock()
         captureWebViews[camera.id] = webView
         lock.unlock()
-        
-        // Setup capture callback
-        config.userContentController.add(
-            ThumbnailCaptureHandler(cameraId: camera.id, manager: self),
-            name: "captureComplete"
-        )
         
         // Load stream HTML with auto-capture
         let html = generateCaptureHTML(streamURL: streamURL)
@@ -150,14 +166,22 @@ class ThumbnailCacheManager: ObservableObject {
                 let pc = null;
                 let captured = false;
                 
+                console.log('🎬 Starting capture for stream:', streamUrl);
+                
                 async function start() {
                     try {
+                        console.log('📡 Creating RTCPeerConnection...');
                         pc = new RTCPeerConnection({
                             iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
                         });
                         
                         pc.ontrack = (e) => {
+                            console.log('📹 Received track, setting srcObject');
                             video.srcObject = e.streams[0];
+                        };
+                        
+                        pc.oniceconnectionstatechange = () => {
+                            console.log('🔗 ICE state:', pc.iceConnectionState);
                         };
                         
                         pc.addTransceiver('video', { direction: 'recvonly' });
@@ -166,43 +190,80 @@ class ThumbnailCacheManager: ObservableObject {
                         const offer = await pc.createOffer();
                         await pc.setLocalDescription(offer);
                         
+                        console.log('📤 Sending offer to server...');
                         const res = await fetch(streamUrl, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/sdp' },
                             body: offer.sdp
                         });
                         
-                        if (!res.ok) throw new Error('Server error');
+                        if (!res.ok) {
+                            console.error('❌ Server error:', res.status);
+                            throw new Error('Server error: ' + res.status);
+                        }
                         
                         const answer = await res.text();
+                        console.log('📥 Received answer from server');
                         await pc.setRemoteDescription({ type: 'answer', sdp: answer });
+                        console.log('✅ Connection setup complete');
                         
                     } catch(err) {
-                        console.error('Stream error:', err);
-                        window.webkit?.messageHandlers?.captureComplete?.postMessage({ success: false });
+                        console.error('❌ Stream error:', err);
+                        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.captureComplete) {
+                            window.webkit.messageHandlers.captureComplete.postMessage({ 
+                                success: false,
+                                error: err.toString()
+                            });
+                        }
                     }
                 }
                 
                 // Capture frame when video starts playing
+                video.addEventListener('loadedmetadata', () => {
+                    console.log('📊 Video metadata loaded:', video.videoWidth + 'x' + video.videoHeight);
+                });
+                
                 video.addEventListener('playing', () => {
-                    if (captured) return;
+                    console.log('▶️ Video playing!');
+                    if (captured) {
+                        console.log('⚠️ Already captured, skipping');
+                        return;
+                    }
                     captured = true;
                     
                     setTimeout(() => {
                         try {
-                            canvas.width = video.videoWidth;
-                            canvas.height = video.videoHeight;
+                            console.log('📸 Capturing frame...');
+                            canvas.width = video.videoWidth || 320;
+                            canvas.height = video.videoHeight || 240;
                             ctx.drawImage(video, 0, 0);
                             
                             const imageData = canvas.toDataURL('image/jpeg', 0.8);
-                            window.webkit?.messageHandlers?.captureComplete?.postMessage({
-                                success: true,
-                                imageData: imageData
-                            });
+                            console.log('✅ Frame captured, size:', imageData.length, 'bytes');
+                            
+                            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.captureComplete) {
+                                window.webkit.messageHandlers.captureComplete.postMessage({
+                                    success: true,
+                                    imageData: imageData
+                                });
+                                console.log('📤 Image sent to Swift');
+                            } else {
+                                console.error('❌ webkit.messageHandlers not available');
+                            }
                         } catch(err) {
-                            window.webkit?.messageHandlers?.captureComplete?.postMessage({ success: false });
+                            console.error('❌ Capture error:', err);
+                            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.captureComplete) {
+                                window.webkit.messageHandlers.captureComplete.postMessage({ 
+                                    success: false,
+                                    error: err.toString()
+                                });
+                            }
                         }
-                    }, 500); // Wait 500ms for stable frame
+                    }, 500);
+                });
+                
+                video.addEventListener('error', (e) => {
+                    console.error('❌ Video error:', e);
                 });
                 
                 start();
@@ -385,16 +446,34 @@ class ThumbnailCaptureHandler: NSObject, WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.name == "captureComplete",
               let dict = message.body as? [String: Any] else {
+            DebugLogger.shared.log("❌ Invalid message format for: \(cameraId)", emoji: "❌", color: .red)
             return
         }
         
         if let success = dict["success"] as? Bool, success,
            let imageData = dict["imageData"] as? String {
+            DebugLogger.shared.log("✅ JavaScript capture successful for: \(cameraId)", emoji: "✅", color: .green)
             manager?.handleCapturedImage(cameraId: cameraId, imageDataURL: imageData)
         } else {
-            DebugLogger.shared.log("❌ Capture failed for: \(cameraId)", emoji: "❌", color: .red)
+            let error = dict["error"] as? String ?? "Unknown error"
+            DebugLogger.shared.log("❌ Capture failed for: \(cameraId) - \(error)", emoji: "❌", color: .red)
             manager?.cleanupCaptureWebView(for: cameraId)
             manager?.removeFetchTask(for: cameraId)
+        }
+    }
+}
+
+// MARK: - Console Log Handler
+class ConsoleLogHandler: NSObject, WKScriptMessageHandler {
+    let cameraId: String
+    
+    init(cameraId: String) {
+        self.cameraId = cameraId
+    }
+    
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        if let logMessage = message.body as? String {
+            DebugLogger.shared.log("[\(cameraId)] \(logMessage)", emoji: "🌐", color: .gray)
         }
     }
 }
