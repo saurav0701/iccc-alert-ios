@@ -301,18 +301,21 @@ struct WebRTCPlayerView: UIViewRepresentable {
     }
 }
 
-// MARK: - Camera Thumbnail (Static Image Only - No Streaming)
+import SwiftUI
+
+// MARK: - Camera Thumbnail (Auto-loads on appear with proper orientation)
 struct CameraThumbnail: View {
     let camera: Camera
     let isGridView: Bool
     @StateObject private var thumbnailCache = ThumbnailCacheManager.shared
     @State private var isLoading = false
     @State private var hasFailed = false
+    @State private var hasAttemptedLoad = false
     
     var body: some View {
         ZStack {
             if let thumbnail = thumbnailCache.getThumbnail(for: camera.id) {
-                // Show cached thumbnail
+                // Show cached thumbnail with proper orientation
                 thumbnailImageView(thumbnail)
             } else if !camera.isOnline {
                 // Offline state
@@ -324,15 +327,24 @@ struct CameraThumbnail: View {
                 // Loading state
                 loadingView
             } else {
-                // Placeholder - tap to load
+                // Placeholder - will auto-load
                 placeholderView
             }
         }
         .contentShape(Rectangle())
+        .onAppear {
+            // Auto-load thumbnail when view appears
+            if !hasAttemptedLoad && camera.isOnline {
+                loadThumbnail()
+            }
+        }
     }
     
     private func thumbnailImageView(_ image: UIImage) -> some View {
-        Image(uiImage: image)
+        // Fix orientation before displaying
+        let orientedImage = fixImageOrientation(image)
+        
+        return Image(uiImage: orientedImage)
             .resizable()
             .aspectRatio(contentMode: .fill)
             .clipped()
@@ -374,14 +386,11 @@ struct CameraThumbnail: View {
                     .foregroundColor(.blue)
                 
                 if !isGridView {
-                    Text("Tap to load")
+                    Text("Loading...")
                         .font(.caption)
                         .foregroundColor(.blue)
                 }
             }
-        }
-        .onTapGesture {
-            loadThumbnail()
         }
     }
     
@@ -407,6 +416,7 @@ struct CameraThumbnail: View {
         }
         .onTapGesture {
             hasFailed = false
+            hasAttemptedLoad = false
             loadThumbnail()
         }
     }
@@ -434,23 +444,44 @@ struct CameraThumbnail: View {
     // MARK: - Load Thumbnail
     
     private func loadThumbnail() {
-        guard !isLoading, camera.isOnline else { return }
+        guard !isLoading, !hasAttemptedLoad, camera.isOnline else { return }
         
+        hasAttemptedLoad = true
         isLoading = true
         hasFailed = false
+        
+        DebugLogger.shared.log("📸 Auto-loading thumbnail for: \(camera.displayName)", emoji: "📸", color: .blue)
         
         // Start loading
         thumbnailCache.fetchThumbnail(for: camera)
         
-        // Timeout after 10 seconds
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
+        // Timeout after 15 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15.0) {
             if isLoading && thumbnailCache.getThumbnail(for: camera.id) == nil {
                 isLoading = false
                 hasFailed = true
+                DebugLogger.shared.log("⏱️ Thumbnail load timeout for: \(camera.displayName)", emoji: "⏱️", color: .orange)
             } else {
                 isLoading = false
             }
         }
+    }
+    
+    // MARK: - Fix Image Orientation
+    
+    private func fixImageOrientation(_ image: UIImage) -> UIImage {
+        // If image is already in correct orientation, return it
+        if image.imageOrientation == .up {
+            return image
+        }
+        
+        // Normalize the image orientation
+        UIGraphicsBeginImageContextWithOptions(image.size, false, image.scale)
+        image.draw(in: CGRect(origin: .zero, size: image.size))
+        let normalizedImage = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        
+        return normalizedImage ?? image
     }
 }
 

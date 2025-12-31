@@ -1,6 +1,6 @@
 import SwiftUI
 
-// MARK: - Area Cameras View (Optimized Thumbnail Management)
+// MARK: - Area Cameras View (Auto-Loading Thumbnails)
 struct AreaCamerasView: View {
     let area: String
     @StateObject private var cameraManager = CameraManager.shared
@@ -9,7 +9,6 @@ struct AreaCamerasView: View {
     @State private var showOnlineOnly = true
     @State private var gridMode: GridViewMode = .grid2x2
     @State private var selectedCamera: Camera? = nil
-    @State private var visibleCameraIds: Set<String> = []
     @Environment(\.scenePhase) var scenePhase
     
     var cameras: [Camera] {
@@ -141,12 +140,6 @@ struct AreaCamerasView: View {
                                 UINotificationFeedbackGenerator().notificationOccurred(.warning)
                             }
                         }
-                        .onAppear {
-                            handleCameraAppear(camera)
-                        }
-                        .onDisappear {
-                            handleCameraDisappear(camera)
-                        }
                 }
             }
             .padding()
@@ -171,36 +164,20 @@ struct AreaCamerasView: View {
         .background(Color(.systemGroupedBackground))
     }
     
-    // MARK: - Thumbnail Management
-    
-    private func handleCameraAppear(_ camera: Camera) {
-        visibleCameraIds.insert(camera.id)
-        // Thumbnails now load automatically via CameraThumbnail's onAppear
-    }
-    
-    private func handleCameraDisappear(_ camera: Camera) {
-        visibleCameraIds.remove(camera.id)
-    }
+    // MARK: - Refresh Thumbnails
     
     private func refreshThumbnails() {
-        // Clear only visible camera thumbnails
-        let visibleCameras = cameras.filter { visibleCameraIds.contains($0.id) }
-        
-        for camera in visibleCameras where camera.isOnline {
+        // Clear all visible camera thumbnails
+        for camera in cameras where camera.isOnline {
             thumbnailCache.clearThumbnail(for: camera.id)
         }
         
         // Trigger haptic feedback
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         
-        // Reload visible thumbnails with staggered delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            for (index, camera) in visibleCameras.enumerated() {
-                let delay = Double(index) * 0.3 // Reduced delay
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                    thumbnailCache.fetchThumbnail(for: camera, force: true)
-                }
-            }
-        }
+        DebugLogger.shared.log("🔄 Refreshing \(cameras.count) thumbnails", emoji: "🔄", color: .blue)
+        
+        // Force reload will happen automatically when views reappear
+        // The CameraThumbnail view will detect missing thumbnails and auto-load them
     }
 }

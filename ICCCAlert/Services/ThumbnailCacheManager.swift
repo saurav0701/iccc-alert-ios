@@ -3,7 +3,7 @@ import UIKit
 import WebKit
 import Combine
 
-// MARK: - Thumbnail Cache Manager (Captures from WebRTC Stream)
+// MARK: - Thumbnail Cache Manager (with Orientation Fix)
 class ThumbnailCacheManager: ObservableObject {
     static let shared = ThumbnailCacheManager()
     
@@ -243,10 +243,17 @@ class ThumbnailCacheManager: ObservableObject {
                     setTimeout(() => {
                         try {
                             console.log('📸 Capturing frame...');
-                            canvas.width = video.videoWidth || 320;
-                            canvas.height = video.videoHeight || 240;
-                            ctx.drawImage(video, 0, 0);
+                            // Use video dimensions or fallback to 320x240
+                            const width = video.videoWidth || 320;
+                            const height = video.videoHeight || 240;
                             
+                            canvas.width = width;
+                            canvas.height = height;
+                            
+                            // Draw video frame to canvas (this preserves orientation)
+                            ctx.drawImage(video, 0, 0, width, height);
+                            
+                            // Convert to JPEG with quality 0.8
                             const imageData = canvas.toDataURL('image/jpeg', 0.8);
                             console.log('✅ Frame captured, size:', imageData.length, 'bytes');
                             
@@ -306,15 +313,16 @@ class ThumbnailCacheManager: ObservableObject {
             return
         }
         
-        // Resize to save memory
-        let resizedImage = resizeImage(image, targetWidth: 320)
+        // Fix orientation and resize to save memory
+        let orientedImage = fixImageOrientation(image)
+        let resizedImage = resizeImage(orientedImage, targetWidth: 320)
         
         // Save to cache
         DispatchQueue.main.async {
             self.thumbnails[cameraId] = resizedImage
             self.cache.setObject(resizedImage, forKey: cameraId as NSString)
             
-            DebugLogger.shared.log("✅ Thumbnail saved: \(cameraId) (\(Int(image.size.width))x\(Int(image.size.height)))", emoji: "✅", color: .green)
+            DebugLogger.shared.log("✅ Thumbnail saved: \(cameraId) (\(Int(resizedImage.size.width))x\(Int(resizedImage.size.height)))", emoji: "✅", color: .green)
             
             // Save to disk
             self.saveThumbnail(resizedImage, for: cameraId)
@@ -323,6 +331,36 @@ class ThumbnailCacheManager: ObservableObject {
             self.cleanupCaptureWebView(for: cameraId)
             self.removeFetchTask(for: cameraId)
         }
+    }
+    
+    // MARK: - Image Utilities
+    
+    private func fixImageOrientation(_ image: UIImage) -> UIImage {
+        // If image is already in correct orientation, return it
+        if image.imageOrientation == .up {
+            return image
+        }
+        
+        // Normalize the image orientation
+        UIGraphicsBeginImageContextWithOptions(image.size, true, image.scale)
+        image.draw(in: CGRect(origin: .zero, size: image.size))
+        let normalizedImage = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        
+        return normalizedImage ?? image
+    }
+    
+    private func resizeImage(_ image: UIImage, targetWidth: CGFloat) -> UIImage {
+        let scale = targetWidth / image.size.width
+        let targetHeight = image.size.height * scale
+        let targetSize = CGSize(width: targetWidth, height: targetHeight)
+        
+        UIGraphicsBeginImageContextWithOptions(targetSize, true, 1.0)
+        image.draw(in: CGRect(origin: .zero, size: targetSize))
+        let resizedImage = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        
+        return resizedImage ?? image
     }
     
     // MARK: - Cleanup
@@ -346,21 +384,6 @@ class ThumbnailCacheManager: ObservableObject {
         lock.lock()
         activeFetches.remove(cameraId)
         lock.unlock()
-    }
-    
-    // MARK: - Image Utilities
-    
-    private func resizeImage(_ image: UIImage, targetWidth: CGFloat) -> UIImage {
-        let scale = targetWidth / image.size.width
-        let targetHeight = image.size.height * scale
-        let targetSize = CGSize(width: targetWidth, height: targetHeight)
-        
-        UIGraphicsBeginImageContextWithOptions(targetSize, true, 1.0)
-        image.draw(in: CGRect(origin: .zero, size: targetSize))
-        let resizedImage = UIGraphicsGetImageFromCurrentImageContext()
-        UIGraphicsEndImageContext()
-        
-        return resizedImage ?? image
     }
     
     // MARK: - Disk Persistence
@@ -389,8 +412,10 @@ class ThumbnailCacheManager: ObservableObject {
                     
                     if let data = try? Data(contentsOf: file),
                        let image = UIImage(data: data) {
-                        self.thumbnails[cameraId] = image
-                        self.cache.setObject(image, forKey: cameraId as NSString)
+                        // Fix orientation when loading from disk
+                        let orientedImage = self.fixImageOrientation(image)
+                        self.thumbnails[cameraId] = orientedImage
+                        self.cache.setObject(orientedImage, forKey: cameraId as NSString)
                     }
                 }
                 
@@ -443,7 +468,7 @@ class ThumbnailCacheManager: ObservableObject {
     }
 }
 
-// MARK: - Capture Handler
+// MARK: - Capture Handler (unchanged)
 class ThumbnailCaptureHandler: NSObject, WKScriptMessageHandler {
     let cameraId: String
     weak var manager: ThumbnailCacheManager?
@@ -473,7 +498,7 @@ class ThumbnailCaptureHandler: NSObject, WKScriptMessageHandler {
     }
 }
 
-// MARK: - Console Log Handler
+// MARK: - Console Log Handler (unchanged)
 class ConsoleLogHandler: NSObject, WKScriptMessageHandler {
     let cameraId: String
     
