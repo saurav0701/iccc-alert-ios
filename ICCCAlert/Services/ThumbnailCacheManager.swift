@@ -115,6 +115,15 @@ class ThumbnailCacheManager: ObservableObject {
         webView.scrollView.isScrollEnabled = false
         webView.backgroundColor = .black
         webView.isOpaque = true
+        webView.alpha = 0.01 // Make nearly invisible but still rendered
+        
+        // CRITICAL: Add to window hierarchy so it actually renders
+        DispatchQueue.main.async {
+            if let window = UIApplication.shared.windows.first {
+                window.addSubview(webView)
+                webView.frame = CGRect(x: -1000, y: -1000, width: 320, height: 240) // Move off-screen
+            }
+        }
         
         lock.lock()
         captureWebViews[camera.id] = webView
@@ -327,6 +336,7 @@ class ThumbnailCacheManager: ObservableObject {
                 webView.stopLoading()
                 webView.loadHTMLString("", baseURL: nil)
                 webView.configuration.userContentController.removeAllScriptMessageHandlers()
+                webView.removeFromSuperview() // Remove from window
             }
             DebugLogger.shared.log("🧹 Cleaned up capture webview for: \(cameraId)", emoji: "🧹", color: .gray)
         }

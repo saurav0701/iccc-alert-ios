@@ -6,7 +6,7 @@ class DebugLogger: ObservableObject {
     
     @Published var logs: [LogEntry] = []
     @Published var cameraStatus: [String: CameraStreamStatus] = [:] // Camera ID -> Status
-    private let maxLogs = 200
+    private let maxLogs = 500 // Increased for thumbnail debugging
     
     struct LogEntry: Identifiable {
         let id = UUID()
@@ -49,6 +49,9 @@ class DebugLogger: ObservableObject {
             if self.logs.count > self.maxLogs {
                 self.logs.removeFirst(self.logs.count - self.maxLogs)
             }
+            
+            // Also print to console for easier debugging
+            print("\(emoji) \(message)")
         }
     }
     
@@ -103,6 +106,7 @@ struct DebugView: View {
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @StateObject private var webSocketService = WebSocketService.shared
     @StateObject private var cameraManager = CameraManager.shared
+    @StateObject private var thumbnailCache = ThumbnailCacheManager.shared
     @StateObject private var logger = DebugLogger.shared
     @State private var refreshTrigger = UUID()
     @State private var autoRefreshTimer: Timer?
@@ -114,8 +118,9 @@ struct DebugView: View {
                 // Tab Selector
                 Picker("", selection: $selectedTab) {
                     Text("Overview").tag(0)
-                    Text("Cameras").tag(1)
-                    Text("Logs").tag(2)
+                    Text("Thumbnails").tag(1)
+                    Text("Cameras").tag(2)
+                    Text("Logs").tag(3)
                 }
                 .pickerStyle(SegmentedPickerStyle())
                 .padding()
@@ -123,8 +128,9 @@ struct DebugView: View {
                 // Content based on selected tab
                 TabView(selection: $selectedTab) {
                     overviewTab.tag(0)
-                    camerasTab.tag(1)
-                    logsTab.tag(2)
+                    thumbnailsTab.tag(1)
+                    camerasTab.tag(2)
+                    logsTab.tag(3)
                 }
                 .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
             }
@@ -194,78 +200,6 @@ struct DebugView: View {
                     }
                 }
                 .padding(.vertical, 4)
-                
-                Divider()
-                
-                VStack(spacing: 8) {
-                    HStack {
-                        HStack(spacing: 4) {
-                            Text("✅")
-                            Text("Working")
-                                .font(.caption)
-                        }
-                        Spacer()
-                        Text("\(stats.working)")
-                            .fontWeight(.bold)
-                            .foregroundColor(.green)
-                    }
-                    
-                    HStack {
-                        HStack(spacing: 4) {
-                            Text("🚫")
-                            Text("Codec Issue")
-                                .font(.caption)
-                        }
-                        Spacer()
-                        Text("\(stats.codec)")
-                            .fontWeight(.bold)
-                            .foregroundColor(.red)
-                    }
-                    
-                    HStack {
-                        HStack(spacing: 4) {
-                            Text("❌")
-                            Text("Other Errors")
-                                .font(.caption)
-                        }
-                        Spacer()
-                        Text("\(stats.error)")
-                            .fontWeight(.bold)
-                            .foregroundColor(.orange)
-                    }
-                    
-                    HStack {
-                        HStack(spacing: 4) {
-                            Text("📹")
-                            Text("Other")
-                                .font(.caption)
-                        }
-                        Spacer()
-                        Text("\(stats.other)")
-                            .fontWeight(.bold)
-                    }
-                }
-                
-                if stats.codec > 0 {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Divider()
-                        HStack(alignment: .top, spacing: 8) {
-                            Text("⚠️")
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("H.265/HEVC Codec Issue")
-                                    .font(.caption)
-                                    .fontWeight(.bold)
-                                    .foregroundColor(.orange)
-                                Text("\(stats.codec) cameras use H.265 codec which is not well supported on iOS 15.8. These streams need to be re-encoded to H.264 on the backend.")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .padding(8)
-                        .background(Color.orange.opacity(0.1))
-                        .cornerRadius(8)
-                    }
-                }
             }
             
             // Subscriptions
@@ -282,6 +216,98 @@ struct DebugView: View {
                                 .font(.caption)
                                 .foregroundColor(.red)
                         }
+                    }
+                }
+            }
+        }
+    }
+    
+    // MARK: - Thumbnails Tab
+    private var thumbnailsTab: some View {
+        List {
+            // Thumbnail Test Section
+            Section(header: Text("Thumbnail Capture Test")) {
+                Button(action: {
+                    // Test with first online camera
+                    if let testCamera = cameraManager.cameras.first(where: { $0.isOnline }) {
+                        DebugLogger.shared.log("🧪 Testing thumbnail capture for: \(testCamera.displayName)", emoji: "🧪", color: .blue)
+                        thumbnailCache.fetchThumbnail(for: testCamera, force: true)
+                    } else {
+                        DebugLogger.shared.log("⚠️ No online cameras available for test", emoji: "⚠️", color: .orange)
+                    }
+                }) {
+                    HStack {
+                        Image(systemName: "photo.badge.plus")
+                        Text("Test Thumbnail Capture")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+                }
+                .buttonStyle(PlainButtonStyle())
+                
+                // Show captured thumbnails count
+                let thumbnailCount = thumbnailCache.thumbnails.count
+                HStack {
+                    Text("Captured Thumbnails:")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text("\(thumbnailCount)")
+                        .font(.headline)
+                        .fontWeight(.bold)
+                        .foregroundColor(thumbnailCount > 0 ? .green : .gray)
+                }
+            }
+            
+            // Show thumbnails grid
+            if !thumbnailCache.thumbnails.isEmpty {
+                Section(header: HStack {
+                    Text("Captured Thumbnails")
+                    Spacer()
+                    Button("Clear All") {
+                        thumbnailCache.clearAllThumbnails()
+                        DebugLogger.shared.log("🗑️ Cleared all thumbnails", emoji: "🗑️", color: .red)
+                    }
+                    .font(.caption)
+                    .foregroundColor(.red)
+                }) {
+                    let thumbnails = Array(thumbnailCache.thumbnails)
+                    ForEach(0..<thumbnails.count, id: \.self) { index in
+                        let (key, image) = thumbnails[index]
+                        HStack(spacing: 12) {
+                            Image(uiImage: image)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: 100, height: 75)
+                                .cornerRadius(8)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(Color.green, lineWidth: 2)
+                                )
+                            
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(key)
+                                    .font(.system(size: 12, weight: .bold))
+                                    .lineLimit(2)
+                                
+                                Text("\(Int(image.size.width))x\(Int(image.size.height))")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            Spacer()
+                            
+                            Button(action: {
+                                thumbnailCache.clearThumbnail(for: key)
+                            }) {
+                                Image(systemName: "trash")
+                                    .foregroundColor(.red)
+                            }
+                        }
+                        .padding(.vertical, 4)
                     }
                 }
             }
@@ -402,7 +428,7 @@ struct DebugView: View {
     }
     
     private func startAutoRefresh() {
-        autoRefreshTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in
+        autoRefreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
             refreshTrigger = UUID()
         }
     }
@@ -414,7 +440,7 @@ struct DebugView: View {
     
     private func formatTime(_ date: Date) -> String {
         let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
+        formatter.dateFormat = "HH:mm:ss.SSS"
         return formatter.string(from: date)
     }
 }
