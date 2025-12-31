@@ -98,15 +98,15 @@ class ThumbnailCacheManager: ObservableObject {
         captureWebViews[camera.id] = webView
         lock.unlock()
         
-        // Load stream HTML with auto-capture
-        let html = generateCaptureHTML(streamURL: streamURL)
-        webView.loadHTMLString(html, baseURL: nil)
-        
         // Setup capture callback
         config.userContentController.add(
             ThumbnailCaptureHandler(cameraId: camera.id, manager: self),
             name: "captureComplete"
         )
+        
+        // Load stream HTML with auto-capture
+        let html = generateCaptureHTML(streamURL: streamURL)
+        webView.loadHTMLString(html, baseURL: nil)
         
         // Timeout after 15 seconds
         DispatchQueue.main.asyncAfter(deadline: .now() + 15.0) { [weak self] in
@@ -257,7 +257,7 @@ class ThumbnailCacheManager: ObservableObject {
     
     // MARK: - Cleanup
     
-    private func cleanupCaptureWebView(for cameraId: String) {
+    func cleanupCaptureWebView(for cameraId: String) {
         lock.lock()
         defer { lock.unlock() }
         
@@ -271,7 +271,7 @@ class ThumbnailCacheManager: ObservableObject {
         }
     }
     
-    private func removeFetchTask(for cameraId: String) {
+    func removeFetchTask(for cameraId: String) {
         lock.lock()
         activeFetches.remove(cameraId)
         lock.unlock()

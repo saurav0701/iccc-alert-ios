@@ -55,7 +55,6 @@ struct AreaCamerasView: View {
         .fullScreenCover(item: $selectedCamera) { FullscreenPlayerView(camera: $0) }
         .onAppear {
             DebugLogger.shared.log("📹 AreaCamerasView appeared: \(area)", emoji: "📹", color: .blue)
-            loadInitialThumbnails()
         }
         .onDisappear {
             DebugLogger.shared.log("🚪 AreaCamerasView disappeared: \(area)", emoji: "🚪", color: .orange)
@@ -67,8 +66,6 @@ struct AreaCamerasView: View {
         .onChange(of: scenePhase) { phase in
             if phase == .background {
                 PlayerManager.shared.clearAll()
-            } else if phase == .active {
-                loadInitialThumbnails()
             }
         }
         .onChange(of: gridMode) { _ in
@@ -176,21 +173,9 @@ struct AreaCamerasView: View {
     
     // MARK: - Thumbnail Management
     
-    private func loadInitialThumbnails() {
-        // Only load first 10 visible cameras
-        thumbnailCache.prefetchVisibleThumbnails(for: cameras)
-    }
-    
     private func handleCameraAppear(_ camera: Camera) {
         visibleCameraIds.insert(camera.id)
-        
-        // Fetch thumbnail if not already loaded
-        if camera.isOnline && thumbnailCache.getThumbnail(for: camera.id) == nil {
-            // Add small delay to avoid overwhelming the system
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                thumbnailCache.fetchThumbnail(for: camera)
-            }
-        }
+        // Thumbnails now load automatically via CameraThumbnail's onAppear
     }
     
     private func handleCameraDisappear(_ camera: Camera) {
@@ -208,10 +193,10 @@ struct AreaCamerasView: View {
         // Trigger haptic feedback
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         
-        // Reload visible thumbnails
+        // Reload visible thumbnails with staggered delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             for (index, camera) in visibleCameras.enumerated() {
-                let delay = Double(index) * 0.5
+                let delay = Double(index) * 0.3 // Reduced delay
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                     thumbnailCache.fetchThumbnail(for: camera, force: true)
                 }
