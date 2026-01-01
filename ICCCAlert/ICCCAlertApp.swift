@@ -8,6 +8,9 @@ struct ICCCAlertApp: App {
     
     @Environment(\.scenePhase) var scenePhase
     
+    // ✅ Memory pressure monitoring
+    @State private var memoryWarningCount = 0
+    
     init() {
         setupAppearance()
         _ = BackgroundWebSocketManager.shared
@@ -24,7 +27,7 @@ struct ICCCAlertApp: App {
             ICCCAlertApp.handleAppTermination()
         }
         
-        // ✅ Register for memory warnings
+        // ✅ Register for memory warnings (CRITICAL)
         NotificationCenter.default.addObserver(
             forName: UIApplication.didReceiveMemoryWarningNotification,
             object: nil,
@@ -32,6 +35,9 @@ struct ICCCAlertApp: App {
         ) { _ in
             ICCCAlertApp.handleMemoryWarning()
         }
+        
+        // ✅ Setup low memory handler
+        setupLowMemoryHandler()
     }
     
     var body: some Scene {
@@ -75,7 +81,7 @@ struct ICCCAlertApp: App {
                         } else {
                             print("🔐 USER LOGGED OUT")
                             // Clean up all resources
-                            PlayerManager.shared.clearAll()
+                            cleanupAllResources()
                         }
                     }
             }
@@ -103,23 +109,26 @@ struct ICCCAlertApp: App {
         switch phase {
         case .active:
             print("📱 App became active")
+            
             if authManager.isAuthenticated && !webSocketService.isConnected {
                 print("🔄 Reconnecting WebSocket...")
                 webSocketService.connect()
             }
+            
             NotificationManager.shared.updateBadgeCount()
             
         case .inactive:
             print("📱 App became inactive")
-            // Pause all video players
-            PlayerManager.shared.clearAll()
+            
+            // ✅ CRITICAL: Aggressive cleanup on inactive
+            cleanupVideoResources()
             
         case .background:
             print("📱 App moved to background")
-            saveAppState()
             
-            // ✅ CRITICAL: Clean up all video players
-            PlayerManager.shared.clearAll()
+            // ✅ CRITICAL: Full cleanup in background
+            cleanupVideoResources()
+            saveAppState()
             
             NotificationManager.shared.updateBadgeCount()
             
@@ -128,12 +137,41 @@ struct ICCCAlertApp: App {
         }
     }
     
+    // ✅ Clean up video resources (players + thumbnails)
+    private func cleanupVideoResources() {
+        print("🧹 Cleaning up video resources...")
+        
+        // 1. Stop all video players
+        PlayerManager.shared.clearAll()
+        
+        // 2. Stop all thumbnail captures
+        ThumbnailCacheManager.shared.stopAllCaptures()
+        
+        // 3. Clear memory cache (keep disk cache)
+        ThumbnailCacheManager.shared.clearChannelThumbnails()
+        
+        print("✅ Video resources cleaned")
+    }
+    
+    // ✅ Clean up ALL resources (logout)
+    private func cleanupAllResources() {
+        print("🧹 Cleaning up ALL resources...")
+        
+        PlayerManager.shared.clearAll()
+        ThumbnailCacheManager.shared.stopAllCaptures()
+        ThumbnailCacheManager.shared.clearChannelThumbnails()
+        EventImageLoader.shared.clearCache()
+        
+        print("✅ All resources cleaned")
+    }
+    
     // ✅ Handle app termination
     private static func handleAppTermination() {
         print("🛑 App will terminate - cleaning up resources")
         
-        // Clean up video players
+        // Clean up video resources
         PlayerManager.shared.clearAll()
+        ThumbnailCacheManager.shared.stopAllCaptures()
         
         // Save state
         SubscriptionManager.shared.forceSave()
@@ -143,17 +181,68 @@ struct ICCCAlertApp: App {
         print("✅ Resources cleaned up")
     }
     
-    // ✅ Handle memory warnings
+    // ✅ Handle memory warnings (CRITICAL)
     private static func handleMemoryWarning() {
-        print("⚠️ MEMORY WARNING - Aggressive cleanup")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print("⚠️ MEMORY WARNING - EMERGENCY CLEANUP")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         
-        // Clear all video players immediately
+        // 1. Stop ALL video players immediately
         PlayerManager.shared.clearAll()
         
-        // Clear image caches
+        // 2. Stop ALL thumbnail captures immediately
+        ThumbnailCacheManager.shared.stopAllCaptures()
+        
+        // 3. Clear ALL image caches
+        ThumbnailCacheManager.shared.clearChannelThumbnails()
         EventImageLoader.shared.clearCache()
         
-        print("🧹 Memory cleanup complete")
+        // 4. Force garbage collection
+        autoreleasepool {
+            // Empty pool to release autorelease objects
+        }
+        
+        print("🧹 Emergency cleanup complete")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    }
+    
+    // ✅ Setup proactive low memory handler
+    private func setupLowMemoryHandler() {
+        // Monitor memory usage every 10 seconds
+        Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { _ in
+            autoreleasepool {
+                let memoryUsage = self.getMemoryUsage()
+                
+                // If using more than 200MB, proactively clean up
+                if memoryUsage > 200 * 1024 * 1024 {
+                    print("⚠️ High memory usage: \(memoryUsage / 1024 / 1024)MB - Proactive cleanup")
+                    
+                    // Cleanup in background
+                    DispatchQueue.global(qos: .background).async {
+                        ThumbnailCacheManager.shared.clearChannelThumbnails()
+                        EventImageLoader.shared.clearCache()
+                    }
+                }
+            }
+        }
+    }
+    
+    // ✅ Get current memory usage
+    private func getMemoryUsage() -> UInt64 {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
+        
+        let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+        
+        if kerr == KERN_SUCCESS {
+            return info.resident_size
+        }
+        
+        return 0
     }
     
     private func saveAppState() {
