@@ -362,7 +362,7 @@ class ThumbnailCacheManager: ObservableObject {
     
     // MARK: - Cleanup & Queue Management
     
-    private func finishFetch(for cameraId: String) {
+    func finishFetch(for cameraId: String) {
         lock.lock()
         activeFetches.remove(cameraId)
         activeWebViewCount -= 1
@@ -465,7 +465,7 @@ class ThumbnailCacheManager: ObservableObject {
     }
 }
 
-// MARK: - Handlers (unchanged)
+// MARK: - Handlers
 class ThumbnailCaptureHandler: NSObject, WKScriptMessageHandler {
     let cameraId: String
     weak var manager: ThumbnailCacheManager?

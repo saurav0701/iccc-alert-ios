@@ -1,5 +1,6 @@
 import SwiftUI
 
+// MARK: - Area Cameras View (Auto-Loading Thumbnails)
 struct AreaCamerasView: View {
     let area: String
     @StateObject private var cameraManager = CameraManager.shared
@@ -56,7 +57,9 @@ struct AreaCamerasView: View {
         }
         .onDisappear {
             DebugLogger.shared.log("🚪 AreaCamerasView disappeared: \(area)", emoji: "🚪", color: .orange)
+            // Clean up all active streams
             PlayerManager.shared.clearAll()
+            // Clear thumbnails from memory (keep on disk)
             thumbnailCache.clearChannelThumbnails()
         }
         .onChange(of: scenePhase) { phase in
@@ -160,7 +163,9 @@ struct AreaCamerasView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemGroupedBackground))
     }
-
+    
+    // MARK: - Refresh Thumbnails
+    
     private func refreshThumbnails() {
         // Clear all visible camera thumbnails
         for camera in cameras where camera.isOnline {
@@ -172,5 +177,7 @@ struct AreaCamerasView: View {
         
         DebugLogger.shared.log("🔄 Refreshing \(cameras.count) thumbnails", emoji: "🔄", color: .blue)
         
+        // Force reload will happen automatically when views reappear
+        // The CameraThumbnail view will detect missing thumbnails and auto-load them
     }
 }

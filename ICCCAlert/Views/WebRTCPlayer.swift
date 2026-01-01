@@ -8,7 +8,7 @@ class PlayerManager: ObservableObject {
     
     private var activePlayers: [String: WKWebView] = [:]
     private let lock = NSLock()
-    private let maxPlayers = 2 // Reduced to 2 concurrent streams max
+    private let maxPlayers = 2
     
     private init() {}
     
@@ -16,13 +16,11 @@ class PlayerManager: ObservableObject {
         lock.lock()
         defer { lock.unlock() }
         
-        // Clean up old player if exists
         if let oldPlayer = activePlayers[cameraId] {
             cleanupWebView(oldPlayer)
             activePlayers.removeValue(forKey: cameraId)
         }
         
-        // Enforce strict limit
         if activePlayers.count >= maxPlayers {
             if let oldestKey = activePlayers.keys.sorted().first {
                 if let oldPlayer = activePlayers.removeValue(forKey: oldestKey) {
@@ -63,7 +61,7 @@ class PlayerManager: ObservableObject {
     }
 }
 
-// MARK: - WebRTC Player View (Crash-Proof)
+// MARK: - WebRTC Player View
 struct WebRTCPlayerView: UIViewRepresentable {
     let streamURL: String
     let cameraId: String
@@ -161,11 +159,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
                     function cleanup() {
                         if (restartTimeout) { clearTimeout(restartTimeout); restartTimeout = null; }
                         if (pc) { 
-                            try { 
-                                pc.close(); 
-                            } catch(e) {
-                                console.error('PC close error:', e);
-                            } 
+                            try { pc.close(); } catch(e) {}
                             pc = null; 
                         }
                         if (video.srcObject) {
@@ -174,18 +168,14 @@ struct WebRTCPlayerView: UIViewRepresentable {
                                     try { t.stop(); } catch(e) {}
                                 }); 
                                 video.srcObject = null; 
-                            } catch(e) {
-                                console.error('Video cleanup error:', e);
-                            }
+                            } catch(e) {}
                         }
                         live.classList.remove('show');
                     }
                     
                     async function start() {
                         if (!isActive || retryCount >= MAX_RETRIES) {
-                            if (retryCount >= MAX_RETRIES) {
-                                log('Max retries reached', true);
-                            }
+                            if (retryCount >= MAX_RETRIES) log('Max retries reached', true);
                             return;
                         }
                         
@@ -203,7 +193,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
                                 if (isActive) { 
                                     log('Stream ready'); 
                                     video.srcObject = e.streams[0]; 
-                                    retryCount = 0; // Reset on success
+                                    retryCount = 0;
                                 } 
                             };
                             
@@ -286,8 +276,6 @@ struct WebRTCPlayerView: UIViewRepresentable {
         
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             print("❌ Navigation Error: \(error.localizedDescription)")
-            
-            // Don't retry automatically on navigation failures
             if retryCount < maxRetries {
                 retryCount += 1
             }
@@ -301,387 +289,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
     }
 }
 
-import SwiftUI
-
-// MARK: - Camera Thumbnail (Improved UI with Fixed Sizing)
-struct CameraThumbnail: View {
-    let camera: Camera
-    let isGridView: Bool
-    @StateObject private var thumbnailCache = ThumbnailCacheManager.shared
-    @State private var isLoading = false
-    @State private var hasFailed = false
-    @State private var hasAttemptedLoad = false
-    
-    var body: some View {
-        GeometryReader { geometry in
-            ZStack {
-                // Background color
-                Color.black
-                
-                // Content
-                contentView
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-                    .clipped()
-            }
-            .frame(width: geometry.size.width, height: geometry.size.height)
-        }
-        .aspectRatio(4/3, contentMode: .fit)
-        .clipped()
-        .onAppear {
-            if !hasAttemptedLoad && camera.isOnline {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    loadThumbnail()
-                }
-            }
-        }
-    }
-    
-    @ViewBuilder
-    private var contentView: some View {
-        if let thumbnail = thumbnailCache.getThumbnail(for: camera.id) {
-            thumbnailImageView(thumbnail)
-        } else if !camera.isOnline {
-            offlineView
-        } else if hasFailed {
-            failedView
-        } else if isLoading {
-            loadingView
-        } else {
-            placeholderView
-        }
-    }
-    
-    private func thumbnailImageView(_ image: UIImage) -> some View {
-        GeometryReader { geo in
-            Image(uiImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: geo.size.width, height: geo.size.height)
-                .clipped()
-        }
-    }
-    
-    private var loadingView: some View {
-        ZStack {
-            Color.black
-            
-            VStack(spacing: isGridView ? 6 : 10) {
-                ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    .scaleEffect(isGridView ? 0.7 : 1.0)
-                
-                Text("Loading...")
-                    .font(.system(size: isGridView ? 10 : 12))
-                    .foregroundColor(.white.opacity(0.8))
-            }
-        }
-    }
-    
-    private var placeholderView: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Color.blue.opacity(0.4),
-                    Color.blue.opacity(0.2)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            
-            VStack(spacing: isGridView ? 4 : 8) {
-                Image(systemName: "photo.fill")
-                    .font(.system(size: isGridView ? 20 : 32))
-                    .foregroundColor(.white.opacity(0.7))
-                
-                if !isGridView {
-                    Text("Tap to load")
-                        .font(.caption2)
-                        .foregroundColor(.white.opacity(0.7))
-                }
-            }
-        }
-        .onTapGesture {
-            if !hasAttemptedLoad {
-                loadThumbnail()
-            }
-        }
-    }
-    
-    private var failedView: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Color.orange.opacity(0.4),
-                    Color.orange.opacity(0.2)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            
-            VStack(spacing: isGridView ? 4 : 8) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: isGridView ? 18 : 24))
-                    .foregroundColor(.white.opacity(0.8))
-                
-                Text(isGridView ? "Retry" : "Tap to retry")
-                    .font(.system(size: isGridView ? 9 : 11))
-                    .foregroundColor(.white.opacity(0.8))
-            }
-        }
-        .onTapGesture {
-            hasFailed = false
-            hasAttemptedLoad = false
-            loadThumbnail()
-        }
-    }
-    
-    private var offlineView: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Color.gray.opacity(0.4),
-                    Color.gray.opacity(0.2)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            
-            VStack(spacing: isGridView ? 4 : 6) {
-                Image(systemName: "video.slash.fill")
-                    .font(.system(size: isGridView ? 18 : 24))
-                    .foregroundColor(.white.opacity(0.6))
-                
-                Text("Offline")
-                    .font(.system(size: isGridView ? 9 : 11))
-                    .foregroundColor(.white.opacity(0.6))
-            }
-        }
-    }
-    
-    private func loadThumbnail() {
-        guard !isLoading, !hasAttemptedLoad, camera.isOnline else { return }
-        
-        hasAttemptedLoad = true
-        isLoading = true
-        hasFailed = false
-        
-        thumbnailCache.fetchThumbnail(for: camera)
-        
-        // Check after timeout
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15.0) {
-            if isLoading && thumbnailCache.getThumbnail(for: camera.id) == nil {
-                isLoading = false
-                hasFailed = true
-            } else {
-                isLoading = false
-            }
-        }
-    }
-}
-
-// MARK: - Improved Camera Grid Card
-struct CameraGridCard: View {
-    let camera: Camera
-    let mode: GridViewMode
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: cardSpacing) {
-            // Thumbnail with fixed aspect ratio
-            CameraThumbnail(camera: camera, isGridView: mode != .list)
-                .cornerRadius(cornerRadius)
-                .overlay(
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .stroke(borderColor, lineWidth: 1)
-                )
-                .overlay(
-                    // Status badge overlay
-                    VStack {
-                        HStack {
-                            Spacer()
-                            statusBadge
-                        }
-                        Spacer()
-                    }
-                    .padding(6)
-                )
-            
-            // Camera info
-            VStack(alignment: .leading, spacing: infoSpacing) {
-                Text(camera.displayName)
-                    .font(titleFont)
-                    .fontWeight(.medium)
-                    .lineLimit(mode == .list ? 2 : 1)
-                    .foregroundColor(.primary)
-                
-                HStack(spacing: 6) {
-                    Image(systemName: "mappin.circle.fill")
-                        .font(.system(size: iconSize))
-                        .foregroundColor(.secondary)
-                    
-                    Text(camera.location.isEmpty ? camera.area : camera.location)
-                        .font(subtitleFont)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                }
-            }
-            .padding(.horizontal, infoHorizontalPadding)
-        }
-        .padding(cardPadding)
-        .background(
-            RoundedRectangle(cornerRadius: cardCornerRadius)
-                .fill(Color(.systemBackground))
-                .shadow(
-                    color: Color.black.opacity(shadowOpacity),
-                    radius: shadowRadius,
-                    x: 0,
-                    y: shadowY
-                )
-        )
-        .opacity(camera.isOnline ? 1 : 0.6)
-    }
-    
-    private var statusBadge: some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(camera.isOnline ? Color.green : Color.red)
-                .frame(width: badgeDotSize, height: badgeDotSize)
-            
-            if mode == .list {
-                Text(camera.isOnline ? "LIVE" : "OFFLINE")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundColor(.white)
-            }
-        }
-        .padding(.horizontal, badgePadding)
-        .padding(.vertical, badgePadding - 2)
-        .background(
-            Capsule()
-                .fill(Color.black.opacity(0.7))
-        )
-    }
-    
-    // MARK: - Computed Properties for Sizing
-    
-    private var cardSpacing: CGFloat {
-        switch mode {
-        case .list: return 12
-        case .grid2x2: return 10
-        case .grid3x3: return 8
-        case .grid4x4: return 6
-        }
-    }
-    
-    private var cardPadding: CGFloat {
-        switch mode {
-        case .list: return 12
-        case .grid2x2: return 10
-        case .grid3x3: return 8
-        case .grid4x4: return 6
-        }
-    }
-    
-    private var cardCornerRadius: CGFloat {
-        switch mode {
-        case .list: return 16
-        case .grid2x2: return 14
-        case .grid3x3: return 12
-        case .grid4x4: return 10
-        }
-    }
-    
-    private var cornerRadius: CGFloat {
-        switch mode {
-        case .list: return 12
-        case .grid2x2: return 10
-        case .grid3x3: return 8
-        case .grid4x4: return 6
-        }
-    }
-    
-    private var infoSpacing: CGFloat {
-        switch mode {
-        case .list: return 6
-        case .grid2x2: return 4
-        case .grid3x3: return 3
-        case .grid4x4: return 2
-        }
-    }
-    
-    private var infoHorizontalPadding: CGFloat {
-        mode == .list ? 0 : 4
-    }
-    
-    private var titleFont: Font {
-        switch mode {
-        case .list: return .subheadline
-        case .grid2x2: return .caption
-        case .grid3x3: return .caption2
-        case .grid4x4: return .system(size: 10)
-        }
-    }
-    
-    private var subtitleFont: Font {
-        switch mode {
-        case .list: return .caption
-        case .grid2x2: return .caption2
-        case .grid3x3: return .system(size: 10)
-        case .grid4x4: return .system(size: 9)
-        }
-    }
-    
-    private var iconSize: CGFloat {
-        switch mode {
-        case .list: return 10
-        case .grid2x2: return 9
-        case .grid3x3, .grid4x4: return 8
-        }
-    }
-    
-    private var badgeDotSize: CGFloat {
-        switch mode {
-        case .list: return 6
-        case .grid2x2: return 5
-        case .grid3x3, .grid4x4: return 4
-        }
-    }
-    
-    private var badgePadding: CGFloat {
-        switch mode {
-        case .list: return 6
-        case .grid2x2: return 5
-        case .grid3x3, .grid4x4: return 4
-        }
-    }
-    
-    private var borderColor: Color {
-        camera.isOnline ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3)
-    }
-    
-    private var shadowOpacity: Double {
-        switch mode {
-        case .list: return 0.1
-        case .grid2x2: return 0.08
-        case .grid3x3, .grid4x4: return 0.06
-        }
-    }
-    
-    private var shadowRadius: CGFloat {
-        switch mode {
-        case .list: return 8
-        case .grid2x2: return 6
-        case .grid3x3, .grid4x4: return 4
-        }
-    }
-    
-    private var shadowY: CGFloat {
-        switch mode {
-        case .list: return 3
-        case .grid2x2: return 2
-        case .grid3x3, .grid4x4: return 1
-        }
-    }
-}
-
+// MARK: - Fullscreen Player
 struct FullscreenPlayerView: View {
     let camera: Camera
     @Environment(\.presentationMode) var presentationMode
@@ -797,7 +405,7 @@ struct FullscreenPlayerView: View {
     }
 }
 
-// MARK: - Grid Modes (Unchanged)
+// MARK: - Grid Modes
 enum GridViewMode: String, CaseIterable, Identifiable {
     case list = "List", grid2x2 = "2×2", grid3x3 = "3×3", grid4x4 = "4×4"
     
@@ -816,82 +424,6 @@ enum GridViewMode: String, CaseIterable, Identifiable {
         case .grid2x2: return "square.grid.2x2"
         case .grid3x3: return "square.grid.3x3"
         case .grid4x4: return "square.grid.4x4"
-        }
-    }
-}
-
-// MARK: - Camera Grid Card (Unchanged)
-struct CameraGridCard: View {
-    let camera: Camera
-    let mode: GridViewMode
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            CameraThumbnail(camera: camera, isGridView: mode != .list)
-                .frame(height: height)
-                .cornerRadius(12)
-                .overlay(RoundedRectangle(cornerRadius: 12)
-                    .stroke(camera.isOnline ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1))
-            
-            VStack(alignment: .leading, spacing: 4) {
-                Text(camera.displayName).font(titleFont).fontWeight(.medium)
-                    .lineLimit(mode == .list ? 2 : 1).foregroundColor(.primary)
-                HStack(spacing: 4) {
-                    Circle().fill(camera.isOnline ? Color.green : Color.gray).frame(width: dotSize, height: dotSize)
-                    Text(camera.location.isEmpty ? camera.area : camera.location)
-                        .font(subtitleFont).foregroundColor(.secondary).lineLimit(1)
-                }
-            }
-            .padding(.horizontal, mode == .list ? 0 : 4)
-        }
-        .padding(padding)
-        .background(Color(.systemBackground))
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.05), radius: 5, y: 2)
-        .opacity(camera.isOnline ? 1 : 0.6)
-    }
-    
-    private var height: CGFloat {
-        switch mode {
-        case .list: return 140
-        case .grid2x2: return 120
-        case .grid3x3: return 100
-        case .grid4x4: return 80
-        }
-    }
-    
-    private var padding: CGFloat {
-        switch mode {
-        case .list: return 12
-        case .grid2x2: return 10
-        case .grid3x3: return 8
-        case .grid4x4: return 6
-        }
-    }
-    
-    private var titleFont: Font {
-        switch mode {
-        case .list: return .subheadline
-        case .grid2x2: return .caption
-        case .grid3x3: return .caption2
-        case .grid4x4: return .system(size: 10)
-        }
-    }
-    
-    private var subtitleFont: Font {
-        switch mode {
-        case .list: return .caption
-        case .grid2x2: return .caption2
-        case .grid3x3: return .system(size: 10)
-        case .grid4x4: return .system(size: 9)
-        }
-    }
-    
-    private var dotSize: CGFloat {
-        switch mode {
-        case .list: return 6
-        case .grid2x2: return 5
-        case .grid3x3, .grid4x4: return 4
         }
     }
 }
