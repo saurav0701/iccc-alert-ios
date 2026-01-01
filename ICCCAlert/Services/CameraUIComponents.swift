@@ -1,6 +1,6 @@
 import SwiftUI
 
-// MARK: - Camera Thumbnail (Auto-Loading with Fixed Sizing)
+// MARK: - Camera Thumbnail (Auto-Loading When Visible)
 struct CameraThumbnail: View {
     let camera: Camera
     let isGridView: Bool
@@ -24,6 +24,12 @@ struct CameraThumbnail: View {
         }
         .aspectRatio(4/3, contentMode: .fit)
         .clipped()
+        .onAppear {
+            // Auto-load when thumbnail appears in view
+            if camera.isOnline && !hasAttemptedLoad {
+                loadThumbnail()
+            }
+        }
     }
     
     @ViewBuilder
@@ -84,15 +90,10 @@ struct CameraThumbnail: View {
                     .foregroundColor(.white.opacity(0.7))
                 
                 if !isGridView {
-                    Text("Tap to load")
+                    Text("Loading...")
                         .font(.caption2)
                         .foregroundColor(.white.opacity(0.7))
                 }
-            }
-        }
-        .onTapGesture {
-            if !hasAttemptedLoad && !isLoading {
-                loadThumbnail()
             }
         }
     }
@@ -155,10 +156,11 @@ struct CameraThumbnail: View {
         isLoading = true
         hasFailed = false
         
+        // Request thumbnail from cache manager
         thumbnailCache.fetchThumbnail(for: camera)
         
         // Check after timeout
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15.0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12.0) {
             if isLoading && thumbnailCache.getThumbnail(for: camera.id) == nil {
                 isLoading = false
                 hasFailed = true
@@ -169,7 +171,7 @@ struct CameraThumbnail: View {
     }
 }
 
-// MARK: - Camera Grid Card (Improved with Fixed Sizing)
+// MARK: - Camera Grid Card (Same as before)
 struct CameraGridCard: View {
     let camera: Camera
     let mode: GridViewMode

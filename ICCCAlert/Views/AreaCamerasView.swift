@@ -1,6 +1,6 @@
 import SwiftUI
 
-// MARK: - Area Cameras View (Auto-Loading Thumbnails)
+// MARK: - Area Cameras View (Auto-Loading Visible Thumbnails)
 struct AreaCamerasView: View {
     let area: String
     @StateObject private var cameraManager = CameraManager.shared
@@ -45,15 +45,8 @@ struct AreaCamerasView: View {
             }
             
             ToolbarItem(placement: .navigationBarTrailing) {
-                Menu {
-                    Button(action: loadAllThumbnails) {
-                        Label("Load All Thumbnails", systemImage: "photo.on.rectangle.angled")
-                    }
-                    Button(action: refreshThumbnails) {
-                        Label("Refresh Thumbnails", systemImage: "arrow.clockwise")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
+                Button(action: refreshThumbnails) {
+                    Image(systemName: "arrow.clockwise")
                         .font(.system(size: 18))
                 }
             }
@@ -173,23 +166,6 @@ struct AreaCamerasView: View {
     
     // MARK: - Refresh Thumbnails
     
-    private func loadAllThumbnails() {
-        DebugLogger.shared.log("📸 Loading all thumbnails...", emoji: "📸", color: .blue)
-        
-        // Load thumbnails with staggered delay to prevent freezing
-        let onlineCameras = cameras.filter { $0.isOnline }
-        
-        for (index, camera) in onlineCameras.enumerated() {
-            let delay = Double(index) * 0.5 // 0.5 second delay between each
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                thumbnailCache.fetchThumbnail(for: camera)
-            }
-        }
-        
-        // Haptic feedback
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-    }
-    
     private func refreshThumbnails() {
         // Clear all visible camera thumbnails
         for camera in cameras where camera.isOnline {
@@ -199,6 +175,6 @@ struct AreaCamerasView: View {
         // Trigger haptic feedback
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         
-        DebugLogger.shared.log("🔄 Thumbnails cleared, tap to reload", emoji: "🔄", color: .blue)
+        DebugLogger.shared.log("🔄 Thumbnails cleared, will reload as you scroll", emoji: "🔄", color: .blue)
     }
 }
