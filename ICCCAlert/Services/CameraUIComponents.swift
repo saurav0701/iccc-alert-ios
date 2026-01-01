@@ -24,13 +24,6 @@ struct CameraThumbnail: View {
         }
         .aspectRatio(4/3, contentMode: .fit)
         .clipped()
-        .onAppear {
-            if !hasAttemptedLoad && camera.isOnline {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    loadThumbnail()
-                }
-            }
-        }
     }
     
     @ViewBuilder
@@ -98,7 +91,7 @@ struct CameraThumbnail: View {
             }
         }
         .onTapGesture {
-            if !hasAttemptedLoad {
+            if !hasAttemptedLoad && !isLoading {
                 loadThumbnail()
             }
         }

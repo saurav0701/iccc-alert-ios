@@ -18,9 +18,9 @@ class ThumbnailCacheManager: ObservableObject {
     
     // Rate limiting to prevent crashes
     private var lastFetchTime: [String: Date] = [:]
-    private let minFetchInterval: TimeInterval = 2.0 // Minimum 2 seconds between fetches
+    private let minFetchInterval: TimeInterval = 3.0 // Minimum 3 seconds between fetches
     private var activeWebViewCount = 0
-    private let maxConcurrentWebViews = 3 // Maximum 3 concurrent captures
+    private let maxConcurrentWebViews = 2 // Maximum 2 concurrent captures (reduced)
     private var fetchQueue: [(Camera, Bool)] = [] // Queue for pending fetches
     
     private init() {
@@ -29,8 +29,8 @@ class ThumbnailCacheManager: ObservableObject {
         
         try? fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
         
-        cache.countLimit = 100 // Reduced from 200
-        cache.totalCostLimit = 30 * 1024 * 1024 // Reduced to 30MB
+        cache.countLimit = 50 // Reduced from 100
+        cache.totalCostLimit = 20 * 1024 * 1024 // Reduced to 20MB
         
         loadCachedThumbnails()
         
@@ -369,7 +369,7 @@ class ThumbnailCacheManager: ObservableObject {
         lock.unlock()
         
         // Process next in queue
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             self.processQueue()
         }
     }

@@ -45,9 +45,16 @@ struct AreaCamerasView: View {
             }
             
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: refreshThumbnails) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 16))
+                Menu {
+                    Button(action: loadAllThumbnails) {
+                        Label("Load All Thumbnails", systemImage: "photo.on.rectangle.angled")
+                    }
+                    Button(action: refreshThumbnails) {
+                        Label("Refresh Thumbnails", systemImage: "arrow.clockwise")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 18))
                 }
             }
         }
@@ -166,6 +173,23 @@ struct AreaCamerasView: View {
     
     // MARK: - Refresh Thumbnails
     
+    private func loadAllThumbnails() {
+        DebugLogger.shared.log("📸 Loading all thumbnails...", emoji: "📸", color: .blue)
+        
+        // Load thumbnails with staggered delay to prevent freezing
+        let onlineCameras = cameras.filter { $0.isOnline }
+        
+        for (index, camera) in onlineCameras.enumerated() {
+            let delay = Double(index) * 0.5 // 0.5 second delay between each
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                thumbnailCache.fetchThumbnail(for: camera)
+            }
+        }
+        
+        // Haptic feedback
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+    
     private func refreshThumbnails() {
         // Clear all visible camera thumbnails
         for camera in cameras where camera.isOnline {
@@ -175,9 +199,6 @@ struct AreaCamerasView: View {
         // Trigger haptic feedback
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         
-        DebugLogger.shared.log("🔄 Refreshing \(cameras.count) thumbnails", emoji: "🔄", color: .blue)
-        
-        // Force reload will happen automatically when views reappear
-        // The CameraThumbnail view will detect missing thumbnails and auto-load them
+        DebugLogger.shared.log("🔄 Thumbnails cleared, tap to reload", emoji: "🔄", color: .blue)
     }
 }
