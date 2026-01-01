@@ -99,7 +99,7 @@ struct CameraThumbnail: View {
                         .foregroundColor(.orange)
                     
                     if !isGridView {
-                        Text("Tap to retry")
+                        Text("Tap to load")
                             .font(.caption2)
                             .foregroundColor(.orange)
                     }

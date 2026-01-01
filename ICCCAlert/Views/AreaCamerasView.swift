@@ -25,7 +25,7 @@ struct AreaCamerasView: View {
     
     var staleThumbnailCount: Int {
         cameras.filter { camera in
-            camera.isOnline && !thumbnailCache.isThumbnailFresh(for: camera.id)
+            camera.isOnline && !thumbnailCache.isThumbnailFresh(for: camera.id) && !thumbnailCache.hasFailed(for: camera.id)
         }.count
     }
     
@@ -58,14 +58,16 @@ struct AreaCamerasView: View {
             
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button(action: refreshAllThumbnails) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 16))
-                        
+                    HStack(spacing: 6) {
                         if isRefreshing {
                             ProgressView()
                                 .progressViewStyle(CircularProgressViewStyle())
-                                .scaleEffect(0.7)
+                                .scaleEffect(0.8)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 16))
+                            Text("Refresh All")
+                                .font(.caption)
                         }
                     }
                 }
@@ -230,7 +232,7 @@ struct AreaCamerasView: View {
         .background(Color(.systemGroupedBackground))
     }
 
-    // MARK: - Refresh All Thumbnails (Batch Operation)
+    // MARK: - Refresh All Thumbnails
     
     private func refreshAllThumbnails() {
         guard !isRefreshing else { return }
@@ -238,14 +240,12 @@ struct AreaCamerasView: View {
         isRefreshing = true
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         
-        let staleCameras = cameras.filter { camera in
-            camera.isOnline && !thumbnailCache.isThumbnailFresh(for: camera.id)
-        }
+        let onlineCameras = cameras.filter { $0.isOnline }
         
-        DebugLogger.shared.log("🔄 Refreshing \(staleCameras.count) stale thumbnails", emoji: "🔄", color: .blue)
+        DebugLogger.shared.log("🔄 Clearing \(onlineCameras.count) thumbnails", emoji: "🔄", color: .blue)
         
-        // Clear stale thumbnails first
-        for camera in staleCameras {
+        // Clear all thumbnails
+        for camera in onlineCameras {
             thumbnailCache.clearThumbnail(for: camera.id)
         }
         
@@ -254,7 +254,7 @@ struct AreaCamerasView: View {
             self.isRefreshing = false
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             
-            DebugLogger.shared.log("✅ Thumbnails cleared - users can now tap to reload", emoji: "✅", color: .green)
+            DebugLogger.shared.log("✅ Thumbnails cleared - will auto-reload", emoji: "✅", color: .green)
         }
     }
 }

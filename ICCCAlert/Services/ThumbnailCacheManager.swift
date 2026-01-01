@@ -25,10 +25,6 @@ class ThumbnailCacheManager: ObservableObject {
     // Maximum concurrent fetches to prevent crashes
     private let maxConcurrentFetches = 3
     
-    // Retry limit - after this, manual refresh only
-    private let maxAutoRetries = 1
-    private var retryAttempts: [String: Int] = [:]
-    
     private init() {
         let paths = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)
         cacheDirectory = paths[0].appendingPathComponent("CameraThumbnails")
