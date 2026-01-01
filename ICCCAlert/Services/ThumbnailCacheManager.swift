@@ -3,13 +3,14 @@ import UIKit
 import WebKit
 import Combine
 
-// MARK: - Thumbnail Cache Manager (Crash-Proof with Manual Refresh)
+// MARK: - Thumbnail Cache Manager (Smart Auto-Load with Crash Prevention)
 class ThumbnailCacheManager: ObservableObject {
     static let shared = ThumbnailCacheManager()
     
     @Published private(set) var thumbnails: [String: UIImage] = [:]
     @Published private(set) var thumbnailTimestamps: [String: Date] = [:]
     @Published private(set) var failedCameras: Set<String> = []
+    @Published private(set) var loadingCameras: Set<String> = []
     
     private let cache = NSCache<NSString, UIImage>()
     private let fileManager = FileManager.default
@@ -22,7 +23,11 @@ class ThumbnailCacheManager: ObservableObject {
     private let cacheDuration: TimeInterval = 3 * 60 * 60
     
     // Maximum concurrent fetches to prevent crashes
-    private let maxConcurrentFetches = 2
+    private let maxConcurrentFetches = 3
+    
+    // Retry limit - after this, manual refresh only
+    private let maxAutoRetries = 1
+    private var retryAttempts: [String: Int] = [:]
     
     private init() {
         let paths = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)
@@ -52,6 +57,14 @@ class ThumbnailCacheManager: ObservableObject {
         return thumbnails[cameraId]
     }
     
+    func isLoading(for cameraId: String) -> Bool {
+        return loadingCameras.contains(cameraId)
+    }
+    
+    func hasFailed(for cameraId: String) -> Bool {
+        return failedCameras.contains(cameraId)
+    }
+    
     // MARK: - Check if Thumbnail is Fresh
     
     func isThumbnailFresh(for cameraId: String) -> Bool {
@@ -65,20 +78,24 @@ class ThumbnailCacheManager: ObservableObject {
     
     // MARK: - Check if Should Auto-Load
     
-    func shouldAutoLoad(for cameraId: String) -> Bool {
+    private func shouldAutoLoad(for cameraId: String) -> Bool {
         // Don't auto-load if:
         // 1. Already have fresh thumbnail
-        // 2. Camera is in failed state
-        // 3. Too many concurrent fetches
-        
         if isThumbnailFresh(for: cameraId) {
             return false
         }
         
-        if failedCameras.contains(cameraId) {
+        // 2. Already loading
+        if loadingCameras.contains(cameraId) {
             return false
         }
         
+        // 3. Exceeded retry attempts (manual refresh only)
+        if let attempts = retryAttempts[cameraId], attempts >= maxAutoRetries {
+            return false
+        }
+        
+        // 4. Too many concurrent fetches
         lock.lock()
         let currentFetches = activeFetches.count
         lock.unlock()
@@ -90,60 +107,77 @@ class ThumbnailCacheManager: ObservableObject {
         return true
     }
     
+    // MARK: - Auto Fetch (Smart - with Queue)
+    
+    func autoFetchThumbnail(for camera: Camera) {
+        guard camera.isOnline else { return }
+        
+        // Check if should auto-load
+        guard shouldAutoLoad(for: camera.id) else {
+            return
+        }
+        
+        // Small delay to prevent all thumbnails loading at once
+        let delay = Double.random(in: 0.1...0.5)
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            self.fetchThumbnail(for: camera, isManual: false)
+        }
+    }
+    
     // MARK: - Manual Refresh
     
     func manualRefresh(for camera: Camera, completion: @escaping (Bool) -> Void) {
+        // Reset retry counter for manual refresh
+        retryAttempts[camera.id] = 0
+        
+        // Remove from failed state
+        failedCameras.remove(camera.id)
+        
+        DebugLogger.shared.log("🔄 Manual refresh: \(camera.displayName)", emoji: "🔄", color: .blue)
+        
+        fetchThumbnail(for: camera, isManual: true, completion: completion)
+    }
+    
+    // MARK: - Core Fetch Logic
+    
+    private func fetchThumbnail(for camera: Camera, isManual: Bool, completion: ((Bool) -> Void)? = nil) {
         lock.lock()
         let isAlreadyFetching = activeFetches.contains(camera.id)
         lock.unlock()
         
         if isAlreadyFetching {
-            DebugLogger.shared.log("⚠️ Already fetching: \(camera.id)", emoji: "⚠️", color: .orange)
-            completion(false)
+            completion?(false)
             return
         }
-        
-        // Remove from failed state if present
-        failedCameras.remove(camera.id)
-        
-        DebugLogger.shared.log("🔄 Manual refresh requested: \(camera.displayName)", emoji: "🔄", color: .blue)
         
         lock.lock()
         activeFetches.insert(camera.id)
         lock.unlock()
         
         DispatchQueue.main.async {
-            self.captureFromStream(camera: camera) { success in
-                completion(success)
+            self.loadingCameras.insert(camera.id)
+        }
+        
+        let logPrefix = isManual ? "🔧" : "📸"
+        DebugLogger.shared.log("\(logPrefix) Loading thumbnail: \(camera.displayName)", emoji: logPrefix, color: .blue)
+        
+        DispatchQueue.main.async {
+            self.captureFromStream(camera: camera, isManual: isManual) { success in
+                DispatchQueue.main.async {
+                    self.loadingCameras.remove(camera.id)
+                }
+                completion?(success)
             }
         }
     }
     
-    // MARK: - Fetch Thumbnail (Smart - No Auto-Retry)
+    // MARK: - Capture from Stream
     
-    func fetchThumbnail(for camera: Camera) {
-        // Only fetch if should auto-load
-        guard shouldAutoLoad(for: camera.id) else {
-            return
-        }
-        
-        lock.lock()
-        activeFetches.insert(camera.id)
-        lock.unlock()
-        
-        DebugLogger.shared.log("📸 Auto-loading thumbnail: \(camera.displayName)", emoji: "📸", color: .blue)
-        
-        DispatchQueue.main.async {
-            self.captureFromStream(camera: camera) { _ in }
-        }
-    }
-    
-    // MARK: - Capture from Stream (with Completion)
-    
-    private func captureFromStream(camera: Camera, completion: @escaping (Bool) -> Void) {
+    private func captureFromStream(camera: Camera, isManual: Bool, completion: @escaping (Bool) -> Void) {
         guard let streamURL = camera.webrtcStreamURL else {
             DebugLogger.shared.log("⚠️ No stream URL: \(camera.id)", emoji: "⚠️", color: .orange)
-            markAsFailed(camera.id)
+            markAsFailed(camera.id, isManual: isManual)
             removeFetchTask(for: camera.id)
             completion(false)
             return
@@ -184,8 +218,8 @@ class ThumbnailCacheManager: ObservableObject {
         let html = generateCaptureHTML(streamURL: streamURL)
         webView.loadHTMLString(html, baseURL: nil)
         
-        // Timeout after 20 seconds (increased for reliability)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 20.0) { [weak self] in
+        // Timeout: 15 seconds (reasonable for auto-load)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15.0) { [weak self] in
             guard let self = self else { return }
             
             self.lock.lock()
@@ -193,8 +227,8 @@ class ThumbnailCacheManager: ObservableObject {
             self.lock.unlock()
             
             if stillActive {
-                DebugLogger.shared.log("⏱️ Capture timeout: \(camera.id)", emoji: "⏱️", color: .orange)
-                self.markAsFailed(camera.id)
+                DebugLogger.shared.log("⏱️ Timeout: \(camera.id)", emoji: "⏱️", color: .orange)
+                self.markAsFailed(camera.id, isManual: isManual)
                 self.cleanupCaptureWebView(for: camera.id)
                 self.removeFetchTask(for: camera.id)
                 completion(false)
@@ -245,7 +279,7 @@ class ThumbnailCacheManager: ObservableObject {
                         await pc.setLocalDescription(offer);
                         
                         const controller = new AbortController();
-                        const timeoutId = setTimeout(() => controller.abort(), 15000);
+                        const timeoutId = setTimeout(() => controller.abort(), 12000);
                         
                         const res = await fetch(streamUrl, {
                             method: 'POST',
@@ -318,7 +352,7 @@ class ThumbnailCacheManager: ObservableObject {
         
         guard let commaIndex = imageDataURL.firstIndex(of: ",") else {
             DebugLogger.shared.log("❌ Invalid image data: \(cameraId)", emoji: "❌", color: .red)
-            markAsFailed(cameraId)
+            markAsFailed(cameraId, isManual: false)
             cleanupCaptureWebView(for: cameraId)
             removeFetchTask(for: cameraId)
             completion(false)
@@ -330,7 +364,7 @@ class ThumbnailCacheManager: ObservableObject {
         guard let imageData = Data(base64Encoded: base64String),
               let image = UIImage(data: imageData) else {
             DebugLogger.shared.log("❌ Failed to decode: \(cameraId)", emoji: "❌", color: .red)
-            markAsFailed(cameraId)
+            markAsFailed(cameraId, isManual: false)
             cleanupCaptureWebView(for: cameraId)
             removeFetchTask(for: cameraId)
             completion(false)
@@ -345,7 +379,8 @@ class ThumbnailCacheManager: ObservableObject {
             self.cache.setObject(resizedImage, forKey: cameraId as NSString)
             self.thumbnailTimestamps[cameraId] = Date()
             
-            // Remove from failed state
+            // Success - reset retry counter and remove from failed
+            self.retryAttempts[cameraId] = 0
             self.failedCameras.remove(cameraId)
             
             DebugLogger.shared.log("✅ Thumbnail saved: \(cameraId)", emoji: "✅", color: .green)
@@ -362,9 +397,23 @@ class ThumbnailCacheManager: ObservableObject {
     
     // MARK: - Mark as Failed
     
-    private func markAsFailed(_ cameraId: String) {
-        failedCameras.insert(cameraId)
-        DebugLogger.shared.log("❌ Marked as failed: \(cameraId)", emoji: "❌", color: .red)
+    private func markAsFailed(_ cameraId: String, isManual: Bool) {
+        if !isManual {
+            // Increment retry counter for auto-load failures
+            let attempts = (retryAttempts[cameraId] ?? 0) + 1
+            retryAttempts[cameraId] = attempts
+            
+            if attempts >= maxAutoRetries {
+                failedCameras.insert(cameraId)
+                DebugLogger.shared.log("❌ Max retries reached: \(cameraId) - manual refresh required", emoji: "❌", color: .red)
+            } else {
+                DebugLogger.shared.log("⚠️ Failed (attempt \(attempts)/\(maxAutoRetries)): \(cameraId)", emoji: "⚠️", color: .orange)
+            }
+        } else {
+            // Manual refresh failed - don't count against auto-retry
+            failedCameras.insert(cameraId)
+            DebugLogger.shared.log("❌ Manual refresh failed: \(cameraId)", emoji: "❌", color: .red)
+        }
     }
     
     // MARK: - Image Utilities
@@ -472,6 +521,7 @@ class ThumbnailCacheManager: ObservableObject {
         thumbnailTimestamps.removeValue(forKey: cameraId)
         cache.removeObject(forKey: cameraId as NSString)
         failedCameras.remove(cameraId)
+        retryAttempts.removeValue(forKey: cameraId)
         lock.unlock()
         
         cleanupCaptureWebView(for: cameraId)
@@ -485,6 +535,7 @@ class ThumbnailCacheManager: ObservableObject {
         thumbnails.removeAll()
         thumbnailTimestamps.removeAll()
         failedCameras.removeAll()
+        retryAttempts.removeAll()
         cache.removeAllObjects()
         activeFetches.removeAll()
         let webViews = captureWebViews
@@ -516,7 +567,7 @@ class ThumbnailCacheManager: ObservableObject {
     }
 }
 
-// MARK: - Capture Handler (with Completion)
+// MARK: - Capture Handler
 class ThumbnailCaptureHandler: NSObject, WKScriptMessageHandler {
     let cameraId: String
     weak var manager: ThumbnailCacheManager?

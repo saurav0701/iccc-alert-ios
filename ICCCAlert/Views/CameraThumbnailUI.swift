@@ -1,11 +1,10 @@
 import SwiftUI
 
-// MARK: - Camera Thumbnail (Manual Refresh Only - No Auto-Load)
+// MARK: - Camera Thumbnail (Auto-Load with Manual Retry)
 struct CameraThumbnail: View {
     let camera: Camera
     let isGridView: Bool
     @StateObject private var thumbnailCache = ThumbnailCacheManager.shared
-    @State private var isLoading = false
     
     var body: some View {
         GeometryReader { geometry in
@@ -16,17 +15,26 @@ struct CameraThumbnail: View {
                 } else if !camera.isOnline {
                     // Offline state
                     offlineView
-                } else if isLoading {
+                } else if thumbnailCache.isLoading(for: camera.id) {
                     // Loading state
                     loadingView
+                } else if thumbnailCache.hasFailed(for: camera.id) {
+                    // Failed - show manual retry button
+                    failedView
                 } else {
-                    // Manual refresh button
-                    manualRefreshView
+                    // Initial state - auto-loading
+                    loadingView
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .contentShape(Rectangle())
+        .onAppear {
+            // Auto-load thumbnail when view appears
+            if camera.isOnline && thumbnailCache.getThumbnail(for: camera.id) == nil {
+                thumbnailCache.autoFetchThumbnail(for: camera)
+            }
+        }
     }
     
     private func thumbnailImageView(_ image: UIImage, geometry: GeometryProxy) -> some View {
@@ -76,30 +84,28 @@ struct CameraThumbnail: View {
         }
     }
     
-    private var manualRefreshView: some View {
+    private var failedView: some View {
         ZStack {
             LinearGradient(
-                colors: [Color.blue.opacity(0.2), Color.blue.opacity(0.05)],
+                colors: [Color.orange.opacity(0.3), Color.orange.opacity(0.1)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
             
-            VStack(spacing: 8) {
-                Button(action: loadThumbnail) {
-                    VStack(spacing: 6) {
-                        Image(systemName: "arrow.clockwise.circle.fill")
-                            .font(.system(size: isGridView ? 28 : 36))
-                            .foregroundColor(.blue)
-                        
-                        if !isGridView {
-                            Text("Tap to load")
-                                .font(.caption)
-                                .foregroundColor(.blue)
-                        }
+            Button(action: retryLoad) {
+                VStack(spacing: 6) {
+                    Image(systemName: "arrow.clockwise.circle.fill")
+                        .font(.system(size: isGridView ? 24 : 32))
+                        .foregroundColor(.orange)
+                    
+                    if !isGridView {
+                        Text("Tap to retry")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
                     }
                 }
-                .buttonStyle(PlainButtonStyle())
             }
+            .buttonStyle(PlainButtonStyle())
         }
     }
     
@@ -123,27 +129,21 @@ struct CameraThumbnail: View {
         }
     }
     
-    // MARK: - Load Thumbnail (Manual Only)
+    // MARK: - Manual Retry
     
-    private func loadThumbnail() {
-        guard !isLoading, camera.isOnline else { return }
+    private func retryLoad() {
+        guard camera.isOnline else { return }
         
         // Haptic feedback
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         
-        isLoading = true
-        
-        DebugLogger.shared.log("🔄 Manual load: \(camera.displayName)", emoji: "🔄", color: .blue)
+        DebugLogger.shared.log("🔄 Manual retry: \(camera.displayName)", emoji: "🔄", color: .blue)
         
         thumbnailCache.manualRefresh(for: camera) { success in
             DispatchQueue.main.async {
-                self.isLoading = false
-                
                 if success {
-                    DebugLogger.shared.log("✅ Loaded: \(camera.displayName)", emoji: "✅", color: .green)
                     UINotificationFeedbackGenerator().notificationOccurred(.success)
                 } else {
-                    DebugLogger.shared.log("❌ Failed: \(camera.displayName)", emoji: "❌", color: .red)
                     UINotificationFeedbackGenerator().notificationOccurred(.error)
                 }
             }
@@ -152,7 +152,6 @@ struct CameraThumbnail: View {
 }
 
 // MARK: - Camera Grid Card (Fixed Thumbnail Container)
-// NOTE: Remove the old CameraGridCard from WebRTCPlayer.swift and use this one
 struct CameraGridCardFixed: View {
     let camera: Camera
     let mode: GridViewMode
