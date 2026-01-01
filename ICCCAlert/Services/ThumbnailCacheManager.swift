@@ -19,6 +19,10 @@ class ThumbnailCacheManager: ObservableObject {
     private var captureWebViews: [String: WKWebView] = [:]
     private let lock = NSLock()
     
+    // Retry tracking
+    private var retryAttempts: [String: Int] = [:]
+    private let maxAutoRetries = 3
+    
     // Cache duration: 3 hours
     private let cacheDuration: TimeInterval = 3 * 60 * 60
     
