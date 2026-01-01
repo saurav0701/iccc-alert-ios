@@ -23,21 +23,10 @@ struct AreaCamerasView: View {
         return result.sorted { $0.displayName < $1.displayName }
     }
     
-    var staleThumbnailCount: Int {
-        cameras.filter { camera in
-            camera.isOnline && !thumbnailCache.isThumbnailFresh(for: camera.id) && !thumbnailCache.hasFailed(for: camera.id)
-        }.count
-    }
-    
     var body: some View {
         VStack(spacing: 0) {
             statsBar
             filterBar
-            
-            // Show refresh banner if thumbnails are stale
-            if staleThumbnailCount > 0 {
-                refreshBanner
-            }
             
             cameras.isEmpty ? AnyView(emptyView) : AnyView(cameraGridView)
         }
@@ -149,53 +138,6 @@ struct AreaCamerasView: View {
         .background(Color(.systemGroupedBackground))
     }
     
-    private var refreshBanner: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "clock.arrow.circlepath")
-                .foregroundColor(.orange)
-                .font(.system(size: 18))
-            
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Thumbnails may be outdated")
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundColor(.primary)
-                
-                Text("\(staleThumbnailCount) camera\(staleThumbnailCount == 1 ? "" : "s") older than 3 hours")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-            
-            Spacer()
-            
-            Button(action: refreshAllThumbnails) {
-                if isRefreshing {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        .scaleEffect(0.8)
-                } else {
-                    Text("Refresh All")
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Color.orange)
-            .foregroundColor(.white)
-            .cornerRadius(8)
-            .disabled(isRefreshing)
-        }
-        .padding()
-        .background(Color.orange.opacity(0.1))
-        .overlay(
-            Rectangle()
-                .frame(height: 1)
-                .foregroundColor(Color.orange.opacity(0.3)),
-            alignment: .bottom
-        )
-    }
-    
     private var cameraGridView: some View {
         ScrollView {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: gridMode.columns), spacing: 12) {
@@ -242,19 +184,19 @@ struct AreaCamerasView: View {
         
         let onlineCameras = cameras.filter { $0.isOnline }
         
-        DebugLogger.shared.log("🔄 Clearing \(onlineCameras.count) thumbnails", emoji: "🔄", color: .blue)
+        DebugLogger.shared.log("🔄 Refreshing \(onlineCameras.count) thumbnails", emoji: "🔄", color: .blue)
         
-        // Clear all thumbnails
+        // Clear all thumbnails for visible cameras
         for camera in onlineCameras {
             thumbnailCache.clearThumbnail(for: camera.id)
         }
         
-        // Small delay to ensure UI updates
+        // Small delay to ensure UI updates and thumbnails reload
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             self.isRefreshing = false
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             
-            DebugLogger.shared.log("✅ Thumbnails cleared - will auto-reload", emoji: "✅", color: .green)
+            DebugLogger.shared.log("✅ Thumbnails cleared - reloading", emoji: "✅", color: .green)
         }
     }
 }
