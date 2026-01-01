@@ -198,7 +198,7 @@ struct AreaCamerasView: View {
         ScrollView {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: gridMode.columns), spacing: 12) {
                 ForEach(cameras, id: \.id) { camera in
-                    CameraGridCard(camera: camera, mode: gridMode)
+                    CameraGridCardFixed(camera: camera, mode: gridMode)
                         .onTapGesture {
                             if camera.isOnline {
                                 selectedCamera = camera

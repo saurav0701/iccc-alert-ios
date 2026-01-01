@@ -175,7 +175,7 @@ struct DebugView: View {
             
             // Camera Statistics
             Section(header: Text("Camera Stream Status")) {
-                let stats = logger.getCamerasByStatus()
+                let _ = logger.getCamerasByStatus()
                 
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
@@ -225,13 +225,19 @@ struct DebugView: View {
     // MARK: - Thumbnails Tab
     private var thumbnailsTab: some View {
         List {
-            // Thumbnail Test Section
+            // Thumbnail Test Section - FIXED
             Section(header: Text("Thumbnail Capture Test")) {
                 Button(action: {
-                    // Test with first online camera
+                    // Test with first online camera - use manualRefresh instead
                     if let testCamera = cameraManager.cameras.first(where: { $0.isOnline }) {
                         DebugLogger.shared.log("🧪 Testing thumbnail capture for: \(testCamera.displayName)", emoji: "🧪", color: .blue)
-                        thumbnailCache.fetchThumbnail(for: testCamera, force: true)
+                        thumbnailCache.manualRefresh(for: testCamera) { success in
+                            if success {
+                                DebugLogger.shared.log("✅ Test capture successful", emoji: "✅", color: .green)
+                            } else {
+                                DebugLogger.shared.log("❌ Test capture failed", emoji: "❌", color: .red)
+                            }
+                        }
                     } else {
                         DebugLogger.shared.log("⚠️ No online cameras available for test", emoji: "⚠️", color: .orange)
                     }
@@ -296,6 +302,14 @@ struct DebugView: View {
                                 Text("\(Int(image.size.width))x\(Int(image.size.height))")
                                     .font(.system(size: 10))
                                     .foregroundColor(.secondary)
+                                
+                                if let timestamp = thumbnailCache.thumbnailTimestamps[key] {
+                                    let age = Date().timeIntervalSince(timestamp)
+                                    let isFresh = thumbnailCache.isThumbnailFresh(for: key)
+                                    Text(isFresh ? "Fresh ✓" : "Stale (\(Int(age/60))m old)")
+                                        .font(.system(size: 9))
+                                        .foregroundColor(isFresh ? .green : .orange)
+                                }
                             }
                             
                             Spacer()
