@@ -301,53 +301,57 @@ struct WebRTCPlayerView: UIViewRepresentable {
     }
 }
 
-import SwiftUI
-
-// MARK: - Camera Thumbnail (Auto-loads on appear with proper orientation)
 struct CameraThumbnail: View {
     let camera: Camera
     let isGridView: Bool
     @StateObject private var thumbnailCache = ThumbnailCacheManager.shared
     @State private var isLoading = false
-    @State private var hasFailed = false
-    @State private var hasAttemptedLoad = false
     
     var body: some View {
-        ZStack {
-            if let thumbnail = thumbnailCache.getThumbnail(for: camera.id) {
-                // Show cached thumbnail with proper orientation
-                thumbnailImageView(thumbnail)
-            } else if !camera.isOnline {
-                // Offline state
-                offlineView
-            } else if hasFailed {
-                // Failed to load
-                failedView
-            } else if isLoading {
-                // Loading state
-                loadingView
-            } else {
-                // Placeholder - will auto-load
-                placeholderView
+        GeometryReader { geometry in
+            ZStack {
+                if let thumbnail = thumbnailCache.getThumbnail(for: camera.id) {
+                    // Show cached thumbnail with proper aspect ratio
+                    thumbnailImageView(thumbnail, geometry: geometry)
+                } else if !camera.isOnline {
+                    // Offline state
+                    offlineView
+                } else if isLoading {
+                    // Loading state
+                    loadingView
+                } else {
+                    // Manual refresh button
+                    manualRefreshView
+                }
             }
+            .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .contentShape(Rectangle())
-        .onAppear {
-            // Auto-load thumbnail when view appears
-            if !hasAttemptedLoad && camera.isOnline {
-                loadThumbnail()
-            }
-        }
     }
     
-    private func thumbnailImageView(_ image: UIImage) -> some View {
-        // Fix orientation before displaying
-        let orientedImage = fixImageOrientation(image)
+    private func thumbnailImageView(_ image: UIImage, geometry: GeometryProxy) -> some View {
+        let imageSize = image.size
+        let containerSize = geometry.size
         
-        return Image(uiImage: orientedImage)
-            .resizable()
-            .aspectRatio(contentMode: .fill)
-            .clipped()
+        // Calculate aspect fit scale
+        let widthRatio = containerSize.width / imageSize.width
+        let heightRatio = containerSize.height / imageSize.height
+        let scale = min(widthRatio, heightRatio)
+        
+        let scaledWidth = imageSize.width * scale
+        let scaledHeight = imageSize.height * scale
+        
+        return ZStack {
+            // Background color
+            Color.black.opacity(0.05)
+            
+            // Image centered and properly sized
+            Image(uiImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: scaledWidth, height: scaledHeight)
+                .clipped()
+        }
     }
     
     private var loadingView: some View {
@@ -364,60 +368,38 @@ struct CameraThumbnail: View {
                     .scaleEffect(isGridView ? 0.8 : 1.0)
                 
                 if !isGridView {
-                    Text("Loading snapshot...")
-                        .font(.caption2)
-                        .foregroundColor(.blue)
-                }
-            }
-        }
-    }
-    
-    private var placeholderView: some View {
-        ZStack {
-            LinearGradient(
-                colors: [Color.blue.opacity(0.3), Color.blue.opacity(0.1)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            
-            VStack(spacing: 6) {
-                Image(systemName: "photo")
-                    .font(.system(size: isGridView ? 24 : 32))
-                    .foregroundColor(.blue)
-                
-                if !isGridView {
                     Text("Loading...")
-                        .font(.caption)
+                        .font(.caption2)
                         .foregroundColor(.blue)
                 }
             }
         }
     }
     
-    private var failedView: some View {
+    private var manualRefreshView: some View {
         ZStack {
             LinearGradient(
-                colors: [Color.orange.opacity(0.3), Color.orange.opacity(0.1)],
+                colors: [Color.blue.opacity(0.2), Color.blue.opacity(0.05)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
             
-            VStack(spacing: 6) {
-                Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: isGridView ? 20 : 24))
-                    .foregroundColor(.orange)
-                
-                if !isGridView {
-                    Text("Tap to retry")
-                        .font(.caption2)
-                        .foregroundColor(.orange)
+            VStack(spacing: 8) {
+                Button(action: loadThumbnail) {
+                    VStack(spacing: 6) {
+                        Image(systemName: "arrow.clockwise.circle.fill")
+                            .font(.system(size: isGridView ? 28 : 36))
+                            .foregroundColor(.blue)
+                        
+                        if !isGridView {
+                            Text("Tap to load")
+                                .font(.caption)
+                                .foregroundColor(.blue)
+                        }
+                    }
                 }
+                .buttonStyle(PlainButtonStyle())
             }
-        }
-        .onTapGesture {
-            hasFailed = false
-            hasAttemptedLoad = false
-            loadThumbnail()
         }
     }
     
@@ -441,51 +423,123 @@ struct CameraThumbnail: View {
         }
     }
     
-    // MARK: - Load Thumbnail
+    // MARK: - Load Thumbnail (Manual Only)
     
     private func loadThumbnail() {
-        guard !isLoading, !hasAttemptedLoad, camera.isOnline else { return }
+        guard !isLoading, camera.isOnline else { return }
         
-        hasAttemptedLoad = true
+        // Haptic feedback
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        
         isLoading = true
-        hasFailed = false
         
-        DebugLogger.shared.log("📸 Auto-loading thumbnail for: \(camera.displayName)", emoji: "📸", color: .blue)
+        DebugLogger.shared.log("🔄 Manual load: \(camera.displayName)", emoji: "🔄", color: .blue)
         
-        // Start loading
-        thumbnailCache.fetchThumbnail(for: camera)
-        
-        // Timeout after 15 seconds
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15.0) {
-            if isLoading && thumbnailCache.getThumbnail(for: camera.id) == nil {
-                isLoading = false
-                hasFailed = true
-                DebugLogger.shared.log("⏱️ Thumbnail load timeout for: \(camera.displayName)", emoji: "⏱️", color: .orange)
-            } else {
-                isLoading = false
+        thumbnailCache.manualRefresh(for: camera) { success in
+            DispatchQueue.main.async {
+                self.isLoading = false
+                
+                if success {
+                    DebugLogger.shared.log("✅ Loaded: \(camera.displayName)", emoji: "✅", color: .green)
+                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                } else {
+                    DebugLogger.shared.log("❌ Failed: \(camera.displayName)", emoji: "❌", color: .red)
+                    UINotificationFeedbackGenerator().notificationOccurred(.error)
+                }
             }
         }
     }
+}
+
+// MARK: - Camera Grid Card (Fixed Thumbnail Container)
+struct CameraGridCard: View {
+    let camera: Camera
+    let mode: GridViewMode
     
-    // MARK: - Fix Image Orientation
-    
-    private func fixImageOrientation(_ image: UIImage) -> UIImage {
-        // If image is already in correct orientation, return it
-        if image.imageOrientation == .up {
-            return image
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Fixed size thumbnail container
+            CameraThumbnail(camera: camera, isGridView: mode != .list)
+                .frame(height: thumbnailHeight)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(camera.isOnline ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
+                )
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text(camera.displayName)
+                    .font(titleFont)
+                    .fontWeight(.medium)
+                    .lineLimit(mode == .list ? 2 : 1)
+                    .foregroundColor(.primary)
+                
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(camera.isOnline ? Color.green : Color.gray)
+                        .frame(width: dotSize, height: dotSize)
+                    
+                    Text(camera.location.isEmpty ? camera.area : camera.location)
+                        .font(subtitleFont)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, mode == .list ? 0 : 4)
         }
-        
-        // Normalize the image orientation
-        UIGraphicsBeginImageContextWithOptions(image.size, false, image.scale)
-        image.draw(in: CGRect(origin: .zero, size: image.size))
-        let normalizedImage = UIGraphicsGetImageFromCurrentImageContext()
-        UIGraphicsEndImageContext()
-        
-        return normalizedImage ?? image
+        .padding(padding)
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.05), radius: 5, y: 2)
+        .opacity(camera.isOnline ? 1 : 0.6)
+    }
+    
+    private var thumbnailHeight: CGFloat {
+        switch mode {
+        case .list: return 140
+        case .grid2x2: return 120
+        case .grid3x3: return 100
+        case .grid4x4: return 80
+        }
+    }
+    
+    private var padding: CGFloat {
+        switch mode {
+        case .list: return 12
+        case .grid2x2: return 10
+        case .grid3x3: return 8
+        case .grid4x4: return 6
+        }
+    }
+    
+    private var titleFont: Font {
+        switch mode {
+        case .list: return .subheadline
+        case .grid2x2: return .caption
+        case .grid3x3: return .caption2
+        case .grid4x4: return .system(size: 10)
+        }
+    }
+    
+    private var subtitleFont: Font {
+        switch mode {
+        case .list: return .caption
+        case .grid2x2: return .caption2
+        case .grid3x3: return .system(size: 10)
+        case .grid4x4: return .system(size: 9)
+        }
+    }
+    
+    private var dotSize: CGFloat {
+        switch mode {
+        case .list: return 6
+        case .grid2x2: return 5
+        case .grid3x3, .grid4x4: return 4
+        }
     }
 }
 
-// MARK: - Fullscreen Player (with Landscape Support)
+
 struct FullscreenPlayerView: View {
     let camera: Camera
     @Environment(\.presentationMode) var presentationMode

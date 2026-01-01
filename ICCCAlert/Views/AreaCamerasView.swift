@@ -8,6 +8,7 @@ struct AreaCamerasView: View {
     @State private var showOnlineOnly = true
     @State private var gridMode: GridViewMode = .grid2x2
     @State private var selectedCamera: Camera? = nil
+    @State private var isRefreshing = false
     @Environment(\.scenePhase) var scenePhase
     
     var cameras: [Camera] {
@@ -22,10 +23,22 @@ struct AreaCamerasView: View {
         return result.sorted { $0.displayName < $1.displayName }
     }
     
+    var staleThumbnailCount: Int {
+        cameras.filter { camera in
+            camera.isOnline && !thumbnailCache.isThumbnailFresh(for: camera.id)
+        }.count
+    }
+    
     var body: some View {
         VStack(spacing: 0) {
             statsBar
             filterBar
+            
+            // Show refresh banner if thumbnails are stale
+            if staleThumbnailCount > 0 {
+                refreshBanner
+            }
+            
             cameras.isEmpty ? AnyView(emptyView) : AnyView(cameraGridView)
         }
         .navigationTitle(area)
@@ -44,10 +57,19 @@ struct AreaCamerasView: View {
             }
             
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: refreshThumbnails) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 16))
+                Button(action: refreshAllThumbnails) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 16))
+                        
+                        if isRefreshing {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle())
+                                .scaleEffect(0.7)
+                        }
+                    }
                 }
+                .disabled(isRefreshing)
             }
         }
         .fullScreenCover(item: $selectedCamera) { FullscreenPlayerView(camera: $0) }
@@ -125,6 +147,53 @@ struct AreaCamerasView: View {
         .background(Color(.systemGroupedBackground))
     }
     
+    private var refreshBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "clock.arrow.circlepath")
+                .foregroundColor(.orange)
+                .font(.system(size: 18))
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Thumbnails may be outdated")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(.primary)
+                
+                Text("\(staleThumbnailCount) camera\(staleThumbnailCount == 1 ? "" : "s") older than 3 hours")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            
+            Spacer()
+            
+            Button(action: refreshAllThumbnails) {
+                if isRefreshing {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(0.8)
+                } else {
+                    Text("Refresh All")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Color.orange)
+            .foregroundColor(.white)
+            .cornerRadius(8)
+            .disabled(isRefreshing)
+        }
+        .padding()
+        .background(Color.orange.opacity(0.1))
+        .overlay(
+            Rectangle()
+                .frame(height: 1)
+                .foregroundColor(Color.orange.opacity(0.3)),
+            alignment: .bottom
+        )
+    }
+    
     private var cameraGridView: some View {
         ScrollView {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: gridMode.columns), spacing: 12) {
@@ -161,16 +230,31 @@ struct AreaCamerasView: View {
         .background(Color(.systemGroupedBackground))
     }
 
-    private func refreshThumbnails() {
-        // Clear all visible camera thumbnails
-        for camera in cameras where camera.isOnline {
+    // MARK: - Refresh All Thumbnails (Batch Operation)
+    
+    private func refreshAllThumbnails() {
+        guard !isRefreshing else { return }
+        
+        isRefreshing = true
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        
+        let staleCameras = cameras.filter { camera in
+            camera.isOnline && !thumbnailCache.isThumbnailFresh(for: camera.id)
+        }
+        
+        DebugLogger.shared.log("🔄 Refreshing \(staleCameras.count) stale thumbnails", emoji: "🔄", color: .blue)
+        
+        // Clear stale thumbnails first
+        for camera in staleCameras {
             thumbnailCache.clearThumbnail(for: camera.id)
         }
         
-        // Trigger haptic feedback
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        
-        DebugLogger.shared.log("🔄 Refreshing \(cameras.count) thumbnails", emoji: "🔄", color: .blue)
-        
+        // Small delay to ensure UI updates
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.isRefreshing = false
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            
+            DebugLogger.shared.log("✅ Thumbnails cleared - users can now tap to reload", emoji: "✅", color: .green)
+        }
     }
 }
