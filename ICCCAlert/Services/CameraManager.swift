@@ -70,14 +70,11 @@ class CameraManager: ObservableObject {
             }
             
             DebugLogger.shared.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", emoji: "📹", color: .blue)
-            
-            // Force UI refresh
+  
             NotificationCenter.default.post(name: NSNotification.Name("CamerasUpdated"), object: nil)
         }
     }
-    
-    // MARK: - Initial Load (Complete Camera List)
-    
+
     private func performInitialLoad(_ newCameras: [Camera]) {
         DebugLogger.shared.log("📹 INITIAL LOAD: Storing \(newCameras.count) cameras permanently", emoji: "📹", color: .green)
         

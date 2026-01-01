@@ -10,7 +10,11 @@ struct AreaCamerasView: View {
     @State private var selectedCamera: Camera? = nil
     @State private var isRefreshing = false
     @State private var visibleCameras: Set<String> = []
+    @State private var loadedThumbnails: Set<String> = []
     @Environment(\.scenePhase) var scenePhase
+    
+    // ✅ Limit how many thumbnails we load at once
+    private let maxSimultaneousLoads = 5  // Only 5 at a time
     
     var cameras: [Camera] {
         var result = cameraManager.getCameras(forArea: area)
@@ -67,7 +71,11 @@ struct AreaCamerasView: View {
         .fullScreenCover(item: $selectedCamera) { FullscreenPlayerView(camera: $0) }
         .onAppear {
             DebugLogger.shared.log("📹 AreaCamerasView appeared: \(area)", emoji: "📹", color: .blue)
-            loadVisibleThumbnails()
+            
+            // ✅ Small delay before loading thumbnails
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                loadVisibleThumbnails()
+            }
         }
         .onDisappear {
             DebugLogger.shared.log("🚪 AreaCamerasView disappeared: \(area)", emoji: "🚪", color: .orange)
@@ -79,18 +87,20 @@ struct AreaCamerasView: View {
         .onChange(of: gridMode) { _ in
             PlayerManager.shared.clearAll()
             visibleCameras.removeAll()
+            loadedThumbnails.removeAll()
             
-            // ✅ Small delay before loading new thumbnails
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            // ✅ Longer delay after mode change
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 loadVisibleThumbnails()
             }
         }
         .onChange(of: showOnlineOnly) { _ in
             PlayerManager.shared.clearAll()
             visibleCameras.removeAll()
+            loadedThumbnails.removeAll()
             
-            // ✅ Small delay before loading new thumbnails
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            // ✅ Longer delay after filter change
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 loadVisibleThumbnails()
             }
         }
@@ -155,19 +165,10 @@ struct AreaCamerasView: View {
                 ForEach(cameras, id: \.id) { camera in
                     CameraGridCardFixed(camera: camera, mode: gridMode)
                         .onAppear {
-                            // ✅ Track visibility
-                            if !visibleCameras.contains(camera.id) {
-                                visibleCameras.insert(camera.id)
-                                
-                                // ✅ Stagger thumbnail loading
-                                let delay = Double.random(in: 0.1...0.5)
-                                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                                    thumbnailCache.autoFetchThumbnail(for: camera)
-                                }
-                            }
+                            handleCameraAppear(camera)
                         }
                         .onDisappear {
-                            visibleCameras.remove(camera.id)
+                            handleCameraDisappear(camera)
                         }
                         .onTapGesture {
                             if camera.isOnline {
@@ -200,21 +201,49 @@ struct AreaCamerasView: View {
         .background(Color(.systemGroupedBackground))
     }
 
-    // MARK: - Load Visible Thumbnails (Smart Loading)
+    // MARK: - Handle Camera Appear/Disappear
+    
+    private func handleCameraAppear(_ camera: Camera) {
+        // Track visibility
+        visibleCameras.insert(camera.id)
+        
+        // ✅ Only load if not already loaded and within limit
+        guard !loadedThumbnails.contains(camera.id) else { return }
+        guard loadedThumbnails.count < maxSimultaneousLoads else { return }
+        
+        loadedThumbnails.insert(camera.id)
+        
+        // ✅ Random delay between 0.5-2 seconds to stagger loading
+        let delay = Double.random(in: 0.5...2.0)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            thumbnailCache.autoFetchThumbnail(for: camera)
+        }
+    }
+    
+    private func handleCameraDisappear(_ camera: Camera) {
+        visibleCameras.remove(camera.id)
+    }
+
+    // MARK: - Load Visible Thumbnails (Ultra Safe)
     
     private func loadVisibleThumbnails() {
-        // ✅ Only load first batch (10 cameras max)
-        let maxInitialLoad = 10
+        // ✅ Only load first 5 cameras max
+        let maxInitialLoad = 5
         let onlineCameras = cameras.filter { $0.isOnline }.prefix(maxInitialLoad)
         
+        loadedThumbnails.removeAll()
+        
         for (index, camera) in onlineCameras.enumerated() {
-            let delay = Double(index) * 0.3 // Stagger by 300ms
+            loadedThumbnails.insert(camera.id)
+            
+            // ✅ Stagger by 2 seconds each (very conservative)
+            let delay = Double(index) * 2.0
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 thumbnailCache.autoFetchThumbnail(for: camera)
             }
         }
         
-        DebugLogger.shared.log("📸 Loading \(onlineCameras.count) thumbnails (staggered)", emoji: "📸", color: .blue)
+        DebugLogger.shared.log("📸 Loading \(onlineCameras.count) thumbnails (ultra-safe mode)", emoji: "📸", color: .blue)
     }
     
     // MARK: - Refresh Visible Thumbnails
@@ -225,10 +254,10 @@ struct AreaCamerasView: View {
         isRefreshing = true
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         
-        // ✅ Only refresh visible cameras (more efficient)
+        // ✅ Only refresh visible cameras (max 5)
         let camerasToRefresh = cameras.filter { 
             $0.isOnline && visibleCameras.contains($0.id) 
-        }
+        }.prefix(5)
         
         DebugLogger.shared.log("🔄 Refreshing \(camerasToRefresh.count) visible thumbnails", emoji: "🔄", color: .blue)
         
@@ -239,14 +268,14 @@ struct AreaCamerasView: View {
         
         // Reload with stagger
         for (index, camera) in camerasToRefresh.enumerated() {
-            let delay = Double(index) * 0.3
+            let delay = Double(index) * 2.0
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 thumbnailCache.autoFetchThumbnail(for: camera)
             }
         }
         
         // Reset refresh state
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             self.isRefreshing = false
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             DebugLogger.shared.log("✅ Refresh complete", emoji: "✅", color: .green)
@@ -266,6 +295,7 @@ struct AreaCamerasView: View {
         thumbnailCache.clearChannelThumbnails()
         
         visibleCameras.removeAll()
+        loadedThumbnails.removeAll()
         
         DebugLogger.shared.log("🧹 Cleaned up area view resources", emoji: "🧹", color: .orange)
     }
@@ -275,8 +305,10 @@ struct AreaCamerasView: View {
     private func handleScenePhaseChange(_ phase: ScenePhase) {
         switch phase {
         case .active:
-            // Resume thumbnail loading for visible cameras
-            loadVisibleThumbnails()
+            // Resume thumbnail loading for visible cameras (with delay)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                loadVisibleThumbnails()
+            }
             
         case .inactive, .background:
             // Immediately stop all captures and players
