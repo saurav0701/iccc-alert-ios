@@ -1,6 +1,5 @@
 import SwiftUI
 
-// MARK: - Area Cameras View (Auto-Loading Visible Thumbnails)
 struct AreaCamerasView: View {
     let area: String
     @StateObject private var cameraManager = CameraManager.shared
@@ -47,27 +46,17 @@ struct AreaCamerasView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button(action: refreshThumbnails) {
                     Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 18))
+                        .font(.system(size: 16))
                 }
             }
         }
-        .fullScreenCover(item: $selectedCamera) { camera in
-            FullscreenPlayerView(camera: camera)
-                .onDisappear {
-                    // Resume thumbnail captures when closing player
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        ThumbnailCacheManager.shared.resumeCaptures()
-                    }
-                }
-        }
+        .fullScreenCover(item: $selectedCamera) { FullscreenPlayerView(camera: $0) }
         .onAppear {
             DebugLogger.shared.log("📹 AreaCamerasView appeared: \(area)", emoji: "📹", color: .blue)
         }
         .onDisappear {
             DebugLogger.shared.log("🚪 AreaCamerasView disappeared: \(area)", emoji: "🚪", color: .orange)
-            // Clean up all active streams
             PlayerManager.shared.clearAll()
-            // Clear thumbnails from memory (keep on disk)
             thumbnailCache.clearChannelThumbnails()
         }
         .onChange(of: scenePhase) { phase in
@@ -143,16 +132,7 @@ struct AreaCamerasView: View {
                     CameraGridCard(camera: camera, mode: gridMode)
                         .onTapGesture {
                             if camera.isOnline {
-                                // Stop any thumbnail captures before opening player
-                                ThumbnailCacheManager.shared.pauseCaptures()
-                                
-                                // Haptic feedback
-                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                
-                                // Small delay to ensure smooth transition
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    selectedCamera = camera
-                                }
+                                selectedCamera = camera
                             } else {
                                 UINotificationFeedbackGenerator().notificationOccurred(.warning)
                             }
@@ -180,9 +160,7 @@ struct AreaCamerasView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemGroupedBackground))
     }
-    
-    // MARK: - Refresh Thumbnails
-    
+
     private func refreshThumbnails() {
         // Clear all visible camera thumbnails
         for camera in cameras where camera.isOnline {
@@ -192,6 +170,7 @@ struct AreaCamerasView: View {
         // Trigger haptic feedback
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         
-        DebugLogger.shared.log("🔄 Thumbnails cleared, will reload as you scroll", emoji: "🔄", color: .blue)
+        DebugLogger.shared.log("🔄 Refreshing \(cameras.count) thumbnails", emoji: "🔄", color: .blue)
+        
     }
 }

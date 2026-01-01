@@ -2,13 +2,13 @@ import SwiftUI
 import WebKit
 import Combine
 
-// MARK: - Player Manager (Improved)
+// MARK: - Player Manager (Crash-Proof with Limits)
 class PlayerManager: ObservableObject {
     static let shared = PlayerManager()
     
     private var activePlayers: [String: WKWebView] = [:]
     private let lock = NSLock()
-    private let maxPlayers = 1 // Only 1 fullscreen player at a time
+    private let maxPlayers = 2 // Reduced to 2 concurrent streams max
     
     private init() {}
     
@@ -16,20 +16,23 @@ class PlayerManager: ObservableObject {
         lock.lock()
         defer { lock.unlock() }
         
-        // Clear any existing player first
+        // Clean up old player if exists
         if let oldPlayer = activePlayers[cameraId] {
             cleanupWebView(oldPlayer)
             activePlayers.removeValue(forKey: cameraId)
         }
         
-        // Clear all other players (only one fullscreen at a time)
-        for (id, player) in activePlayers {
-            cleanupWebView(player)
-            activePlayers.removeValue(forKey: id)
+        // Enforce strict limit
+        if activePlayers.count >= maxPlayers {
+            if let oldestKey = activePlayers.keys.sorted().first {
+                if let oldPlayer = activePlayers.removeValue(forKey: oldestKey) {
+                    cleanupWebView(oldPlayer)
+                }
+            }
         }
         
         activePlayers[cameraId] = webView
-        print("📹 Registered player: \(cameraId)")
+        print("📹 Registered: \(cameraId) (Active: \(activePlayers.count)/\(maxPlayers))")
     }
     
     private func cleanupWebView(_ webView: WKWebView) {
@@ -46,7 +49,7 @@ class PlayerManager: ObservableObject {
         
         if let webView = activePlayers.removeValue(forKey: cameraId) {
             cleanupWebView(webView)
-            print("🗑️ Released player: \(cameraId)")
+            print("🗑️ Released: \(cameraId)")
         }
     }
     
@@ -60,7 +63,7 @@ class PlayerManager: ObservableObject {
     }
 }
 
-// MARK: - WebRTC Player View (Non-Blocking)
+// MARK: - WebRTC Player View (Crash-Proof)
 struct WebRTCPlayerView: UIViewRepresentable {
     let streamURL: String
     let cameraId: String
@@ -86,13 +89,8 @@ struct WebRTCPlayerView: UIViewRepresentable {
         
         webView.configuration.userContentController.add(context.coordinator, name: "logging")
         
-        // Register player first
         PlayerManager.shared.registerPlayer(webView, for: cameraId)
-        
-        // Load player asynchronously to prevent blocking
-        DispatchQueue.main.async {
-            context.coordinator.loadPlayer(in: webView, streamURL: streamURL)
-        }
+        context.coordinator.loadPlayer(in: webView, streamURL: streamURL)
         
         return webView
     }
@@ -138,28 +136,17 @@ struct WebRTCPlayerView: UIViewRepresentable {
                               color: #4CAF50; padding: 6px 10px; border-radius: 6px;
                               font: 11px -apple-system; z-index: 10; }
                     #status.error { color: #ff5252; }
-                    #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-                               color: white; font: 14px -apple-system; text-align: center; }
-                    .spinner { border: 3px solid rgba(255,255,255,0.3); border-top: 3px solid white;
-                               border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite;
-                               margin: 0 auto 10px; }
-                    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
                 </style>
             </head>
             <body>
-                <div id="loading">
-                    <div class="spinner"></div>
-                    <div>Connecting...</div>
-                </div>
-                <video id="video" playsinline autoplay muted style="display:none;"></video>
+                <video id="video" playsinline autoplay muted></video>
                 <div id="live"><span class="dot"></span>LIVE</div>
-                <div id="status">Initializing...</div>
+                <div id="status">Connecting...</div>
                 <script>
                 (function() {
                     const video = document.getElementById('video');
                     const status = document.getElementById('status');
                     const live = document.getElementById('live');
-                    const loading = document.getElementById('loading');
                     const streamUrl = '\(streamURL)';
                     let pc = null, restartTimeout = null, isActive = true, retryCount = 0;
                     const MAX_RETRIES = 3;
@@ -174,7 +161,11 @@ struct WebRTCPlayerView: UIViewRepresentable {
                     function cleanup() {
                         if (restartTimeout) { clearTimeout(restartTimeout); restartTimeout = null; }
                         if (pc) { 
-                            try { pc.close(); } catch(e) {}
+                            try { 
+                                pc.close(); 
+                            } catch(e) {
+                                console.error('PC close error:', e);
+                            } 
                             pc = null; 
                         }
                         if (video.srcObject) {
@@ -183,7 +174,9 @@ struct WebRTCPlayerView: UIViewRepresentable {
                                     try { t.stop(); } catch(e) {}
                                 }); 
                                 video.srcObject = null; 
-                            } catch(e) {}
+                            } catch(e) {
+                                console.error('Video cleanup error:', e);
+                            }
                         }
                         live.classList.remove('show');
                     }
@@ -191,8 +184,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
                     async function start() {
                         if (!isActive || retryCount >= MAX_RETRIES) {
                             if (retryCount >= MAX_RETRIES) {
-                                log('Connection failed', true);
-                                loading.style.display = 'none';
+                                log('Max retries reached', true);
                             }
                             return;
                         }
@@ -210,30 +202,22 @@ struct WebRTCPlayerView: UIViewRepresentable {
                             pc.ontrack = (e) => { 
                                 if (isActive) { 
                                     log('Stream ready'); 
-                                    video.srcObject = e.streams[0];
-                                    video.style.display = 'block';
-                                    loading.style.display = 'none';
-                                    retryCount = 0;
+                                    video.srcObject = e.streams[0]; 
+                                    retryCount = 0; // Reset on success
                                 } 
                             };
                             
                             pc.oniceconnectionstatechange = () => {
                                 if (!isActive) return;
-                                const state = pc.iceConnectionState;
-                                log('ICE: ' + state);
-                                
-                                if (state === 'connected' || state === 'completed') {
+                                if (pc.iceConnectionState === 'connected') {
                                     log('Connected'); 
                                     live.classList.add('show');
-                                    loading.style.display = 'none';
-                                } else if (state === 'failed' || state === 'disconnected') {
-                                    log('Connection lost'); 
+                                } else if (pc.iceConnectionState === 'failed') {
+                                    log('Connection failed'); 
                                     live.classList.remove('show');
                                     retryCount++;
                                     if (isActive && retryCount < MAX_RETRIES) {
-                                        restartTimeout = setTimeout(start, 2000);
-                                    } else {
-                                        loading.style.display = 'none';
+                                        restartTimeout = setTimeout(start, 3000);
                                     }
                                 }
                             };
@@ -245,7 +229,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
                             await pc.setLocalDescription(offer);
                             
                             const controller = new AbortController();
-                            const timeoutId = setTimeout(() => controller.abort(), 8000);
+                            const timeoutId = setTimeout(() => controller.abort(), 10000);
                             
                             const res = await fetch(streamUrl, {
                                 method: 'POST', 
@@ -256,7 +240,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
                             
                             clearTimeout(timeoutId);
                             
-                            if (!res.ok) throw new Error('Server error: ' + res.status);
+                            if (!res.ok) throw new Error('Server: ' + res.status);
                             
                             const answer = await res.text();
                             await pc.setRemoteDescription({ type: 'answer', sdp: answer });
@@ -265,9 +249,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
                             log('Error: ' + err.message, true);
                             retryCount++;
                             if (isActive && retryCount < MAX_RETRIES) {
-                                restartTimeout = setTimeout(start, 3000);
-                            } else {
-                                loading.style.display = 'none';
+                                restartTimeout = setTimeout(start, 5000);
                             }
                         }
                     }
@@ -275,8 +257,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
                     video.addEventListener('playing', () => { 
                         if (isActive) { 
                             log('Playing'); 
-                            live.classList.add('show');
-                            loading.style.display = 'none';
+                            live.classList.add('show'); 
                         } 
                     });
                     
@@ -285,8 +266,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
                         cleanup(); 
                     });
                     
-                    // Start after a small delay to prevent blocking
-                    setTimeout(start, 100);
+                    start();
                 })();
                 </script>
             </body>
@@ -301,11 +281,16 @@ struct WebRTCPlayerView: UIViewRepresentable {
         }
         
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            print("✅ Loaded player: \(cameraId)")
+            print("✅ Loaded: \(cameraId)")
         }
         
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             print("❌ Navigation Error: \(error.localizedDescription)")
+            
+            // Don't retry automatically on navigation failures
+            if retryCount < maxRetries {
+                retryCount += 1
+            }
         }
         
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -316,13 +301,196 @@ struct WebRTCPlayerView: UIViewRepresentable {
     }
 }
 
-// MARK: - Fullscreen Player (Non-Blocking)
+import SwiftUI
+
+// MARK: - Camera Thumbnail (Auto-loads on appear with proper orientation)
+struct CameraThumbnail: View {
+    let camera: Camera
+    let isGridView: Bool
+    @StateObject private var thumbnailCache = ThumbnailCacheManager.shared
+    @State private var isLoading = false
+    @State private var hasFailed = false
+    @State private var hasAttemptedLoad = false
+    
+    var body: some View {
+        ZStack {
+            if let thumbnail = thumbnailCache.getThumbnail(for: camera.id) {
+                // Show cached thumbnail with proper orientation
+                thumbnailImageView(thumbnail)
+            } else if !camera.isOnline {
+                // Offline state
+                offlineView
+            } else if hasFailed {
+                // Failed to load
+                failedView
+            } else if isLoading {
+                // Loading state
+                loadingView
+            } else {
+                // Placeholder - will auto-load
+                placeholderView
+            }
+        }
+        .contentShape(Rectangle())
+        .onAppear {
+            // Auto-load thumbnail when view appears
+            if !hasAttemptedLoad && camera.isOnline {
+                loadThumbnail()
+            }
+        }
+    }
+    
+    private func thumbnailImageView(_ image: UIImage) -> some View {
+        // Fix orientation before displaying
+        let orientedImage = fixImageOrientation(image)
+        
+        return Image(uiImage: orientedImage)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
+            .clipped()
+    }
+    
+    private var loadingView: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color.blue.opacity(0.3), Color.blue.opacity(0.1)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            
+            VStack(spacing: 8) {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .blue))
+                    .scaleEffect(isGridView ? 0.8 : 1.0)
+                
+                if !isGridView {
+                    Text("Loading snapshot...")
+                        .font(.caption2)
+                        .foregroundColor(.blue)
+                }
+            }
+        }
+    }
+    
+    private var placeholderView: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color.blue.opacity(0.3), Color.blue.opacity(0.1)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            
+            VStack(spacing: 6) {
+                Image(systemName: "photo")
+                    .font(.system(size: isGridView ? 24 : 32))
+                    .foregroundColor(.blue)
+                
+                if !isGridView {
+                    Text("Loading...")
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                }
+            }
+        }
+    }
+    
+    private var failedView: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color.orange.opacity(0.3), Color.orange.opacity(0.1)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            
+            VStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: isGridView ? 20 : 24))
+                    .foregroundColor(.orange)
+                
+                if !isGridView {
+                    Text("Tap to retry")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                }
+            }
+        }
+        .onTapGesture {
+            hasFailed = false
+            hasAttemptedLoad = false
+            loadThumbnail()
+        }
+    }
+    
+    private var offlineView: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color.gray.opacity(0.3), Color.gray.opacity(0.1)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            
+            VStack(spacing: 6) {
+                Image(systemName: "video.slash.fill")
+                    .font(.system(size: isGridView ? 20 : 24))
+                    .foregroundColor(.gray)
+                
+                Text("Offline")
+                    .font(.caption2)
+                    .foregroundColor(.gray)
+            }
+        }
+    }
+    
+    // MARK: - Load Thumbnail
+    
+    private func loadThumbnail() {
+        guard !isLoading, !hasAttemptedLoad, camera.isOnline else { return }
+        
+        hasAttemptedLoad = true
+        isLoading = true
+        hasFailed = false
+        
+        DebugLogger.shared.log("📸 Auto-loading thumbnail for: \(camera.displayName)", emoji: "📸", color: .blue)
+        
+        // Start loading
+        thumbnailCache.fetchThumbnail(for: camera)
+        
+        // Timeout after 15 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15.0) {
+            if isLoading && thumbnailCache.getThumbnail(for: camera.id) == nil {
+                isLoading = false
+                hasFailed = true
+                DebugLogger.shared.log("⏱️ Thumbnail load timeout for: \(camera.displayName)", emoji: "⏱️", color: .orange)
+            } else {
+                isLoading = false
+            }
+        }
+    }
+    
+    // MARK: - Fix Image Orientation
+    
+    private func fixImageOrientation(_ image: UIImage) -> UIImage {
+        // If image is already in correct orientation, return it
+        if image.imageOrientation == .up {
+            return image
+        }
+        
+        // Normalize the image orientation
+        UIGraphicsBeginImageContextWithOptions(image.size, false, image.scale)
+        image.draw(in: CGRect(origin: .zero, size: image.size))
+        let normalizedImage = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        
+        return normalizedImage ?? image
+    }
+}
+
+// MARK: - Fullscreen Player (with Landscape Support)
 struct FullscreenPlayerView: View {
     let camera: Camera
     @Environment(\.presentationMode) var presentationMode
     @State private var showControls = true
     @State private var orientation = UIDeviceOrientation.unknown
-    @State private var isLoading = true
     
     var body: some View {
         GeometryReader { geometry in
@@ -336,8 +504,6 @@ struct FullscreenPlayerView: View {
                         .onTapGesture {
                             withAnimation { showControls.toggle() }
                         }
-                } else {
-                    errorView
                 }
                 
                 if showControls {
@@ -346,10 +512,6 @@ struct FullscreenPlayerView: View {
             }
             .onAppear {
                 setupOrientationObserver()
-                // Small delay to ensure smooth transition
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    isLoading = false
-                }
             }
             .onDisappear {
                 PlayerManager.shared.releasePlayer(camera.id)
@@ -358,37 +520,6 @@ struct FullscreenPlayerView: View {
         }
         .navigationBarHidden(true)
         .statusBar(hidden: !showControls)
-    }
-    
-    private var errorView: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 60))
-                .foregroundColor(.orange)
-            
-            Text("Stream Unavailable")
-                .font(.title2)
-                .foregroundColor(.white)
-            
-            Text("No stream URL available for this camera")
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.7))
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
-            
-            Button(action: {
-                presentationMode.wrappedValue.dismiss()
-            }) {
-                Text("Go Back")
-                    .font(.headline)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 12)
-                    .background(Color.blue)
-                    .cornerRadius(10)
-            }
-            .padding(.top, 20)
-        }
     }
     
     private var controlsOverlay: some View {
@@ -470,7 +601,7 @@ struct FullscreenPlayerView: View {
     }
 }
 
-// MARK: - Grid Modes
+// MARK: - Grid Modes (Unchanged)
 enum GridViewMode: String, CaseIterable, Identifiable {
     case list = "List", grid2x2 = "2×2", grid3x3 = "3×3", grid4x4 = "4×4"
     
@@ -489,6 +620,82 @@ enum GridViewMode: String, CaseIterable, Identifiable {
         case .grid2x2: return "square.grid.2x2"
         case .grid3x3: return "square.grid.3x3"
         case .grid4x4: return "square.grid.4x4"
+        }
+    }
+}
+
+// MARK: - Camera Grid Card (Unchanged)
+struct CameraGridCard: View {
+    let camera: Camera
+    let mode: GridViewMode
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            CameraThumbnail(camera: camera, isGridView: mode != .list)
+                .frame(height: height)
+                .cornerRadius(12)
+                .overlay(RoundedRectangle(cornerRadius: 12)
+                    .stroke(camera.isOnline ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1))
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text(camera.displayName).font(titleFont).fontWeight(.medium)
+                    .lineLimit(mode == .list ? 2 : 1).foregroundColor(.primary)
+                HStack(spacing: 4) {
+                    Circle().fill(camera.isOnline ? Color.green : Color.gray).frame(width: dotSize, height: dotSize)
+                    Text(camera.location.isEmpty ? camera.area : camera.location)
+                        .font(subtitleFont).foregroundColor(.secondary).lineLimit(1)
+                }
+            }
+            .padding(.horizontal, mode == .list ? 0 : 4)
+        }
+        .padding(padding)
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.05), radius: 5, y: 2)
+        .opacity(camera.isOnline ? 1 : 0.6)
+    }
+    
+    private var height: CGFloat {
+        switch mode {
+        case .list: return 140
+        case .grid2x2: return 120
+        case .grid3x3: return 100
+        case .grid4x4: return 80
+        }
+    }
+    
+    private var padding: CGFloat {
+        switch mode {
+        case .list: return 12
+        case .grid2x2: return 10
+        case .grid3x3: return 8
+        case .grid4x4: return 6
+        }
+    }
+    
+    private var titleFont: Font {
+        switch mode {
+        case .list: return .subheadline
+        case .grid2x2: return .caption
+        case .grid3x3: return .caption2
+        case .grid4x4: return .system(size: 10)
+        }
+    }
+    
+    private var subtitleFont: Font {
+        switch mode {
+        case .list: return .caption
+        case .grid2x2: return .caption2
+        case .grid3x3: return .system(size: 10)
+        case .grid4x4: return .system(size: 9)
+        }
+    }
+    
+    private var dotSize: CGFloat {
+        switch mode {
+        case .list: return 6
+        case .grid2x2: return 5
+        case .grid3x3, .grid4x4: return 4
         }
     }
 }
