@@ -1,6 +1,6 @@
 import SwiftUI
 
-// MARK: - CameraStreamsView (Crash-Proof)
+// MARK: - CameraStreamsView
 struct CameraStreamsView: View {
     @StateObject private var cameraManager = CameraManager.shared
     @StateObject private var webSocketService = WebSocketService.shared
@@ -55,15 +55,6 @@ struct CameraStreamsView: View {
         .navigationViewStyle(StackNavigationViewStyle())
         .onAppear {
             DebugLogger.shared.log("📹 CameraStreamsView appeared", emoji: "📹", color: .blue)
-            
-            // ✅ Clean up any lingering resources
-            cleanupResources()
-        }
-        .onDisappear {
-            DebugLogger.shared.log("🚪 CameraStreamsView disappeared", emoji: "🚪", color: .orange)
-            
-            // ✅ Clean up when leaving
-            cleanupResources()
         }
     }
 
@@ -144,10 +135,6 @@ struct CameraStreamsView: View {
             ForEach(filteredAreas, id: \.self) { area in
                 NavigationLink(
                     destination: AreaCamerasView(area: area)
-                        .onDisappear {
-                            // ✅ Clean up when leaving area view
-                            cleanupAreaResources()
-                        }
                 ) {
                     AreaRow(
                         area: area,
@@ -260,27 +247,6 @@ struct CameraStreamsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemGroupedBackground))
-    }
-    
-    // MARK: - Cleanup
-    
-    private func cleanupResources() {
-        // ✅ Stop all video players
-        PlayerManager.shared.clearAll()
-        
-        // ✅ Stop all thumbnail captures
-        ThumbnailCacheManager.shared.stopAllCaptures()
-        
-        DebugLogger.shared.log("🧹 Cleaned up camera streams view", emoji: "🧹", color: .orange)
-    }
-    
-    private func cleanupAreaResources() {
-        // ✅ Clean up when navigating back from area view
-        PlayerManager.shared.clearAll()
-        ThumbnailCacheManager.shared.stopAllCaptures()
-        ThumbnailCacheManager.shared.clearChannelThumbnails()
-        
-        DebugLogger.shared.log("🧹 Cleaned up area resources", emoji: "🧹", color: .orange)
     }
 }
 

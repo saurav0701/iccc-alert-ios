@@ -9,12 +9,7 @@ struct AreaCamerasView: View {
     @State private var gridMode: GridViewMode = .grid2x2
     @State private var selectedCamera: Camera? = nil
     @State private var isRefreshing = false
-    @State private var visibleCameras: Set<String> = []
-    @State private var loadedThumbnails: Set<String> = []
     @Environment(\.scenePhase) var scenePhase
-    
-    // ✅ Limit how many thumbnails we load at once
-    private let maxSimultaneousLoads = 5  // Only 5 at a time
     
     var cameras: [Camera] {
         var result = cameraManager.getCameras(forArea: area)
@@ -28,10 +23,21 @@ struct AreaCamerasView: View {
         return result.sorted { $0.displayName < $1.displayName }
     }
     
+    var staleThumbnailCount: Int {
+        cameras.filter { camera in
+            camera.isOnline && !thumbnailCache.isThumbnailFresh(for: camera.id) && !thumbnailCache.hasFailed(for: camera.id)
+        }.count
+    }
+    
     var body: some View {
         VStack(spacing: 0) {
             statsBar
             filterBar
+            
+            // Show refresh banner if thumbnails are stale
+            if staleThumbnailCount > 0 {
+                refreshBanner
+            }
             
             cameras.isEmpty ? AnyView(emptyView) : AnyView(cameraGridView)
         }
@@ -51,7 +57,7 @@ struct AreaCamerasView: View {
             }
             
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: refreshVisibleThumbnails) {
+                Button(action: refreshAllThumbnails) {
                     HStack(spacing: 6) {
                         if isRefreshing {
                             ProgressView()
@@ -60,7 +66,7 @@ struct AreaCamerasView: View {
                         } else {
                             Image(systemName: "arrow.clockwise")
                                 .font(.system(size: 16))
-                            Text("Refresh")
+                            Text("Refresh All")
                                 .font(.caption)
                         }
                     }
@@ -71,38 +77,19 @@ struct AreaCamerasView: View {
         .fullScreenCover(item: $selectedCamera) { FullscreenPlayerView(camera: $0) }
         .onAppear {
             DebugLogger.shared.log("📹 AreaCamerasView appeared: \(area)", emoji: "📹", color: .blue)
-            
-            // ✅ Small delay before loading thumbnails
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                loadVisibleThumbnails()
-            }
         }
         .onDisappear {
             DebugLogger.shared.log("🚪 AreaCamerasView disappeared: \(area)", emoji: "🚪", color: .orange)
-            cleanupResources()
+            PlayerManager.shared.clearAll()
+            thumbnailCache.clearChannelThumbnails()
         }
         .onChange(of: scenePhase) { phase in
-            handleScenePhaseChange(phase)
+            if phase == .background {
+                PlayerManager.shared.clearAll()
+            }
         }
         .onChange(of: gridMode) { _ in
             PlayerManager.shared.clearAll()
-            visibleCameras.removeAll()
-            loadedThumbnails.removeAll()
-            
-            // ✅ Longer delay after mode change
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                loadVisibleThumbnails()
-            }
-        }
-        .onChange(of: showOnlineOnly) { _ in
-            PlayerManager.shared.clearAll()
-            visibleCameras.removeAll()
-            loadedThumbnails.removeAll()
-            
-            // ✅ Longer delay after filter change
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                loadVisibleThumbnails()
-            }
         }
     }
     
@@ -152,6 +139,9 @@ struct AreaCamerasView: View {
                     }
                 }
                 .toggleStyle(SwitchToggleStyle(tint: .green))
+                .onChange(of: showOnlineOnly) { _ in
+                    PlayerManager.shared.clearAll()
+                }
             }
             .padding(.horizontal)
         }
@@ -159,17 +149,58 @@ struct AreaCamerasView: View {
         .background(Color(.systemGroupedBackground))
     }
     
+    private var refreshBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "clock.arrow.circlepath")
+                .foregroundColor(.orange)
+                .font(.system(size: 18))
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Thumbnails may be outdated")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(.primary)
+                
+                Text("\(staleThumbnailCount) camera\(staleThumbnailCount == 1 ? "" : "s") older than 3 hours")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            
+            Spacer()
+            
+            Button(action: refreshAllThumbnails) {
+                if isRefreshing {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(0.8)
+                } else {
+                    Text("Refresh All")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Color.orange)
+            .foregroundColor(.white)
+            .cornerRadius(8)
+            .disabled(isRefreshing)
+        }
+        .padding()
+        .background(Color.orange.opacity(0.1))
+        .overlay(
+            Rectangle()
+                .frame(height: 1)
+                .foregroundColor(Color.orange.opacity(0.3)),
+            alignment: .bottom
+        )
+    }
+    
     private var cameraGridView: some View {
         ScrollView {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: gridMode.columns), spacing: 12) {
                 ForEach(cameras, id: \.id) { camera in
                     CameraGridCardFixed(camera: camera, mode: gridMode)
-                        .onAppear {
-                            handleCameraAppear(camera)
-                        }
-                        .onDisappear {
-                            handleCameraDisappear(camera)
-                        }
                         .onTapGesture {
                             if camera.isOnline {
                                 selectedCamera = camera
@@ -201,122 +232,29 @@ struct AreaCamerasView: View {
         .background(Color(.systemGroupedBackground))
     }
 
-    // MARK: - Handle Camera Appear/Disappear
+    // MARK: - Refresh All Thumbnails
     
-    private func handleCameraAppear(_ camera: Camera) {
-        // Track visibility
-        visibleCameras.insert(camera.id)
-        
-        // ✅ Only load if not already loaded and within limit
-        guard !loadedThumbnails.contains(camera.id) else { return }
-        guard loadedThumbnails.count < maxSimultaneousLoads else { return }
-        
-        loadedThumbnails.insert(camera.id)
-        
-        // ✅ Random delay between 0.5-2 seconds to stagger loading
-        let delay = Double.random(in: 0.5...2.0)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            thumbnailCache.autoFetchThumbnail(for: camera)
-        }
-    }
-    
-    private func handleCameraDisappear(_ camera: Camera) {
-        visibleCameras.remove(camera.id)
-    }
-
-    // MARK: - Load Visible Thumbnails (Ultra Safe)
-    
-    private func loadVisibleThumbnails() {
-        // ✅ Only load first 5 cameras max
-        let maxInitialLoad = 5
-        let onlineCameras = cameras.filter { $0.isOnline }.prefix(maxInitialLoad)
-        
-        loadedThumbnails.removeAll()
-        
-        for (index, camera) in onlineCameras.enumerated() {
-            loadedThumbnails.insert(camera.id)
-            
-            // ✅ Stagger by 2 seconds each (very conservative)
-            let delay = Double(index) * 2.0
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                thumbnailCache.autoFetchThumbnail(for: camera)
-            }
-        }
-        
-        DebugLogger.shared.log("📸 Loading \(onlineCameras.count) thumbnails (ultra-safe mode)", emoji: "📸", color: .blue)
-    }
-    
-    // MARK: - Refresh Visible Thumbnails
-    
-    private func refreshVisibleThumbnails() {
+    private func refreshAllThumbnails() {
         guard !isRefreshing else { return }
         
         isRefreshing = true
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         
-        // ✅ Only refresh visible cameras (max 5)
-        let camerasToRefresh = cameras.filter { 
-            $0.isOnline && visibleCameras.contains($0.id) 
-        }.prefix(5)
+        let onlineCameras = cameras.filter { $0.isOnline }
         
-        DebugLogger.shared.log("🔄 Refreshing \(camerasToRefresh.count) visible thumbnails", emoji: "🔄", color: .blue)
+        DebugLogger.shared.log("🔄 Clearing \(onlineCameras.count) thumbnails", emoji: "🔄", color: .blue)
         
-        // Clear thumbnails
-        for camera in camerasToRefresh {
+        // Clear all thumbnails
+        for camera in onlineCameras {
             thumbnailCache.clearThumbnail(for: camera.id)
         }
         
-        // Reload with stagger
-        for (index, camera) in camerasToRefresh.enumerated() {
-            let delay = Double(index) * 2.0
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                thumbnailCache.autoFetchThumbnail(for: camera)
-            }
-        }
-        
-        // Reset refresh state
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+        // Small delay to ensure UI updates
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             self.isRefreshing = false
             UINotificationFeedbackGenerator().notificationOccurred(.success)
-            DebugLogger.shared.log("✅ Refresh complete", emoji: "✅", color: .green)
-        }
-    }
-    
-    // MARK: - Cleanup Resources
-    
-    private func cleanupResources() {
-        // ✅ Stop all video players
-        PlayerManager.shared.clearAll()
-        
-        // ✅ Stop all thumbnail captures
-        thumbnailCache.stopAllCaptures()
-        
-        // ✅ Clear memory cache (keep disk cache)
-        thumbnailCache.clearChannelThumbnails()
-        
-        visibleCameras.removeAll()
-        loadedThumbnails.removeAll()
-        
-        DebugLogger.shared.log("🧹 Cleaned up area view resources", emoji: "🧹", color: .orange)
-    }
-    
-    // MARK: - Scene Phase Change
-    
-    private func handleScenePhaseChange(_ phase: ScenePhase) {
-        switch phase {
-        case .active:
-            // Resume thumbnail loading for visible cameras (with delay)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                loadVisibleThumbnails()
-            }
             
-        case .inactive, .background:
-            // Immediately stop all captures and players
-            PlayerManager.shared.clearAll()
-            thumbnailCache.stopAllCaptures()
-            
-        @unknown default:
-            break
+            DebugLogger.shared.log("✅ Thumbnails cleared - will auto-reload", emoji: "✅", color: .green)
         }
     }
 }
