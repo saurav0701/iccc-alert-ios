@@ -2,13 +2,13 @@ import SwiftUI
 import WebKit
 import Combine
 
-// MARK: - Player Manager (Crash-Proof with Limits)
+// MARK: - Player Manager (Improved)
 class PlayerManager: ObservableObject {
     static let shared = PlayerManager()
     
     private var activePlayers: [String: WKWebView] = [:]
     private let lock = NSLock()
-    private let maxPlayers = 2
+    private let maxPlayers = 1 // Only 1 fullscreen player at a time
     
     private init() {}
     
@@ -16,21 +16,20 @@ class PlayerManager: ObservableObject {
         lock.lock()
         defer { lock.unlock() }
         
+        // Clear any existing player first
         if let oldPlayer = activePlayers[cameraId] {
             cleanupWebView(oldPlayer)
             activePlayers.removeValue(forKey: cameraId)
         }
         
-        if activePlayers.count >= maxPlayers {
-            if let oldestKey = activePlayers.keys.sorted().first {
-                if let oldPlayer = activePlayers.removeValue(forKey: oldestKey) {
-                    cleanupWebView(oldPlayer)
-                }
-            }
+        // Clear all other players (only one fullscreen at a time)
+        for (id, player) in activePlayers {
+            cleanupWebView(player)
+            activePlayers.removeValue(forKey: id)
         }
         
         activePlayers[cameraId] = webView
-        print("📹 Registered: \(cameraId) (Active: \(activePlayers.count)/\(maxPlayers))")
+        print("📹 Registered player: \(cameraId)")
     }
     
     private func cleanupWebView(_ webView: WKWebView) {
@@ -47,7 +46,7 @@ class PlayerManager: ObservableObject {
         
         if let webView = activePlayers.removeValue(forKey: cameraId) {
             cleanupWebView(webView)
-            print("🗑️ Released: \(cameraId)")
+            print("🗑️ Released player: \(cameraId)")
         }
     }
     
@@ -61,7 +60,7 @@ class PlayerManager: ObservableObject {
     }
 }
 
-// MARK: - WebRTC Player View
+// MARK: - WebRTC Player View (Non-Blocking)
 struct WebRTCPlayerView: UIViewRepresentable {
     let streamURL: String
     let cameraId: String
@@ -87,8 +86,13 @@ struct WebRTCPlayerView: UIViewRepresentable {
         
         webView.configuration.userContentController.add(context.coordinator, name: "logging")
         
+        // Register player first
         PlayerManager.shared.registerPlayer(webView, for: cameraId)
-        context.coordinator.loadPlayer(in: webView, streamURL: streamURL)
+        
+        // Load player asynchronously to prevent blocking
+        DispatchQueue.main.async {
+            context.coordinator.loadPlayer(in: webView, streamURL: streamURL)
+        }
         
         return webView
     }
@@ -134,17 +138,28 @@ struct WebRTCPlayerView: UIViewRepresentable {
                               color: #4CAF50; padding: 6px 10px; border-radius: 6px;
                               font: 11px -apple-system; z-index: 10; }
                     #status.error { color: #ff5252; }
+                    #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+                               color: white; font: 14px -apple-system; text-align: center; }
+                    .spinner { border: 3px solid rgba(255,255,255,0.3); border-top: 3px solid white;
+                               border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite;
+                               margin: 0 auto 10px; }
+                    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
                 </style>
             </head>
             <body>
-                <video id="video" playsinline autoplay muted></video>
+                <div id="loading">
+                    <div class="spinner"></div>
+                    <div>Connecting...</div>
+                </div>
+                <video id="video" playsinline autoplay muted style="display:none;"></video>
                 <div id="live"><span class="dot"></span>LIVE</div>
-                <div id="status">Connecting...</div>
+                <div id="status">Initializing...</div>
                 <script>
                 (function() {
                     const video = document.getElementById('video');
                     const status = document.getElementById('status');
                     const live = document.getElementById('live');
+                    const loading = document.getElementById('loading');
                     const streamUrl = '\(streamURL)';
                     let pc = null, restartTimeout = null, isActive = true, retryCount = 0;
                     const MAX_RETRIES = 3;
@@ -175,7 +190,10 @@ struct WebRTCPlayerView: UIViewRepresentable {
                     
                     async function start() {
                         if (!isActive || retryCount >= MAX_RETRIES) {
-                            if (retryCount >= MAX_RETRIES) log('Max retries reached', true);
+                            if (retryCount >= MAX_RETRIES) {
+                                log('Connection failed', true);
+                                loading.style.display = 'none';
+                            }
                             return;
                         }
                         
@@ -192,22 +210,30 @@ struct WebRTCPlayerView: UIViewRepresentable {
                             pc.ontrack = (e) => { 
                                 if (isActive) { 
                                     log('Stream ready'); 
-                                    video.srcObject = e.streams[0]; 
+                                    video.srcObject = e.streams[0];
+                                    video.style.display = 'block';
+                                    loading.style.display = 'none';
                                     retryCount = 0;
                                 } 
                             };
                             
                             pc.oniceconnectionstatechange = () => {
                                 if (!isActive) return;
-                                if (pc.iceConnectionState === 'connected') {
+                                const state = pc.iceConnectionState;
+                                log('ICE: ' + state);
+                                
+                                if (state === 'connected' || state === 'completed') {
                                     log('Connected'); 
                                     live.classList.add('show');
-                                } else if (pc.iceConnectionState === 'failed') {
-                                    log('Connection failed'); 
+                                    loading.style.display = 'none';
+                                } else if (state === 'failed' || state === 'disconnected') {
+                                    log('Connection lost'); 
                                     live.classList.remove('show');
                                     retryCount++;
                                     if (isActive && retryCount < MAX_RETRIES) {
-                                        restartTimeout = setTimeout(start, 3000);
+                                        restartTimeout = setTimeout(start, 2000);
+                                    } else {
+                                        loading.style.display = 'none';
                                     }
                                 }
                             };
@@ -219,7 +245,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
                             await pc.setLocalDescription(offer);
                             
                             const controller = new AbortController();
-                            const timeoutId = setTimeout(() => controller.abort(), 10000);
+                            const timeoutId = setTimeout(() => controller.abort(), 8000);
                             
                             const res = await fetch(streamUrl, {
                                 method: 'POST', 
@@ -230,7 +256,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
                             
                             clearTimeout(timeoutId);
                             
-                            if (!res.ok) throw new Error('Server: ' + res.status);
+                            if (!res.ok) throw new Error('Server error: ' + res.status);
                             
                             const answer = await res.text();
                             await pc.setRemoteDescription({ type: 'answer', sdp: answer });
@@ -239,7 +265,9 @@ struct WebRTCPlayerView: UIViewRepresentable {
                             log('Error: ' + err.message, true);
                             retryCount++;
                             if (isActive && retryCount < MAX_RETRIES) {
-                                restartTimeout = setTimeout(start, 5000);
+                                restartTimeout = setTimeout(start, 3000);
+                            } else {
+                                loading.style.display = 'none';
                             }
                         }
                     }
@@ -247,7 +275,8 @@ struct WebRTCPlayerView: UIViewRepresentable {
                     video.addEventListener('playing', () => { 
                         if (isActive) { 
                             log('Playing'); 
-                            live.classList.add('show'); 
+                            live.classList.add('show');
+                            loading.style.display = 'none';
                         } 
                     });
                     
@@ -256,7 +285,8 @@ struct WebRTCPlayerView: UIViewRepresentable {
                         cleanup(); 
                     });
                     
-                    start();
+                    // Start after a small delay to prevent blocking
+                    setTimeout(start, 100);
                 })();
                 </script>
             </body>
@@ -271,14 +301,11 @@ struct WebRTCPlayerView: UIViewRepresentable {
         }
         
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            print("✅ Loaded: \(cameraId)")
+            print("✅ Loaded player: \(cameraId)")
         }
         
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             print("❌ Navigation Error: \(error.localizedDescription)")
-            if retryCount < maxRetries {
-                retryCount += 1
-            }
         }
         
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -289,12 +316,13 @@ struct WebRTCPlayerView: UIViewRepresentable {
     }
 }
 
-// MARK: - Fullscreen Player
+// MARK: - Fullscreen Player (Non-Blocking)
 struct FullscreenPlayerView: View {
     let camera: Camera
     @Environment(\.presentationMode) var presentationMode
     @State private var showControls = true
     @State private var orientation = UIDeviceOrientation.unknown
+    @State private var isLoading = true
     
     var body: some View {
         GeometryReader { geometry in
@@ -308,6 +336,8 @@ struct FullscreenPlayerView: View {
                         .onTapGesture {
                             withAnimation { showControls.toggle() }
                         }
+                } else {
+                    errorView
                 }
                 
                 if showControls {
@@ -316,6 +346,10 @@ struct FullscreenPlayerView: View {
             }
             .onAppear {
                 setupOrientationObserver()
+                // Small delay to ensure smooth transition
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    isLoading = false
+                }
             }
             .onDisappear {
                 PlayerManager.shared.releasePlayer(camera.id)
@@ -324,6 +358,37 @@ struct FullscreenPlayerView: View {
         }
         .navigationBarHidden(true)
         .statusBar(hidden: !showControls)
+    }
+    
+    private var errorView: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 60))
+                .foregroundColor(.orange)
+            
+            Text("Stream Unavailable")
+                .font(.title2)
+                .foregroundColor(.white)
+            
+            Text("No stream URL available for this camera")
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.7))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
+            
+            Button(action: {
+                presentationMode.wrappedValue.dismiss()
+            }) {
+                Text("Go Back")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
+                    .background(Color.blue)
+                    .cornerRadius(10)
+            }
+            .padding(.top, 20)
+        }
     }
     
     private var controlsOverlay: some View {

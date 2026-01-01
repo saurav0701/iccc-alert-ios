@@ -22,6 +22,7 @@ class ThumbnailCacheManager: ObservableObject {
     private var activeWebViewCount = 0
     private let maxConcurrentWebViews = 3 // Allow 3 concurrent captures
     private var fetchQueue: [Camera] = [] // Simple FIFO queue
+    private var isPaused = false // Pause thumbnail captures
     
     private init() {
         let paths = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)
@@ -56,6 +57,11 @@ class ThumbnailCacheManager: ObservableObject {
         lock.lock()
         defer { lock.unlock() }
         
+        // Don't fetch if paused (player is active)
+        if isPaused && !force {
+            return
+        }
+        
         // Check if already fetching
         if activeFetches.contains(camera.id) && !force {
             return
@@ -88,6 +94,23 @@ class ThumbnailCacheManager: ObservableObject {
         startFetch(for: camera)
     }
     
+    // MARK: - Pause/Resume Controls
+    
+    func pauseCaptures() {
+        lock.lock()
+        isPaused = true
+        lock.unlock()
+        DebugLogger.shared.log("⏸️ Thumbnail captures paused", emoji: "⏸️", color: .orange)
+    }
+    
+    func resumeCaptures() {
+        lock.lock()
+        isPaused = false
+        lock.unlock()
+        DebugLogger.shared.log("▶️ Thumbnail captures resumed", emoji: "▶️", color: .green)
+        processQueue()
+    }
+    
     private func startFetch(for camera: Camera) {
         activeFetches.insert(camera.id)
         lastFetchTime[camera.id] = Date()
@@ -102,6 +125,12 @@ class ThumbnailCacheManager: ObservableObject {
     
     private func processQueue() {
         lock.lock()
+        
+        // Don't process queue if paused
+        if isPaused {
+            lock.unlock()
+            return
+        }
         
         // Process as many items as we have slots
         while activeWebViewCount < maxConcurrentWebViews && !fetchQueue.isEmpty {

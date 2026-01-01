@@ -51,7 +51,15 @@ struct AreaCamerasView: View {
                 }
             }
         }
-        .fullScreenCover(item: $selectedCamera) { FullscreenPlayerView(camera: $0) }
+        .fullScreenCover(item: $selectedCamera) { camera in
+            FullscreenPlayerView(camera: camera)
+                .onDisappear {
+                    // Resume thumbnail captures when closing player
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        ThumbnailCacheManager.shared.resumeCaptures()
+                    }
+                }
+        }
         .onAppear {
             DebugLogger.shared.log("📹 AreaCamerasView appeared: \(area)", emoji: "📹", color: .blue)
         }
@@ -135,7 +143,16 @@ struct AreaCamerasView: View {
                     CameraGridCard(camera: camera, mode: gridMode)
                         .onTapGesture {
                             if camera.isOnline {
-                                selectedCamera = camera
+                                // Stop any thumbnail captures before opening player
+                                ThumbnailCacheManager.shared.pauseCaptures()
+                                
+                                // Haptic feedback
+                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                
+                                // Small delay to ensure smooth transition
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    selectedCamera = camera
+                                }
                             } else {
                                 UINotificationFeedbackGenerator().notificationOccurred(.warning)
                             }
