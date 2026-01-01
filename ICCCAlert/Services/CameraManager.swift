@@ -122,7 +122,6 @@ class CameraManager: ObservableObject {
             
             DebugLogger.shared.log("➕ Added \(newCamerasCount) new cameras", emoji: "➕", color: .green)
             
-
             saveCameraList()
         }
         
