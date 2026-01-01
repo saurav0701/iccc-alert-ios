@@ -225,10 +225,10 @@ struct DebugView: View {
     // MARK: - Thumbnails Tab
     private var thumbnailsTab: some View {
         List {
-            // Thumbnail Test Section - FIXED
+            // Thumbnail Test Section
             Section(header: Text("Thumbnail Capture Test")) {
                 Button(action: {
-                    // Test with first online camera - use manualRefresh instead
+                    // Test with first online camera
                     if let testCamera = cameraManager.cameras.first(where: { $0.isOnline }) {
                         DebugLogger.shared.log("🧪 Testing thumbnail capture for: \(testCamera.displayName)", emoji: "🧪", color: .blue)
                         thumbnailCache.manualRefresh(for: testCamera) { success in
@@ -268,7 +268,7 @@ struct DebugView: View {
                 }
             }
             
-            // Show thumbnails grid
+            // Show thumbnails grid - FIXED
             if !thumbnailCache.thumbnails.isEmpty {
                 Section(header: HStack {
                     Text("Captured Thumbnails")
@@ -280,48 +280,49 @@ struct DebugView: View {
                     .font(.caption)
                     .foregroundColor(.red)
                 }) {
-                    let thumbnails = Array(thumbnailCache.thumbnails)
-                    ForEach(0..<thumbnails.count, id: \.self) { index in
-                        let (key, image) = thumbnails[index]
-                        HStack(spacing: 12) {
-                            Image(uiImage: image)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: 100, height: 75)
-                                .cornerRadius(8)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .stroke(Color.green, lineWidth: 2)
-                                )
-                            
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(key)
-                                    .font(.system(size: 12, weight: .bold))
-                                    .lineLimit(2)
+                    // Convert dictionary to sorted array
+                    ForEach(Array(thumbnailCache.thumbnails.keys).sorted(), id: \.self) { key in
+                        if let image = thumbnailCache.thumbnails[key] {
+                            HStack(spacing: 12) {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(width: 100, height: 75)
+                                    .cornerRadius(8)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .stroke(Color.green, lineWidth: 2)
+                                    )
                                 
-                                Text("\(Int(image.size.width))x\(Int(image.size.height))")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.secondary)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(key)
+                                        .font(.system(size: 12, weight: .bold))
+                                        .lineLimit(2)
+                                    
+                                    Text("\(Int(image.size.width))x\(Int(image.size.height))")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.secondary)
+                                    
+                                    if let timestamp = thumbnailCache.thumbnailTimestamps[key] {
+                                        let age = Date().timeIntervalSince(timestamp)
+                                        let ageMinutes = Int(age / 60)
+                                        Text("\(ageMinutes)m old")
+                                            .font(.system(size: 9))
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
                                 
-                                if let timestamp = thumbnailCache.thumbnailTimestamps[key] {
-                                    let age = Date().timeIntervalSince(timestamp)
-                                    let isFresh = thumbnailCache.isThumbnailFresh(for: key)
-                                    Text(isFresh ? "Fresh ✓" : "Stale (\(Int(age/60))m old)")
-                                        .font(.system(size: 9))
-                                        .foregroundColor(isFresh ? .green : .orange)
+                                Spacer()
+                                
+                                Button(action: {
+                                    thumbnailCache.clearThumbnail(for: key)
+                                }) {
+                                    Image(systemName: "trash")
+                                        .foregroundColor(.red)
                                 }
                             }
-                            
-                            Spacer()
-                            
-                            Button(action: {
-                                thumbnailCache.clearThumbnail(for: key)
-                            }) {
-                                Image(systemName: "trash")
-                                    .foregroundColor(.red)
-                            }
+                            .padding(.vertical, 4)
                         }
-                        .padding(.vertical, 4)
                     }
                 }
             }
