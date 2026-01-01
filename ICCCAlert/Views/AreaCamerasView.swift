@@ -74,21 +74,31 @@ struct AreaCamerasView: View {
                 .disabled(isRefreshing)
             }
         }
-        .fullScreenCover(item: $selectedCamera) { FullscreenPlayerView(camera: $0) }
+        .fullScreenCover(item: $selectedCamera) { camera in
+            FullscreenPlayerView(camera: camera)
+                .onDisappear {
+                    // Ensure player is cleaned up when dismissed
+                    PlayerManager.shared.releasePlayer(camera.id)
+                }
+        }
         .onAppear {
             DebugLogger.shared.log("📹 AreaCamerasView appeared: \(area)", emoji: "📹", color: .blue)
         }
         .onDisappear {
             DebugLogger.shared.log("🚪 AreaCamerasView disappeared: \(area)", emoji: "🚪", color: .orange)
+            
+            // Clean up all active resources
             PlayerManager.shared.clearAll()
             thumbnailCache.clearChannelThumbnails()
         }
         .onChange(of: scenePhase) { phase in
             if phase == .background {
+                // Ensure cleanup when app goes to background
                 PlayerManager.shared.clearAll()
             }
         }
         .onChange(of: gridMode) { _ in
+            // Clean up players when changing grid mode
             PlayerManager.shared.clearAll()
         }
     }
@@ -140,6 +150,7 @@ struct AreaCamerasView: View {
                 }
                 .toggleStyle(SwitchToggleStyle(tint: .green))
                 .onChange(of: showOnlineOnly) { _ in
+                    // Clean up players when filter changes
                     PlayerManager.shared.clearAll()
                 }
             }
@@ -242,14 +253,14 @@ struct AreaCamerasView: View {
         
         let onlineCameras = cameras.filter { $0.isOnline }
         
-        DebugLogger.shared.log("🔄 Clearing \(onlineCameras.count) thumbnails", emoji: "🔄", color: .blue)
+        DebugLogger.shared.log("🔄 Refreshing \(onlineCameras.count) thumbnails", emoji: "🔄", color: .blue)
         
-        // Clear all thumbnails
+        // Clear all thumbnails for this area
         for camera in onlineCameras {
             thumbnailCache.clearThumbnail(for: camera.id)
         }
         
-        // Small delay to ensure UI updates
+        // Small delay to ensure UI updates, then trigger auto-reload
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             self.isRefreshing = false
             UINotificationFeedbackGenerator().notificationOccurred(.success)

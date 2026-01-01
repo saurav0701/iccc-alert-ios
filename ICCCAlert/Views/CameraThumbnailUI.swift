@@ -1,39 +1,39 @@
 import SwiftUI
 
-// MARK: - Camera Thumbnail (Auto-Load with Manual Retry)
+// MARK: - Camera Thumbnail (with Proper Lifecycle Management)
 struct CameraThumbnail: View {
     let camera: Camera
     let isGridView: Bool
     @StateObject private var thumbnailCache = ThumbnailCacheManager.shared
+    @State private var viewId = UUID()
     
     var body: some View {
         GeometryReader { geometry in
             ZStack {
                 if let thumbnail = thumbnailCache.getThumbnail(for: camera.id) {
-                    // Show cached thumbnail with proper aspect ratio
                     thumbnailImageView(thumbnail, geometry: geometry)
                 } else if !camera.isOnline {
-                    // Offline state
                     offlineView
                 } else if thumbnailCache.isLoading(for: camera.id) {
-                    // Loading state
                     loadingView
                 } else if thumbnailCache.hasFailed(for: camera.id) {
-                    // Failed - show manual retry button
                     failedView
                 } else {
-                    // Initial state - auto-loading
                     loadingView
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .contentShape(Rectangle())
+        .id(viewId) // Force recreation on camera change
         .onAppear {
-            // Auto-load thumbnail when view appears
+            // Only auto-load if we don't have a thumbnail
             if camera.isOnline && thumbnailCache.getThumbnail(for: camera.id) == nil {
                 thumbnailCache.autoFetchThumbnail(for: camera)
             }
+        }
+        .onDisappear {
+            // Don't cancel - let it finish in queue
         }
     }
     
@@ -41,7 +41,6 @@ struct CameraThumbnail: View {
         let imageSize = image.size
         let containerSize = geometry.size
         
-        // Calculate aspect fit scale
         let widthRatio = containerSize.width / imageSize.width
         let heightRatio = containerSize.height / imageSize.height
         let scale = min(widthRatio, heightRatio)
@@ -50,10 +49,8 @@ struct CameraThumbnail: View {
         let scaledHeight = imageSize.height * scale
         
         return ZStack {
-            // Background color
             Color.black.opacity(0.05)
             
-            // Image centered and properly sized
             Image(uiImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
@@ -129,15 +126,10 @@ struct CameraThumbnail: View {
         }
     }
     
-    // MARK: - Manual Retry
-    
     private func retryLoad() {
         guard camera.isOnline else { return }
         
-        // Haptic feedback
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        
-        DebugLogger.shared.log("🔄 Manual retry: \(camera.displayName)", emoji: "🔄", color: .blue)
         
         thumbnailCache.manualRefresh(for: camera) { success in
             DispatchQueue.main.async {
@@ -151,14 +143,13 @@ struct CameraThumbnail: View {
     }
 }
 
-// MARK: - Camera Grid Card (Fixed Thumbnail Container)
+// MARK: - Camera Grid Card (No Changes Needed)
 struct CameraGridCardFixed: View {
     let camera: Camera
     let mode: GridViewMode
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Fixed size thumbnail container
             CameraThumbnail(camera: camera, isGridView: mode != .list)
                 .frame(height: thumbnailHeight)
                 .clipShape(RoundedRectangle(cornerRadius: 12))

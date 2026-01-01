@@ -74,8 +74,8 @@ struct ICCCAlertApp: App {
                             }
                         } else {
                             print("🔐 USER LOGGED OUT")
-                            // Clean up all resources
-                            PlayerManager.shared.clearAll()
+                            // Clean up all resources on logout
+                            handleLogout()
                         }
                     }
             }
@@ -111,15 +111,18 @@ struct ICCCAlertApp: App {
             
         case .inactive:
             print("📱 App became inactive")
-            // Pause all video players
+            // Pause all video players and clean up active thumbnail captures
             PlayerManager.shared.clearAll()
             
         case .background:
             print("📱 App moved to background")
             saveAppState()
             
-            // ✅ CRITICAL: Clean up all video players
+            // ✅ CRITICAL: Clean up all active resources
             PlayerManager.shared.clearAll()
+            
+            // Clear thumbnail memory cache but keep disk cache
+            ThumbnailCacheManager.shared.clearChannelThumbnails()
             
             NotificationManager.shared.updateBadgeCount()
             
@@ -128,12 +131,32 @@ struct ICCCAlertApp: App {
         }
     }
     
+    // ✅ Handle logout
+    private func handleLogout() {
+        print("🔐 Handling logout - cleaning up all resources")
+        
+        // Clear all video players
+        PlayerManager.shared.clearAll()
+        
+        // Clear all thumbnail data (both memory and disk)
+        ThumbnailCacheManager.shared.clearAllThumbnails()
+        
+        // Clear image caches
+        EventImageLoader.shared.clearCache()
+        
+        print("✅ Logout cleanup complete")
+    }
+    
     // ✅ Handle app termination
     private static func handleAppTermination() {
         print("🛑 App will terminate - cleaning up resources")
         
-        // Clean up video players
+        // Clear video players
         PlayerManager.shared.clearAll()
+        
+        // Stop any active thumbnail captures
+        // (Queue will be cleared automatically, but WebView needs cleanup)
+        ThumbnailCacheManager.shared.clearChannelThumbnails()
         
         // Save state
         SubscriptionManager.shared.forceSave()
@@ -147,11 +170,17 @@ struct ICCCAlertApp: App {
     private static func handleMemoryWarning() {
         print("⚠️ MEMORY WARNING - Aggressive cleanup")
         
-        // Clear all video players immediately
+        // 1. Clear all video players immediately
         PlayerManager.shared.clearAll()
         
-        // Clear image caches
+        // 2. Clear thumbnail memory cache (keep disk cache for recovery)
+        ThumbnailCacheManager.shared.clearChannelThumbnails()
+        
+        // 3. Clear image caches
         EventImageLoader.shared.clearCache()
+        
+        // 4. Force URLCache cleanup
+        URLCache.shared.removeAllCachedResponses()
         
         print("🧹 Memory cleanup complete")
     }
