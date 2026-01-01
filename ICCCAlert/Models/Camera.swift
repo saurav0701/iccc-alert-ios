@@ -253,8 +253,7 @@ extension Camera {
             lastUpdate: lastUpdate ?? self.lastUpdate
         )
     }
-    
-    // ✅ DEBUG: Print camera stream info
+
     func printStreamInfo() {
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         print("📹 Camera: \(displayName)")
@@ -267,8 +266,6 @@ extension Camera {
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     }
 }
-
-// MARK: - Camera Response (from WebSocket)
 
 struct CameraListResponse: Codable {
     let cameras: [Camera]

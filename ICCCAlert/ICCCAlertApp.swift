@@ -142,15 +142,12 @@ struct ICCCAlertApp: App {
         
         print("✅ Resources cleaned up")
     }
-    
-    // ✅ Handle memory warnings
+
     private static func handleMemoryWarning() {
         print("⚠️ MEMORY WARNING - Aggressive cleanup")
-        
-        // Clear all video players immediately
+
         PlayerManager.shared.clearAll()
-        
-        // Clear image caches
+   
         EventImageLoader.shared.clearCache()
         
         print("🧹 Memory cleanup complete")
@@ -162,9 +159,7 @@ struct ICCCAlertApp: App {
         ChannelSyncState.shared.forceSave()
         print("✅ App state saved")
     }
-    
-    // MARK: - Appearance Setup
-    
+
     private func setupAppearance() {
         let navBarAppearance = UINavigationBarAppearance()
         navBarAppearance.configureWithOpaqueBackground()
@@ -186,3 +181,5 @@ struct ICCCAlertApp: App {
         }
     }
 }
+
+ 
