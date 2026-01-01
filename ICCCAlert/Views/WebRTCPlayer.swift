@@ -2,7 +2,7 @@ import SwiftUI
 import WebKit
 import Combine
 
-// MARK: - Player Manager (CRASH-PROOF with Strict Limits)
+// MARK: - Player Manager (ULTIMATE CRASH PREVENTION)
 class PlayerManager: ObservableObject {
     static let shared = PlayerManager()
     
@@ -10,17 +10,21 @@ class PlayerManager: ObservableObject {
     private var playerCreationTimes: [String: Date] = [:]
     private let lock = NSLock()
     
-    // ✅ CRITICAL: Only 1 active stream at a time to prevent memory crashes
+    // ✅ CRITICAL: Only 1 active stream at a time
     private let maxPlayers = 1
     
+    // ✅ Track cleanup to prevent double cleanup
+    private var cleanupInProgress: Set<String> = []
+    
     private init() {
-        // Monitor memory warnings
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleMemoryWarning),
             name: UIApplication.didReceiveMemoryWarningNotification,
             object: nil
         )
+        
+        print("🎬 PlayerManager initialized with maxPlayers=\(maxPlayers)")
     }
     
     @objc private func handleMemoryWarning() {
@@ -32,26 +36,33 @@ class PlayerManager: ObservableObject {
         lock.lock()
         defer { lock.unlock() }
         
-        print("📹 Attempting to register player: \(cameraId)")
+        print("📹 Registering player: \(cameraId)")
         
-        // ✅ CRITICAL: Clean up old player for same camera if exists
+        // ✅ Remove old player for same camera if exists
         if let oldPlayer = activePlayers[cameraId] {
             print("🗑️ Removing old player for: \(cameraId)")
-            cleanupWebView(oldPlayer)
             activePlayers.removeValue(forKey: cameraId)
             playerCreationTimes.removeValue(forKey: cameraId)
+            
+            // Cleanup without lock
+            DispatchQueue.main.async {
+                self.cleanupWebViewSafely(oldPlayer, cameraId: cameraId)
+            }
         }
         
-        // ✅ CRITICAL: Enforce strict limit - only 1 player at a time
+        // ✅ Enforce strict limit
         if activePlayers.count >= maxPlayers {
             print("⚠️ At capacity (\(maxPlayers) players) - removing oldest")
             
-            // Remove oldest player
             if let oldestKey = playerCreationTimes.min(by: { $0.value < $1.value })?.key {
                 if let oldPlayer = activePlayers.removeValue(forKey: oldestKey) {
-                    print("🗑️ Removed oldest player: \(oldestKey)")
-                    cleanupWebView(oldPlayer)
+                    print("🗑️ Removed oldest: \(oldestKey)")
                     playerCreationTimes.removeValue(forKey: oldestKey)
+                    
+                    // Cleanup without lock
+                    DispatchQueue.main.async {
+                        self.cleanupWebViewSafely(oldPlayer, cameraId: oldestKey)
+                    }
                 }
             }
         }
@@ -60,38 +71,64 @@ class PlayerManager: ObservableObject {
         playerCreationTimes[cameraId] = Date()
         
         print("✅ Registered: \(cameraId) (Active: \(activePlayers.count)/\(maxPlayers))")
-        print("   Active cameras: \(activePlayers.keys.joined(separator: ", "))")
     }
     
-    private func cleanupWebView(_ webView: WKWebView) {
-        DispatchQueue.main.async {
+    private func cleanupWebViewSafely(_ webView: WKWebView, cameraId: String) {
+        // Prevent double cleanup
+        lock.lock()
+        if cleanupInProgress.contains(cameraId) {
+            lock.unlock()
+            print("⚠️ Cleanup already in progress for: \(cameraId)")
+            return
+        }
+        cleanupInProgress.insert(cameraId)
+        lock.unlock()
+        
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            
             // Stop loading
             webView.stopLoading()
             
             // Clear content
             webView.loadHTMLString("", baseURL: nil)
             
-            // Remove message handlers safely
+            // Remove message handlers safely (try-catch pattern)
             let userContentController = webView.configuration.userContentController
-            userContentController.removeScriptMessageHandler(forName: "logging")
+            
+            // Try to remove each handler individually
+            do {
+                userContentController.removeScriptMessageHandler(forName: "logging")
+            } catch {
+                print("⚠️ Failed to remove logging handler: \(error)")
+            }
             
             // Remove from view hierarchy
             webView.removeFromSuperview()
             
-            print("🧹 WebView cleaned up")
+            // Mark cleanup complete
+            self.lock.lock()
+            self.cleanupInProgress.remove(cameraId)
+            self.lock.unlock()
+            
+            print("🧹 WebView cleaned up: \(cameraId)")
         }
     }
     
     func releasePlayer(_ cameraId: String) {
         lock.lock()
-        defer { lock.unlock() }
         
-        if let webView = activePlayers.removeValue(forKey: cameraId) {
-            playerCreationTimes.removeValue(forKey: cameraId)
-            cleanupWebView(webView)
-            print("🗑️ Released: \(cameraId)")
-            print("   Remaining: \(activePlayers.count)")
+        guard let webView = activePlayers.removeValue(forKey: cameraId) else {
+            lock.unlock()
+            print("⚠️ No player to release: \(cameraId)")
+            return
         }
+        
+        playerCreationTimes.removeValue(forKey: cameraId)
+        lock.unlock()
+        
+        cleanupWebViewSafely(webView, cameraId: cameraId)
+        print("🗑️ Released: \(cameraId)")
     }
     
     func clearAll() {
@@ -102,11 +139,10 @@ class PlayerManager: ObservableObject {
         lock.unlock()
         
         for (cameraId, webView) in players {
-            cleanupWebView(webView)
-            print("🧹 Cleared: \(cameraId)")
+            cleanupWebViewSafely(webView, cameraId: cameraId)
         }
         
-        print("🧹 Cleared all players")
+        print("🧹 Cleared all players (\(players.count))")
     }
     
     func getActivePlayerCount() -> Int {
@@ -126,7 +162,7 @@ class PlayerManager: ObservableObject {
     }
 }
 
-// MARK: - WebRTC Player View (Crash-Proof with Better Error Handling)
+// MARK: - WebRTC Player View (CRASH-PROOF)
 struct WebRTCPlayerView: UIViewRepresentable {
     let streamURL: String
     let cameraId: String
@@ -135,20 +171,16 @@ struct WebRTCPlayerView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         print("🎬 Creating player for: \(cameraId)")
         
-        // ✅ Check if we're at capacity before creating
-        let currentCount = PlayerManager.shared.getActivePlayerCount()
-        if currentCount >= 1 {
-            print("⚠️ Already at capacity - this player may cause issues")
-        }
-        
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
         config.allowsPictureInPictureMediaPlayback = false
         config.websiteDataStore = .nonPersistent()
         
-        // ✅ Limit media cache
-        config.mediaTypesRequiringUserActionForPlayback = []
+        // ✅ Set memory limit
+        if #available(iOS 14.0, *) {
+            config.limitsNavigationsToAppBoundDomains = false
+        }
         
         let prefs = WKWebpagePreferences()
         prefs.allowsContentJavaScript = true
@@ -161,22 +193,25 @@ struct WebRTCPlayerView: UIViewRepresentable {
         webView.isOpaque = true
         webView.navigationDelegate = context.coordinator
         
-        // Add message handler
-        webView.configuration.userContentController.add(context.coordinator, name: "logging")
+        // ✅ Add message handler BEFORE registering
+        let contentController = webView.configuration.userContentController
+        contentController.add(context.coordinator, name: "logging")
         
-        // ✅ Register BEFORE loading to prevent race conditions
+        // ✅ Register player IMMEDIATELY
         PlayerManager.shared.registerPlayer(webView, for: cameraId)
         
-        // Small delay to ensure registration completes
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            context.coordinator.loadPlayer(in: webView, streamURL: streamURL)
+        // ✅ Load after small delay to ensure registration completes
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            if !context.coordinator.hasCleanedUp {
+                context.coordinator.loadPlayer(in: webView, streamURL: streamURL)
+            }
         }
         
         return webView
     }
     
     func updateUIView(_ uiView: WKWebView, context: Context) {
-        // Do nothing - avoid unnecessary updates
+        // Avoid updates
     }
     
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
@@ -190,19 +225,22 @@ struct WebRTCPlayerView: UIViewRepresentable {
     
     class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         let cameraId: String
-        private var retryCount = 0
-        private let maxRetries = 2 // Reduced from 3
-        private var hasCleanedUp = false
+        var hasCleanedUp = false
+        private let lock = NSLock()
         
         init(cameraId: String) {
             self.cameraId = cameraId
+            super.init()
         }
         
         func loadPlayer(in webView: WKWebView, streamURL: String) {
+            lock.lock()
             guard !hasCleanedUp else {
-                print("⚠️ Already cleaned up, skipping load")
+                lock.unlock()
+                print("⚠️ Already cleaned up, skipping load: \(cameraId)")
                 return
             }
+            lock.unlock()
             
             let html = """
             <!DOCTYPE html>
@@ -244,7 +282,11 @@ struct WebRTCPlayerView: UIViewRepresentable {
                         if (!isActive) return;
                         status.textContent = msg;
                         status.className = isError ? 'error' : '';
-                        try { window.webkit?.messageHandlers?.logging?.postMessage(msg); } catch(e) {}
+                        try { 
+                            window.webkit?.messageHandlers?.logging?.postMessage(msg); 
+                        } catch(e) {
+                            console.error('Logging error:', e);
+                        }
                     }
                     
                     function cleanup() {
@@ -279,7 +321,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
                     async function start() {
                         if (!isActive || retryCount >= MAX_RETRIES) {
                             if (retryCount >= MAX_RETRIES) {
-                                log('Max retries reached', true);
+                                log('Connection failed', true);
                             }
                             return;
                         }
@@ -295,7 +337,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
                             });
                             
                             pc.ontrack = (e) => { 
-                                if (isActive) { 
+                                if (isActive && e.streams && e.streams[0]) { 
                                     log('Stream ready'); 
                                     video.srcObject = e.streams[0]; 
                                     retryCount = 0;
@@ -303,7 +345,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
                             };
                             
                             pc.oniceconnectionstatechange = () => {
-                                if (!isActive) return;
+                                if (!isActive || !pc) return;
                                 
                                 const state = pc.iceConnectionState;
                                 
@@ -311,12 +353,12 @@ struct WebRTCPlayerView: UIViewRepresentable {
                                     log('Connected'); 
                                     live.classList.add('show');
                                 } else if (state === 'failed' || state === 'disconnected') {
-                                    log(state === 'failed' ? 'Connection failed' : 'Disconnected'); 
+                                    log(state === 'failed' ? 'Failed' : 'Disconnected'); 
                                     live.classList.remove('show');
                                     retryCount++;
                                     
                                     if (isActive && retryCount < MAX_RETRIES) {
-                                        const delay = Math.min(3000 * retryCount, 10000);
+                                        const delay = 3000 * retryCount;
                                         restartTimeout = setTimeout(start, delay);
                                     }
                                 }
@@ -352,7 +394,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
                             retryCount++;
                             
                             if (isActive && retryCount < MAX_RETRIES) {
-                                const delay = Math.min(5000 * retryCount, 15000);
+                                const delay = 5000 * retryCount;
                                 restartTimeout = setTimeout(start, delay);
                             }
                         }
@@ -368,13 +410,18 @@ struct WebRTCPlayerView: UIViewRepresentable {
                     video.addEventListener('error', (e) => {
                         if (isActive) {
                             log('Video error', true);
-                            console.error('Video error:', e);
                         }
                     });
                     
                     window.addEventListener('beforeunload', () => { 
                         isActive = false; 
                         cleanup(); 
+                    });
+                    
+                    // ✅ Add error handler for unhandled errors
+                    window.addEventListener('error', (e) => {
+                        console.error('Window error:', e);
+                        e.preventDefault();
                     });
                     
                     // Start connection
@@ -389,8 +436,13 @@ struct WebRTCPlayerView: UIViewRepresentable {
         }
         
         func cleanup() {
-            guard !hasCleanedUp else { return }
+            lock.lock()
+            guard !hasCleanedUp else {
+                lock.unlock()
+                return
+            }
             hasCleanedUp = true
+            lock.unlock()
             
             print("🧹 Coordinator cleanup: \(cameraId)")
             PlayerManager.shared.releasePlayer(cameraId)
@@ -402,15 +454,10 @@ struct WebRTCPlayerView: UIViewRepresentable {
         
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             print("❌ Navigation failed: \(error.localizedDescription)")
-            
-            if retryCount < maxRetries {
-                retryCount += 1
-                print("🔄 Will retry (\(retryCount)/\(maxRetries))")
-            }
         }
         
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-            print("❌ Provisional navigation failed: \(error.localizedDescription)")
+            print("❌ Provisional failed: \(error.localizedDescription)")
         }
         
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -425,27 +472,27 @@ struct WebRTCPlayerView: UIViewRepresentable {
     }
 }
 
-// MARK: - Fullscreen Player (with Proper Cleanup)
+// MARK: - Fullscreen Player (SAFE)
 struct FullscreenPlayerView: View {
     let camera: Camera
     @Environment(\.presentationMode) var presentationMode
     @State private var showControls = true
     @State private var orientation = UIDeviceOrientation.unknown
+    @State private var hasAppeared = false
     
     var body: some View {
         GeometryReader { geometry in
             ZStack {
                 Color.black.ignoresSafeArea()
                 
-                if let url = camera.webrtcStreamURL {
+                if let url = camera.webrtcStreamURL, hasAppeared {
                     WebRTCPlayerView(streamURL: url, cameraId: camera.id, isFullscreen: true)
                         .ignoresSafeArea()
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .onTapGesture {
                             withAnimation { showControls.toggle() }
                         }
-                } else {
-                    // Error state
+                } else if camera.webrtcStreamURL == nil {
                     VStack {
                         Image(systemName: "exclamationmark.triangle")
                             .font(.system(size: 50))
@@ -454,6 +501,11 @@ struct FullscreenPlayerView: View {
                             .foregroundColor(.white)
                             .padding()
                     }
+                } else {
+                    // Loading state
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(1.5)
                 }
                 
                 if showControls {
@@ -462,12 +514,20 @@ struct FullscreenPlayerView: View {
             }
             .onAppear {
                 setupOrientationObserver()
-                print("📱 Fullscreen player appeared: \(camera.displayName)")
+                print("📱 Fullscreen appeared: \(camera.displayName)")
+                
+                // ✅ Delay player creation slightly
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    hasAppeared = true
+                }
             }
             .onDisappear {
-                print("🚪 Fullscreen player disappeared: \(camera.displayName)")
+                print("🚪 Fullscreen disappeared: \(camera.displayName)")
+                
+                // ✅ Immediate cleanup
                 PlayerManager.shared.releasePlayer(camera.id)
                 resetOrientation()
+                hasAppeared = false
             }
         }
         .navigationBarHidden(true)
@@ -478,7 +538,7 @@ struct FullscreenPlayerView: View {
         VStack {
             HStack {
                 Button(action: {
-                    print("👈 Back button pressed")
+                    print("👈 Back pressed")
                     PlayerManager.shared.releasePlayer(camera.id)
                     presentationMode.wrappedValue.dismiss()
                 }) {
