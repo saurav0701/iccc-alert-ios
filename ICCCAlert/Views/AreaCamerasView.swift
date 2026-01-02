@@ -9,6 +9,8 @@ struct AreaCamerasView: View {
     @State private var gridMode: GridViewMode = .grid2x2
     @State private var selectedCamera: Camera? = nil
     @State private var showStreamBlockedAlert = false
+    @State private var streamBlockMessage = ""
+    @State private var canOpenStream = true
     @Environment(\.scenePhase) var scenePhase
     
     var cameras: [Camera] {
@@ -44,13 +46,21 @@ struct AreaCamerasView: View {
             }
         )
         .fullScreenCover(item: $selectedCamera) { camera in
-    FullscreenPlayerEnhanced(camera: camera)
-    // No onDisappear needed - handled inside
-}
+            FullscreenPlayerEnhanced(camera: camera)
+                .onDisappear {
+                    // CRITICAL: Prevent stream opening immediately after close
+                    canOpenStream = false
+                    
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                        self.canOpenStream = true
+                        DebugLogger.shared.log("✅ Ready for next stream", emoji: "✅", color: .green)
+                    }
+                }
+        }
         .alert(isPresented: $showStreamBlockedAlert) {
             Alert(
-                title: Text("Stream Blocked"),
-                message: Text("Please wait - a thumbnail is currently being captured. Try again in a few seconds."),
+                title: Text("Cannot Open Stream"),
+                message: Text(streamBlockMessage),
                 dismissButton: .default(Text("OK"))
             )
         }
@@ -58,19 +68,15 @@ struct AreaCamerasView: View {
             DebugLogger.shared.log("📹 AreaCamerasView appeared: \(area)", emoji: "📹", color: .blue)
         }
         .onDisappear {
-            DebugLogger.shared.log("🚪 AreaCamerasView disappeared: \(area)", emoji: "🚪", color: .orange)
-            
-            // Clean up all active resources
+            DebugLogger.shared.log("🚪 AreaCamerasView disappeared", emoji: "🚪", color: .orange)
             PlayerManager.shared.clearAll()
         }
         .onChange(of: scenePhase) { phase in
             if phase == .background {
-                // Ensure cleanup when app goes to background
                 PlayerManager.shared.clearAll()
             }
         }
         .onChange(of: gridMode) { _ in
-            // Clean up players when changing grid mode
             PlayerManager.shared.clearAll()
         }
     }
@@ -122,21 +128,27 @@ struct AreaCamerasView: View {
                 }
                 .toggleStyle(SwitchToggleStyle(tint: .green))
                 .onChange(of: showOnlineOnly) { _ in
-                    // Clean up players when filter changes
                     PlayerManager.shared.clearAll()
                 }
             }
             .padding(.horizontal)
             
-            // Info banner about manual thumbnail loading
+            // Enhanced info banner
             HStack(spacing: 8) {
                 Image(systemName: "info.circle")
                     .foregroundColor(.blue)
                     .font(.system(size: 14))
                 
-                Text("Tap camera thumbnails to load preview. Wait for capture to finish before playing streams.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Tap thumbnail to load preview")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fontWeight(.medium)
+                    
+                    Text("Wait for preview before playing stream (5 second interval)")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
                 
                 Spacer()
             }
@@ -171,9 +183,28 @@ struct AreaCamerasView: View {
             return
         }
         
-        // CRITICAL: Check if thumbnail is currently being captured
+        // CRITICAL: Check if we can open stream (cooldown after previous stream)
+        if !canOpenStream {
+            streamBlockMessage = "Please wait a moment before opening another stream. This prevents crashes on low memory devices."
+            showStreamBlockedAlert = true
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            return
+        }
+        
+        // CRITICAL: Check if thumbnail is being captured
         if thumbnailCache.isLoading(for: camera.id) {
-            DebugLogger.shared.log("⚠️ Cannot play stream - thumbnail capture in progress", emoji: "⚠️", color: .orange)
+            streamBlockMessage = "Thumbnail capture in progress. Wait a few seconds before playing stream."
+            showStreamBlockedAlert = true
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            return
+        }
+        
+        // CRITICAL: Check if ANY thumbnail capture is in progress
+        if !thumbnailCache.loadingCameras.isEmpty {
+            let loadingCameraIds = thumbnailCache.loadingCameras.joined(separator: ", ")
+            DebugLogger.shared.log("⚠️ Thumbnail capture active: \(loadingCameraIds)", emoji: "⚠️", color: .orange)
+            
+            streamBlockMessage = "Another camera thumbnail is loading. Please wait."
             showStreamBlockedAlert = true
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
             return
@@ -181,17 +212,25 @@ struct AreaCamerasView: View {
         
         // Check if other streams are active
         if PlayerManager.shared.getActiveCount() > 0 {
-            DebugLogger.shared.log("⚠️ Another stream is active", emoji: "⚠️", color: .orange)
+            streamBlockMessage = "Another stream is already playing. Close it first."
+            showStreamBlockedAlert = true
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
             return
         }
         
-        // CRITICAL: Add 1 second delay before opening player to ensure thumbnail cleanup
+        // CRITICAL: Add 2 second delay to ensure any lingering resources are freed
         DebugLogger.shared.log("▶️ Opening player for: \(camera.displayName)", emoji: "▶️", color: .green)
         
-        // Small delay to ensure any lingering WebViews are destroyed
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+        // Disable further taps temporarily
+        canOpenStream = false
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             self.selectedCamera = camera
+            
+            // Re-enable after another 3 seconds (total 5 second protection)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                self.canOpenStream = true
+            }
         }
     }
     

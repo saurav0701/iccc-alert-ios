@@ -1,7 +1,6 @@
 import SwiftUI
 import WebKit 
 
-// MARK: - Enhanced Fullscreen Player with Auto-Restart
 struct FullscreenPlayerEnhanced: View {
     let camera: Camera
     @Environment(\.presentationMode) var presentationMode
@@ -11,6 +10,7 @@ struct FullscreenPlayerEnhanced: View {
     
     @State private var showControls = true
     @State private var isRestarting = false
+    @State private var showCrashWarning = false
     
     init(camera: Camera) {
         self.camera = camera
@@ -38,7 +38,7 @@ struct FullscreenPlayerEnhanced: View {
                 controlsOverlay
             }
             
-            if memoryMonitor.isMemoryWarning {
+            if memoryMonitor.isMemoryWarning || showCrashWarning {
                 memoryWarningOverlay
             }
         }
@@ -49,8 +49,29 @@ struct FullscreenPlayerEnhanced: View {
                 performRestart()
             }
         }
+        .onChange(of: memoryMonitor.currentMemoryMB) { memoryMB in
+            // Proactive restart if memory exceeds threshold
+            if memoryMB > StreamConfig.memoryThresholdMB {
+                DebugLogger.shared.log("⚠️ Memory threshold exceeded - forcing restart", emoji: "⚠️", color: .red)
+                showCrashWarning = true
+                
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    self.performRestart()
+                    self.showCrashWarning = false
+                }
+            }
+        }
+        .onAppear {
+            DebugLogger.shared.log("📹 Player appeared: \(camera.displayName)", emoji: "📹", color: .blue)
+        }
         .onDisappear {
+            DebugLogger.shared.log("🚪 Player disappeared - cleanup", emoji: "🚪", color: .orange)
             session.stop()
+            
+            // CRITICAL: Wait 2 seconds before allowing anything else
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                DebugLogger.shared.log("✅ Player fully cleaned up", emoji: "✅", color: .green)
+            }
         }
     }
     
@@ -59,7 +80,11 @@ struct FullscreenPlayerEnhanced: View {
             HStack {
                 Button(action: {
                     session.stop()
-                    presentationMode.wrappedValue.dismiss()
+                    
+                    // CRITICAL: Delay dismiss to ensure cleanup
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        self.presentationMode.wrappedValue.dismiss()
+                    }
                 }) {
                     HStack(spacing: 8) {
                         Image(systemName: "chevron.left")
@@ -75,14 +100,20 @@ struct FullscreenPlayerEnhanced: View {
                 
                 Spacer()
                 
-                // Restart countdown
+                // Countdown timer
                 if session.secondsRemaining > 0 {
-                    Text(formatTime(session.secondsRemaining))
-                        .font(.caption)
-                        .foregroundColor(.white)
-                        .padding(8)
-                        .background(Color.orange.opacity(0.8))
-                        .cornerRadius(8)
+                    VStack(spacing: 2) {
+                        Text(formatTime(session.secondsRemaining))
+                            .font(.caption)
+                            .foregroundColor(.white)
+                        
+                        Text("auto-refresh")
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.7))
+                    }
+                    .padding(8)
+                    .background(Color.orange.opacity(0.8))
+                    .cornerRadius(8)
                 }
                 
                 // Manual restart button
@@ -112,6 +143,11 @@ struct FullscreenPlayerEnhanced: View {
                         Text(camera.area)
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.8))
+                        
+                        // Memory indicator
+                        Text("\(Int(memoryMonitor.currentMemoryMB))MB")
+                            .font(.caption2)
+                            .foregroundColor(memoryMonitor.currentMemoryMB > StreamConfig.memoryThresholdMB ? .red : .white.opacity(0.6))
                     }
                 }
                 .padding()
@@ -130,9 +166,13 @@ struct FullscreenPlayerEnhanced: View {
                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
                 .scaleEffect(1.5)
             
-            Text("Restarting stream...")
+            Text("Refreshing stream...")
                 .font(.headline)
                 .foregroundColor(.white)
+            
+            Text("This prevents crashes on low memory devices")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.7))
         }
     }
     
@@ -149,10 +189,17 @@ struct FullscreenPlayerEnhanced: View {
                     Text("High Memory")
                         .font(.caption)
                         .foregroundColor(.white)
+                        .fontWeight(.semibold)
                     
                     Text("\(Int(memoryMonitor.currentMemoryMB)) MB")
                         .font(.caption2)
                         .foregroundColor(.white.opacity(0.8))
+                    
+                    if showCrashWarning {
+                        Text("Auto-refreshing...")
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.9))
+                    }
                 }
                 .padding()
                 .background(Color.orange.opacity(0.9))
@@ -165,16 +212,23 @@ struct FullscreenPlayerEnhanced: View {
     }
     
     private func performRestart() {
+        DebugLogger.shared.log("🔄 Performing restart", emoji: "🔄", color: .orange)
+        
         isRestarting = true
         
         // Stop current session
         session.stop()
         
-        // Wait for cleanup
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+        // CRITICAL: Wait 2 seconds for complete cleanup
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            // Force memory cleanup
+            autoreleasepool {}
+            
             // Start new session
             _ = session.start()
             isRestarting = false
+            
+            DebugLogger.shared.log("✅ Restart complete", emoji: "✅", color: .green)
         }
     }
     
@@ -197,13 +251,12 @@ struct WebRTCPlayerEnhanced: UIViewRepresentable {
     
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
         // Cleanup is handled by StreamSession
+        DebugLogger.shared.log("🗑️ Dismantling WebRTC player", emoji: "🗑️", color: .gray)
     }
     
     func makeCoordinator() -> Coordinator {
         return Coordinator()
     }
     
-    class Coordinator: NSObject {
-        // Empty - session handles everything
-    }
+    class Coordinator: NSObject {}
 }

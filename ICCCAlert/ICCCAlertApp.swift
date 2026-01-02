@@ -8,16 +8,18 @@ struct ICCCAlertApp: App {
     
     @Environment(\.scenePhase) var scenePhase
     
+    // CRITICAL: Memory monitoring
+    @State private var memoryMonitorTimer: Timer?
+    
     init() {
         setupAppearance()
         _ = BackgroundWebSocketManager.shared
-
         _ = MemoryMonitor.shared
         
         NotificationManager.shared.requestAuthorization()
         NotificationManager.shared.setupNotificationCategories()
         
-        // ✅ Register for app termination
+        // Register for app termination
         NotificationCenter.default.addObserver(
             forName: UIApplication.willTerminateNotification,
             object: nil,
@@ -25,7 +27,8 @@ struct ICCCAlertApp: App {
         ) { _ in
             ICCCAlertApp.handleAppTermination()
         }
-
+        
+        // Register for memory warnings
         NotificationCenter.default.addObserver(
             forName: UIApplication.didReceiveMemoryWarningNotification,
             object: nil,
@@ -33,6 +36,8 @@ struct ICCCAlertApp: App {
         ) { _ in
             ICCCAlertApp.handleMemoryWarning()
         }
+        
+        DebugLogger.shared.log("🚀 ICCCAlertApp initialized", emoji: "🚀", color: .blue)
     }
     
     var body: some Scene {
@@ -43,8 +48,9 @@ struct ICCCAlertApp: App {
                     .environmentObject(webSocketService)
                     .environmentObject(subscriptionManager)
                     .onAppear {
-                        print("🚀 ContentView appeared - User is authenticated")
+                        print("🚀 ContentView appeared - User authenticated")
                         connectWebSocket()
+                        startProactiveMemoryMonitoring()
                     }
             } else {
                 LoginView()
@@ -85,19 +91,80 @@ struct ICCCAlertApp: App {
         }
     }
     
+    // MARK: - Proactive Memory Monitoring (NEW - CRITICAL)
+    
+    private func startProactiveMemoryMonitoring() {
+        // Monitor memory every 15 seconds
+        memoryMonitorTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { [weak self] _ in
+            self?.checkAndCleanMemory()
+        }
+    }
+    
+    private func checkAndCleanMemory() {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
+        
+        let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+                task_info(mach_task_self_,
+                         task_flavor_t(MACH_TASK_BASIC_INFO),
+                         $0,
+                         &count)
+            }
+        }
+        
+        if kerr == KERN_SUCCESS {
+            let usedMemoryMB = Double(info.resident_size) / 1024 / 1024
+            
+            DebugLogger.shared.log("💾 Memory: \(String(format: "%.1f", usedMemoryMB)) MB", emoji: "💾", color: .gray)
+            
+            // CRITICAL: Proactive cleanup at 180MB (before reaching 200MB threshold)
+            if usedMemoryMB > 180 {
+                DebugLogger.shared.log("⚠️ Memory approaching threshold - proactive cleanup", emoji: "⚠️", color: .orange)
+                performProactiveCleanup()
+            }
+            
+            // CRITICAL: Emergency cleanup at 220MB
+            if usedMemoryMB > 220 {
+                DebugLogger.shared.log("🚨 CRITICAL MEMORY - Emergency cleanup", emoji: "🚨", color: .red)
+                ICCCAlertApp.handleMemoryWarning()
+            }
+        }
+    }
+    
+    private func performProactiveCleanup() {
+        // Clear thumbnail memory cache (keep disk cache)
+        ThumbnailCacheManager.shared.clearChannelThumbnails()
+        
+        // Clear image caches
+        EventImageLoader.shared.clearCache()
+        
+        // Clear URL cache
+        URLCache.shared.removeAllCachedResponses()
+        
+        // Force autoreleasepool drain
+        autoreleasepool {}
+        
+        DebugLogger.shared.log("🧹 Proactive cleanup complete", emoji: "🧹", color: .blue)
+    }
+    
+    // MARK: - WebSocket Connection
+    
     private func connectWebSocket() {
         guard authManager.isAuthenticated else {
-            print("⚠️ Not authenticated, skipping WebSocket connection")
+            print("⚠️ Not authenticated, skipping WebSocket")
             return
         }
         
         if !webSocketService.isConnected {
-            print("🔌 Starting WebSocket connection...")
+            print("🔌 Starting WebSocket...")
             webSocketService.connect()
         } else {
             print("ℹ️ WebSocket already connected")
         }
     }
+    
+    // MARK: - Scene Phase Changes
     
     private func handleScenePhaseChange(_ phase: ScenePhase) {
         switch phase {
@@ -108,68 +175,98 @@ struct ICCCAlertApp: App {
                 webSocketService.connect()
             }
             NotificationManager.shared.updateBadgeCount()
+            startProactiveMemoryMonitoring()
             
         case .inactive:
             print("📱 App became inactive")
+            // CRITICAL: Stop all active streams immediately
             PlayerManager.shared.clearAll()
             
         case .background:
             print("📱 App moved to background")
             saveAppState()
-    
+            
+            // CRITICAL: Aggressive cleanup for background
             PlayerManager.shared.clearAll()
-
             ThumbnailCacheManager.shared.clearChannelThumbnails()
+            EventImageLoader.shared.clearCache()
+            URLCache.shared.removeAllCachedResponses()
+            
+            // Stop memory monitoring
+            memoryMonitorTimer?.invalidate()
+            memoryMonitorTimer = nil
             
             NotificationManager.shared.updateBadgeCount()
+            
+            DebugLogger.shared.log("🧹 Background cleanup complete", emoji: "🧹", color: .orange)
             
         @unknown default:
             break
         }
     }
-
+    
+    // MARK: - Logout Handler
+    
     private func handleLogout() {
-        print("🔐 Handling logout - cleaning up all resources")
-
+        print("🔐 Handling logout - full cleanup")
+        
+        // Stop memory monitoring
+        memoryMonitorTimer?.invalidate()
+        memoryMonitorTimer = nil
+        
+        // Stop all streams
         PlayerManager.shared.clearAll()
- 
+        
+        // Clear all caches
         ThumbnailCacheManager.shared.clearAllThumbnails()
-
         EventImageLoader.shared.clearCache()
+        URLCache.shared.removeAllCachedResponses()
+        
+        // Disconnect WebSocket
+        WebSocketService.shared.disconnect()
         
         print("✅ Logout cleanup complete")
     }
-  
+    
+    // MARK: - App Termination Handler
+    
     private static func handleAppTermination() {
-        print("🛑 App will terminate - cleaning up resources")
-
+        print("🛑 App terminating - cleanup")
+        
         PlayerManager.shared.clearAll()
- 
         ThumbnailCacheManager.shared.clearChannelThumbnails()
-
+        
         SubscriptionManager.shared.forceSave()
         ChannelSyncState.shared.forceSave()
         WebSocketService.shared.disconnect()
         
-        print("✅ Resources cleaned up")
+        print("✅ Termination cleanup complete")
     }
     
+    // MARK: - Memory Warning Handler
+    
     private static func handleMemoryWarning() {
-        print("⚠️ MEMORY WARNING - Aggressive cleanup")
+        print("⚠️ MEMORY WARNING - EMERGENCY CLEANUP")
         
+        // 1. Stop all active streams IMMEDIATELY
         PlayerManager.shared.clearAll()
         
-        // 2. Clear thumbnail memory cache (keep disk cache for recovery)
+        // 2. Clear ALL caches
         ThumbnailCacheManager.shared.clearChannelThumbnails()
-        
-        // 3. Clear image caches
         EventImageLoader.shared.clearCache()
         
-        // 4. Force URLCache cleanup
+        // 3. Clear URL cache
         URLCache.shared.removeAllCachedResponses()
         
-        print("🧹 Memory cleanup complete")
+        // 4. Force multiple autoreleasepool drains
+        for _ in 0..<3 {
+            autoreleasepool {}
+        }
+        
+        print("🧹 Emergency cleanup complete")
     }
+    
+    // MARK: - State Persistence
     
     private func saveAppState() {
         print("💾 Saving app state...")
