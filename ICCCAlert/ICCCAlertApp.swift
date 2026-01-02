@@ -95,8 +95,8 @@ struct ICCCAlertApp: App {
     
     private func startProactiveMemoryMonitoring() {
         // Monitor memory every 15 seconds
-        memoryMonitorTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { [weak self] _ in
-            self?.checkAndCleanMemory()
+        memoryMonitorTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { _ in
+            checkAndCleanMemory()
         }
     }
     
