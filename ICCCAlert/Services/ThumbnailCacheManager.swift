@@ -2,8 +2,9 @@ import Foundation
 import UIKit
 import WebKit
 import Combine
+import SwiftUI
 
-// MARK: - Thumbnail Cache Manager (ULTRA CRASH-PROOF - ZERO WEBVIEWS)
+// MARK: - Thumbnail Cache Manager (SINGLE ATTEMPT - NO RETRIES)
 class ThumbnailCacheManager: ObservableObject {
     static let shared = ThumbnailCacheManager()
     
@@ -16,7 +17,7 @@ class ThumbnailCacheManager: ObservableObject {
     private let fileManager = FileManager.default
     private let cacheDirectory: URL
     
-    // CRITICAL: Track active operations
+    // CRITICAL: Single capture operation at a time
     private var isCapturing = false
     private let lock = NSLock()
     
@@ -37,7 +38,7 @@ class ThumbnailCacheManager: ObservableObject {
         
         setupMemoryWarning()
         
-        DebugLogger.shared.log("🖼️ ThumbnailCacheManager initialized (ZERO WEBVIEW MODE)", emoji: "🖼️", color: .blue)
+        DebugLogger.shared.log("🖼️ ThumbnailCacheManager initialized (SINGLE ATTEMPT MODE)", emoji: "🖼️", color: .blue)
     }
     
     private func setupMemoryWarning() {
@@ -98,22 +99,23 @@ class ThumbnailCacheManager: ObservableObject {
         return age < cacheDuration
     }
     
-    // MARK: - Manual Load ONLY
+    // MARK: - Manual Load ONLY (SINGLE ATTEMPT)
     
     func manualLoad(for camera: Camera, completion: @escaping (Bool) -> Void) {
         lock.lock()
         
-        // CRITICAL: Block if ANYTHING is capturing
+        // CRITICAL: Block if ANY capture is in progress
         if isCapturing {
             lock.unlock()
-            DebugLogger.shared.log("⚠️ Already capturing - wait", emoji: "⚠️", color: .orange)
+            DebugLogger.shared.log("⚠️ Capture already in progress - blocked", emoji: "⚠️", color: .orange)
             completion(false)
             return
         }
         
-        // Check if already loading
+        // Check if already loading this specific camera
         if loadingCameras.contains(camera.id) {
             lock.unlock()
+            DebugLogger.shared.log("⚠️ Already loading this camera", emoji: "⚠️", color: .orange)
             completion(false)
             return
         }
@@ -125,18 +127,19 @@ class ThumbnailCacheManager: ObservableObject {
             return
         }
         
+        // Mark as loading and capturing
         loadingCameras.insert(camera.id)
-        failedCameras.remove(camera.id)
+        failedCameras.remove(camera.id) // Clear previous failure
         isCapturing = true
         
         lock.unlock()
         
-        DebugLogger.shared.log("🔄 Manual load: \(camera.displayName)", emoji: "🔄", color: .blue)
+        DebugLogger.shared.log("🔄 Starting capture (SINGLE ATTEMPT): \(camera.displayName)", emoji: "🔄", color: .blue)
         
         startCapture(for: camera, completion: completion)
     }
     
-    // MARK: - Core Capture Logic (Create & Destroy IMMEDIATELY)
+    // MARK: - Core Capture Logic (SINGLE ATTEMPT - 10 SECOND TIMEOUT)
     
     private func startCapture(for camera: Camera, completion: @escaping (Bool) -> Void) {
         guard let streamURL = camera.webrtcStreamURL else {
@@ -146,15 +149,15 @@ class ThumbnailCacheManager: ObservableObject {
             return
         }
         
-        DebugLogger.shared.log("📸 Starting capture: \(camera.displayName)", emoji: "📸", color: .blue)
+        DebugLogger.shared.log("📸 Attempting capture: \(camera.displayName)", emoji: "📸", color: .blue)
         
         // Create WebView on main thread
         DispatchQueue.main.async {
-            self.executeCaptureWithImmediateCleanup(streamURL: streamURL, cameraId: camera.id, completion: completion)
+            self.executeSingleCapture(streamURL: streamURL, cameraId: camera.id, completion: completion)
         }
     }
     
-    private func executeCaptureWithImmediateCleanup(streamURL: String, cameraId: String, completion: @escaping (Bool) -> Void) {
+    private func executeSingleCapture(streamURL: String, cameraId: String, completion: @escaping (Bool) -> Void) {
         // Create configuration
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
@@ -171,8 +174,10 @@ class ThumbnailCacheManager: ObservableObject {
             guard let self = self else { return }
             
             if success, let imageData = imageData {
+                DebugLogger.shared.log("✅ Capture succeeded: \(cameraId)", emoji: "✅", color: .green)
                 self.processCapturedImage(cameraId: cameraId, imageDataURL: imageData, completion: completion)
             } else {
+                DebugLogger.shared.log("❌ Capture failed: \(cameraId)", emoji: "❌", color: .red)
                 self.markAsFailed(cameraId)
                 self.finishCapture(cameraId, success: false, completion: completion)
             }
@@ -196,19 +201,20 @@ class ThumbnailCacheManager: ObservableObject {
         let html = generateCaptureHTML(streamURL: streamURL)
         webView.loadHTMLString(html, baseURL: nil)
         
-        // CRITICAL: Destroy after 12 seconds NO MATTER WHAT
-        DispatchQueue.main.asyncAfter(deadline: .now() + 12.0) { [weak webView] in
+        // CRITICAL: 10 second timeout - NO RETRIES
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) { [weak webView] in
             guard let webView = webView else { return }
             
-            DebugLogger.shared.log("⏱️ Timeout - destroying WebView", emoji: "⏱️", color: .orange)
+            DebugLogger.shared.log("⏱️ Timeout reached - destroying WebView", emoji: "⏱️", color: .orange)
             self.destroyWebView(webView)
             
-            // If still capturing, mark as failed
+            // Check if still capturing (means timeout occurred before success)
             self.lock.lock()
-            let stillCapturing = self.isCapturing
+            let stillCapturing = self.isCapturing && self.loadingCameras.contains(cameraId)
             self.lock.unlock()
             
             if stillCapturing {
+                DebugLogger.shared.log("❌ Capture timeout: \(cameraId)", emoji: "❌", color: .red)
                 self.markAsFailed(cameraId)
                 self.finishCapture(cameraId, success: false, completion: completion)
             }
@@ -250,6 +256,13 @@ class ThumbnailCacheManager: ObservableObject {
                     } catch(e) {}
                 }
                 
+                function fail() {
+                    cleanup();
+                    if (window.webkit?.messageHandlers?.captureComplete) {
+                        window.webkit.messageHandlers.captureComplete.postMessage({ success: false });
+                    }
+                }
+                
                 async function start() {
                     try {
                         pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
@@ -270,16 +283,14 @@ class ThumbnailCacheManager: ObservableObject {
                             signal: controller.signal
                         });
                         
-                        if (!res.ok) throw new Error('Server error');
+                        if (!res.ok) throw new Error('Server error: ' + res.status);
                         
                         const answer = await res.text();
                         await pc.setRemoteDescription({ type: 'answer', sdp: answer });
                         
                     } catch(err) {
-                        cleanup();
-                        if (window.webkit?.messageHandlers?.captureComplete) {
-                            window.webkit.messageHandlers.captureComplete.postMessage({ success: false });
-                        }
+                        console.error('Capture error:', err);
+                        fail();
                     }
                 }
                 
@@ -303,13 +314,13 @@ class ThumbnailCacheManager: ObservableObject {
                                 });
                             }
                         } catch(err) {
-                            cleanup();
-                            if (window.webkit?.messageHandlers?.captureComplete) {
-                                window.webkit.messageHandlers.captureComplete.postMessage({ success: false });
-                            }
+                            console.error('Canvas error:', err);
+                            fail();
                         }
                     }, 400);
                 });
+                
+                video.addEventListener('error', () => fail());
                 
                 start();
             })();
@@ -379,14 +390,18 @@ class ThumbnailCacheManager: ObservableObject {
         isCapturing = false
         lock.unlock()
         
+        DebugLogger.shared.log("🏁 Capture finished: \(cameraId) - \(success ? "SUCCESS" : "FAILED")", emoji: "🏁", color: success ? .green : .red)
+        
         DispatchQueue.main.async {
             completion?(success)
         }
     }
     
     private func markAsFailed(_ cameraId: String) {
-        failedCameras.insert(cameraId)
-        DebugLogger.shared.log("❌ Marked as failed: \(cameraId)", emoji: "❌", color: .red)
+        DispatchQueue.main.async {
+            self.failedCameras.insert(cameraId)
+            DebugLogger.shared.log("❌ Marked as failed: \(cameraId)", emoji: "❌", color: .red)
+        }
     }
     
     // MARK: - Image Utilities

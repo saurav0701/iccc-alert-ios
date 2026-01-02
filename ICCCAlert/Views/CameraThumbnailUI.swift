@@ -1,6 +1,6 @@
 import SwiftUI
 
-// MARK: - Camera Thumbnail (MANUAL LOAD ONLY)
+// MARK: - Camera Thumbnail (MANUAL LOAD WITH ERROR STATE)
 struct CameraThumbnail: View {
     let camera: Camera
     let isGridView: Bool
@@ -16,6 +16,9 @@ struct CameraThumbnail: View {
                     offlineView
                 } else if thumbnailCache.isLoading(for: camera.id) {
                     loadingView
+                } else if thumbnailCache.hasFailed(for: camera.id) {
+                    // SHOW ERROR STATE WITH RETRY
+                    errorView
                 } else {
                     // SHOW "TAP TO LOAD" BY DEFAULT
                     tapToLoadView
@@ -113,6 +116,36 @@ struct CameraThumbnail: View {
         }
     }
     
+    private var errorView: some View {
+        Button(action: retryLoad) {
+            ZStack {
+                LinearGradient(
+                    colors: [Color.red.opacity(0.3), Color.red.opacity(0.1)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                
+                VStack(spacing: isGridView ? 4 : 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: isGridView ? 20 : 28))
+                        .foregroundColor(.red)
+                    
+                    Text("Failed")
+                        .font(isGridView ? .caption2 : .caption)
+                        .foregroundColor(.red)
+                        .fontWeight(.medium)
+                    
+                    if !isGridView {
+                        Text("Tap to retry")
+                            .font(.caption2)
+                            .foregroundColor(.red.opacity(0.7))
+                    }
+                }
+            }
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+    
     private var offlineView: some View {
         ZStack {
             LinearGradient(
@@ -139,6 +172,13 @@ struct CameraThumbnail: View {
             return
         }
         
+        // Check if another capture is in progress
+        if thumbnailCache.loadingCameras.contains(where: { _ in true }) {
+            DebugLogger.shared.log("⚠️ Another capture in progress", emoji: "⚠️", color: .orange)
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            return
+        }
+        
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         
         thumbnailCache.manualLoad(for: camera) { success in
@@ -152,8 +192,47 @@ struct CameraThumbnail: View {
         }
     }
     
+    private func retryLoad() {
+        guard camera.isOnline else {
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            return
+        }
+        
+        // Check if another capture is in progress
+        if thumbnailCache.loadingCameras.contains(where: { _ in true }) {
+            DebugLogger.shared.log("⚠️ Another capture in progress - wait", emoji: "⚠️", color: .orange)
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            return
+        }
+        
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        
+        // Clear the failure state and retry
+        thumbnailCache.clearThumbnail(for: camera.id)
+        
+        // Small delay to ensure state is cleared
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            self.thumbnailCache.manualLoad(for: self.camera) { success in
+                DispatchQueue.main.async {
+                    if success {
+                        UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    } else {
+                        UINotificationFeedbackGenerator().notificationOccurred(.error)
+                    }
+                }
+            }
+        }
+    }
+    
     private func reloadThumbnail() {
         guard camera.isOnline else { return }
+        
+        // Check if another capture is in progress
+        if thumbnailCache.loadingCameras.contains(where: { _ in true }) {
+            DebugLogger.shared.log("⚠️ Another capture in progress", emoji: "⚠️", color: .orange)
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            return
+        }
         
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         
@@ -161,12 +240,14 @@ struct CameraThumbnail: View {
         thumbnailCache.clearThumbnail(for: camera.id)
         
         // Then load new one
-        thumbnailCache.manualLoad(for: camera) { success in
-            DispatchQueue.main.async {
-                if success {
-                    UINotificationFeedbackGenerator().notificationOccurred(.success)
-                } else {
-                    UINotificationFeedbackGenerator().notificationOccurred(.error)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            self.thumbnailCache.manualLoad(for: self.camera) { success in
+                DispatchQueue.main.async {
+                    if success {
+                        UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    } else {
+                        UINotificationFeedbackGenerator().notificationOccurred(.error)
+                    }
                 }
             }
         }
