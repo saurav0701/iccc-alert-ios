@@ -50,10 +50,12 @@ struct AreaCamerasView: View {
                     PlayerManager.shared.releasePlayer(camera.id)
                 }
         }
-        .alert("Stream Blocked", isPresented: $showStreamBlockedAlert) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text("Please wait - a thumbnail is currently being captured. Try again in a few seconds.")
+        .alert(isPresented: $showStreamBlockedAlert) {
+            Alert(
+                title: Text("Stream Blocked"),
+                message: Text("Please wait - a thumbnail is currently being captured. Try again in a few seconds."),
+                dismissButton: .default(Text("OK"))
+            )
         }
         .onAppear {
             DebugLogger.shared.log("📹 AreaCamerasView appeared: \(area)", emoji: "📹", color: .blue)
