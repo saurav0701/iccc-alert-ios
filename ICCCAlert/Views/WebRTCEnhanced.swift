@@ -177,10 +177,8 @@ class StreamSession: ObservableObject {
         
         let usedMemoryMB = Double(info.resident_size) / 1024 / 1024
         
-        // Update MemoryMonitor
-        DispatchQueue.main.async {
-            MemoryMonitor.shared.currentMemoryMB = usedMemoryMB
-        }
+        // Just use the value locally - MemoryMonitor has its own timer
+        // No need to update it from here
         
         // CRITICAL: Emergency stop at 180MB
         if usedMemoryMB > StreamConfig.emergencyMemoryThresholdMB {

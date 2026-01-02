@@ -5,17 +5,17 @@ import UIKit
 class MemoryMonitor: ObservableObject {
     static let shared = MemoryMonitor()
     
-    @Published private(set) var currentMemoryMB: Double = 0.0
+    @Published var currentMemoryMB: Double = 0.0  // Make it publicly settable
     @Published private(set) var isMemoryWarning: Bool = false
     
     private var timer: Timer?
-    private let memoryThresholdMB: Double = 200.0 // Warning threshold
+    private let memoryThresholdMB: Double = 150.0 // Warning threshold (lowered from 200)
     
     private init() {
         startMonitoring()
         setupMemoryWarningObserver()
         
-        print("💾 MemoryMonitor initialized")
+        print("💾 MemoryMonitor initialized (threshold: \(memoryThresholdMB)MB)")
     }
     
     private func startMonitoring() {
