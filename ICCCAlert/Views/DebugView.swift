@@ -225,13 +225,13 @@ struct DebugView: View {
     // MARK: - Thumbnails Tab
     private var thumbnailsTab: some View {
         List {
-            // Thumbnail Test Section - FIXED
+            // Thumbnail Test Section - FIXED: Changed manualRefresh to manualLoad
             Section(header: Text("Thumbnail Capture Test")) {
                 Button(action: {
-                    // Test with first online camera - use manualRefresh instead
+                    // Test with first online camera - using manualLoad
                     if let testCamera = cameraManager.cameras.first(where: { $0.isOnline }) {
                         DebugLogger.shared.log("🧪 Testing thumbnail capture for: \(testCamera.displayName)", emoji: "🧪", color: .blue)
-                        thumbnailCache.manualRefresh(for: testCamera) { success in
+                        thumbnailCache.manualLoad(for: testCamera) { success in
                             if success {
                                 DebugLogger.shared.log("✅ Test capture successful", emoji: "✅", color: .green)
                             } else {
