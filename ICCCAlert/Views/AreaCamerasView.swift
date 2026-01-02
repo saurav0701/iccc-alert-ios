@@ -32,8 +32,8 @@ struct AreaCamerasView: View {
         }
         .navigationTitle(area)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
+        .toolbar(content: {
+            ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
                     Picker("Layout", selection: $gridMode) {
                         ForEach(GridViewMode.allCases) { mode in
@@ -44,7 +44,7 @@ struct AreaCamerasView: View {
                     Image(systemName: gridMode.icon).font(.system(size: 18))
                 }
             }
-        }
+        })
         .fullScreenCover(item: $selectedCamera) { camera in
             FullscreenPlayerView(camera: camera)
                 .onDisappear {
