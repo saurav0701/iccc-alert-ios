@@ -2,31 +2,42 @@ import SwiftUI
 import WebKit
 import Combine
 
-// MARK: - Player Manager (Crash-Proof with Limits)
+// MARK: - Player Manager (STRICT LIMITS - CRASH-PROOF)
 class PlayerManager: ObservableObject {
     static let shared = PlayerManager()
     
     private var activePlayers: [String: WKWebView] = [:]
     private let lock = NSLock()
-    private let maxPlayers = 2 // Reduced to 2 concurrent streams max
+    private let maxPlayers = 1 // CRITICAL: Only 1 concurrent stream
     
-    private init() {}
+    private init() {
+        setupMemoryWarning()
+    }
+    
+    private func setupMemoryWarning() {
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            DebugLogger.shared.log("⚠️ MEMORY WARNING - Stopping all players", emoji: "🧹", color: .red)
+            self?.clearAll()
+        }
+    }
     
     func registerPlayer(_ webView: WKWebView, for cameraId: String) {
         lock.lock()
         defer { lock.unlock() }
         
-        // Clean up old player if exists
-        if let oldPlayer = activePlayers[cameraId] {
-            cleanupWebView(oldPlayer)
-            activePlayers.removeValue(forKey: cameraId)
-        }
-        
-        // Enforce strict limit
+        // CRITICAL: Only allow 1 player at a time
         if activePlayers.count >= maxPlayers {
-            if let oldestKey = activePlayers.keys.sorted().first {
-                if let oldPlayer = activePlayers.removeValue(forKey: oldestKey) {
-                    cleanupWebView(oldPlayer)
+            // Stop ALL existing players before starting new one
+            let allKeys = Array(activePlayers.keys)
+            for key in allKeys {
+                if let oldPlayer = activePlayers.removeValue(forKey: key) {
+                    DispatchQueue.main.async {
+                        self.cleanupWebView(oldPlayer)
+                    }
                 }
             }
         }
@@ -36,11 +47,24 @@ class PlayerManager: ObservableObject {
     }
     
     private func cleanupWebView(_ webView: WKWebView) {
-        DispatchQueue.main.async {
-            webView.stopLoading()
-            webView.loadHTMLString("", baseURL: nil)
-            webView.configuration.userContentController.removeAllScriptMessageHandlers()
-        }
+        // CRITICAL: Proper WebView destruction
+        webView.stopLoading()
+        webView.navigationDelegate = nil
+        webView.loadHTMLString("", baseURL: nil)
+        
+        // Remove all handlers
+        webView.configuration.userContentController.removeAllScriptMessageHandlers()
+        
+        // Remove from view hierarchy
+        webView.removeFromSuperview()
+        
+        // Clear website data
+        let dataStore = WKWebsiteDataStore.nonPersistent()
+        dataStore.removeData(
+            ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
+            modifiedSince: Date(timeIntervalSince1970: 0),
+            completionHandler: {}
+        )
     }
     
     func releasePlayer(_ cameraId: String) {
@@ -48,7 +72,9 @@ class PlayerManager: ObservableObject {
         defer { lock.unlock() }
         
         if let webView = activePlayers.removeValue(forKey: cameraId) {
-            cleanupWebView(webView)
+            DispatchQueue.main.async {
+                self.cleanupWebView(webView)
+            }
             print("🗑️ Released: \(cameraId)")
         }
     }
@@ -57,13 +83,24 @@ class PlayerManager: ObservableObject {
         lock.lock()
         defer { lock.unlock() }
         
-        activePlayers.forEach { cleanupWebView($0.value) }
+        let allPlayers = activePlayers
         activePlayers.removeAll()
+        
+        DispatchQueue.main.async {
+            allPlayers.forEach { self.cleanupWebView($0.value) }
+        }
+        
         print("🧹 Cleared all players")
+    }
+    
+    func getActiveCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return activePlayers.count
     }
 }
 
-// MARK: - WebRTC Player View (Crash-Proof)
+// MARK: - WebRTC Player View (CRASH-PROOF)
 struct WebRTCPlayerView: UIViewRepresentable {
     let streamURL: String
     let cameraId: String
@@ -108,7 +145,8 @@ struct WebRTCPlayerView: UIViewRepresentable {
     class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         let cameraId: String
         private var retryCount = 0
-        private let maxRetries = 3
+        private let maxRetries = 2 // Reduced retries
+        private var isActive = true
         
         init(cameraId: String) {
             self.cameraId = cameraId
@@ -148,8 +186,9 @@ struct WebRTCPlayerView: UIViewRepresentable {
                     const status = document.getElementById('status');
                     const live = document.getElementById('live');
                     const streamUrl = '\(streamURL)';
-                    let pc = null, restartTimeout = null, isActive = true, retryCount = 0;
-                    const MAX_RETRIES = 3;
+                    let pc = null, restartTimeout = null, isActive = true;
+                    let retryCount = 0;
+                    const MAX_RETRIES = 2;
                     
                     function log(msg, isError = false) {
                         if (!isActive) return;
@@ -159,13 +198,13 @@ struct WebRTCPlayerView: UIViewRepresentable {
                     }
                     
                     function cleanup() {
-                        if (restartTimeout) { clearTimeout(restartTimeout); restartTimeout = null; }
+                        isActive = false;
+                        if (restartTimeout) { 
+                            clearTimeout(restartTimeout); 
+                            restartTimeout = null; 
+                        }
                         if (pc) { 
-                            try { 
-                                pc.close(); 
-                            } catch(e) {
-                                console.error('PC close error:', e);
-                            } 
+                            try { pc.close(); } catch(e) {}
                             pc = null; 
                         }
                         if (video.srcObject) {
@@ -174,9 +213,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
                                     try { t.stop(); } catch(e) {}
                                 }); 
                                 video.srcObject = null; 
-                            } catch(e) {
-                                console.error('Video cleanup error:', e);
-                            }
+                            } catch(e) {}
                         }
                         live.classList.remove('show');
                     }
@@ -184,12 +221,16 @@ struct WebRTCPlayerView: UIViewRepresentable {
                     async function start() {
                         if (!isActive || retryCount >= MAX_RETRIES) {
                             if (retryCount >= MAX_RETRIES) {
-                                log('Max retries reached', true);
+                                log('Connection failed - max retries', true);
                             }
                             return;
                         }
                         
-                        cleanup();
+                        if (pc) {
+                            try { pc.close(); } catch(e) {}
+                            pc = null;
+                        }
+                        
                         log('Connecting...');
                         
                         try {
@@ -203,21 +244,29 @@ struct WebRTCPlayerView: UIViewRepresentable {
                                 if (isActive) { 
                                     log('Stream ready'); 
                                     video.srcObject = e.streams[0]; 
-                                    retryCount = 0; // Reset on success
+                                    retryCount = 0;
                                 } 
                             };
                             
                             pc.oniceconnectionstatechange = () => {
                                 if (!isActive) return;
-                                if (pc.iceConnectionState === 'connected') {
+                                
+                                const state = pc.iceConnectionState;
+                                
+                                if (state === 'connected' || state === 'completed') {
                                     log('Connected'); 
                                     live.classList.add('show');
-                                } else if (pc.iceConnectionState === 'failed') {
-                                    log('Connection failed'); 
+                                    retryCount = 0;
+                                } else if (state === 'failed' || state === 'disconnected') {
+                                    log('Connection ' + state); 
                                     live.classList.remove('show');
+                                    
                                     retryCount++;
                                     if (isActive && retryCount < MAX_RETRIES) {
+                                        log('Retrying... (' + retryCount + '/' + MAX_RETRIES + ')');
                                         restartTimeout = setTimeout(start, 3000);
+                                    } else if (retryCount >= MAX_RETRIES) {
+                                        log('Max retries reached', true);
                                     }
                                 }
                             };
@@ -243,12 +292,15 @@ struct WebRTCPlayerView: UIViewRepresentable {
                             if (!res.ok) throw new Error('Server: ' + res.status);
                             
                             const answer = await res.text();
-                            await pc.setRemoteDescription({ type: 'answer', sdp: answer });
+                            if (isActive) {
+                                await pc.setRemoteDescription({ type: 'answer', sdp: answer });
+                            }
                             
                         } catch (err) {
                             log('Error: ' + err.message, true);
                             retryCount++;
                             if (isActive && retryCount < MAX_RETRIES) {
+                                log('Retrying... (' + retryCount + '/' + MAX_RETRIES + ')');
                                 restartTimeout = setTimeout(start, 5000);
                             }
                         }
@@ -261,10 +313,12 @@ struct WebRTCPlayerView: UIViewRepresentable {
                         } 
                     });
                     
-                    window.addEventListener('beforeunload', () => { 
-                        isActive = false; 
-                        cleanup(); 
+                    video.addEventListener('error', (e) => {
+                        log('Video error', true);
                     });
+                    
+                    window.addEventListener('beforeunload', cleanup);
+                    window.addEventListener('pagehide', cleanup);
                     
                     start();
                 })();
@@ -277,6 +331,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
         }
         
         func cleanup() {
+            isActive = false
             PlayerManager.shared.releasePlayer(cameraId)
         }
         
@@ -287,7 +342,6 @@ struct WebRTCPlayerView: UIViewRepresentable {
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             print("❌ Navigation Error: \(error.localizedDescription)")
             
-            // Don't retry automatically on navigation failures
             if retryCount < maxRetries {
                 retryCount += 1
             }
@@ -301,7 +355,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
     }
 }
 
-// MARK: - Fullscreen Player (with Landscape Support)
+// MARK: - Fullscreen Player (with Proper Cleanup)
 struct FullscreenPlayerView: View {
     let camera: Camera
     @Environment(\.presentationMode) var presentationMode

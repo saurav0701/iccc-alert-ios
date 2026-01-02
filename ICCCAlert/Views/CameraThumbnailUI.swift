@@ -1,6 +1,6 @@
 import SwiftUI
 
-// MARK: - Camera Thumbnail (with Proper Lifecycle Management)
+// MARK: - Camera Thumbnail (MANUAL LOAD ONLY)
 struct CameraThumbnail: View {
     let camera: Camera
     let isGridView: Bool
@@ -16,25 +16,15 @@ struct CameraThumbnail: View {
                     offlineView
                 } else if thumbnailCache.isLoading(for: camera.id) {
                     loadingView
-                } else if thumbnailCache.hasFailed(for: camera.id) {
-                    failedView
                 } else {
-                    loadingView
+                    // SHOW "TAP TO LOAD" BY DEFAULT
+                    tapToLoadView
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .contentShape(Rectangle())
-        .id(viewId) // Force recreation on camera change
-        .onAppear {
-            // Only auto-load if we don't have a thumbnail
-            if camera.isOnline && thumbnailCache.getThumbnail(for: camera.id) == nil {
-                thumbnailCache.autoFetchThumbnail(for: camera)
-            }
-        }
-        .onDisappear {
-            // Don't cancel - let it finish in queue
-        }
+        .id(viewId)
     }
     
     private func thumbnailImageView(_ image: UIImage, geometry: GeometryProxy) -> some View {
@@ -56,7 +46,49 @@ struct CameraThumbnail: View {
                 .aspectRatio(contentMode: .fit)
                 .frame(width: scaledWidth, height: scaledHeight)
                 .clipped()
+            
+            // Show refresh button overlay
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    Button(action: reloadThumbnail) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: isGridView ? 12 : 16))
+                            .foregroundColor(.white)
+                            .padding(isGridView ? 6 : 8)
+                            .background(Color.black.opacity(0.6))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .padding(isGridView ? 4 : 8)
+                }
+            }
         }
+    }
+    
+    private var tapToLoadView: some View {
+        Button(action: loadThumbnail) {
+            ZStack {
+                LinearGradient(
+                    colors: [Color.blue.opacity(0.3), Color.blue.opacity(0.1)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                
+                VStack(spacing: isGridView ? 4 : 8) {
+                    Image(systemName: "photo")
+                        .font(.system(size: isGridView ? 20 : 28))
+                        .foregroundColor(.blue)
+                    
+                    Text("Tap to load")
+                        .font(isGridView ? .caption2 : .caption)
+                        .foregroundColor(.blue)
+                        .fontWeight(.medium)
+                }
+            }
+        }
+        .buttonStyle(PlainButtonStyle())
     }
     
     private var loadingView: some View {
@@ -81,31 +113,6 @@ struct CameraThumbnail: View {
         }
     }
     
-    private var failedView: some View {
-        ZStack {
-            LinearGradient(
-                colors: [Color.orange.opacity(0.3), Color.orange.opacity(0.1)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            
-            Button(action: retryLoad) {
-                VStack(spacing: 6) {
-                    Image(systemName: "arrow.clockwise.circle.fill")
-                        .font(.system(size: isGridView ? 24 : 32))
-                        .foregroundColor(.orange)
-                    
-                    if !isGridView {
-                        Text("Tap to load")
-                            .font(.caption2)
-                            .foregroundColor(.orange)
-                    }
-                }
-            }
-            .buttonStyle(PlainButtonStyle())
-        }
-    }
-    
     private var offlineView: some View {
         ZStack {
             LinearGradient(
@@ -126,12 +133,35 @@ struct CameraThumbnail: View {
         }
     }
     
-    private func retryLoad() {
+    private func loadThumbnail() {
+        guard camera.isOnline else {
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            return
+        }
+        
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        
+        thumbnailCache.manualLoad(for: camera) { success in
+            DispatchQueue.main.async {
+                if success {
+                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                } else {
+                    UINotificationFeedbackGenerator().notificationOccurred(.error)
+                }
+            }
+        }
+    }
+    
+    private func reloadThumbnail() {
         guard camera.isOnline else { return }
         
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         
-        thumbnailCache.manualRefresh(for: camera) { success in
+        // Clear existing thumbnail first
+        thumbnailCache.clearThumbnail(for: camera.id)
+        
+        // Then load new one
+        thumbnailCache.manualLoad(for: camera) { success in
             DispatchQueue.main.async {
                 if success {
                     UINotificationFeedbackGenerator().notificationOccurred(.success)
@@ -143,7 +173,7 @@ struct CameraThumbnail: View {
     }
 }
 
-// MARK: - Camera Grid Card (No Changes Needed)
+// MARK: - Camera Grid Card (Updated for Manual Load)
 struct CameraGridCardFixed: View {
     let camera: Camera
     let mode: GridViewMode
