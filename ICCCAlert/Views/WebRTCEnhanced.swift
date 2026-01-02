@@ -173,11 +173,9 @@ class WebViewPool {
         webView.stopLoading()
         webView.navigationDelegate = nil
         webView.uiDelegate = nil
-        
-        // Remove all script handlers to break retain cycles
+    
         webView.configuration.userContentController.removeAllScriptMessageHandlers()
-        
-        // Load empty page
+
         webView.loadHTMLString("", baseURL: nil)
     }
     
@@ -186,13 +184,11 @@ class WebViewPool {
         webView.navigationDelegate = nil
         webView.uiDelegate = nil
         
-        // CRITICAL: Remove script handlers
         webView.configuration.userContentController.removeAllScriptMessageHandlers()
         
         webView.loadHTMLString("", baseURL: nil)
         webView.removeFromSuperview()
-        
-        // Clear website data
+
         let dataStore = WKWebsiteDataStore.nonPersistent()
         dataStore.removeData(
             ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
@@ -233,19 +229,16 @@ class StreamSession: ObservableObject {
         startTime = Date()
         secondsRemaining = Int(StreamConfig.maxStreamDuration)
         
-        // Get WebView from pool
         let wv = WebViewPool.shared.getWebView()
         self.webView = wv
         
         // Create coordinator
         let coord = StreamCoordinator(cameraId: cameraId)
         self.coordinator = coord
-        
-        // Setup WebView
+
         wv.navigationDelegate = coord
         wv.configuration.userContentController.add(coord, name: "logging")
         
-        // Load stream
         coord.loadPlayer(in: wv, streamURL: streamURL)
         
         // Setup auto-restart timer
@@ -298,8 +291,7 @@ class StreamSession: ObservableObject {
             coord.cleanup()
         }
         coordinator = nil
-        
-        // Return WebView to pool
+  
         if let wv = webView {
             WebViewPool.shared.returnWebView(wv)
         }
@@ -312,7 +304,6 @@ class StreamSession: ObservableObject {
     }
 }
 
-// MARK: - Stream Coordinator
 class StreamCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     let cameraId: String
     private var isActive = true

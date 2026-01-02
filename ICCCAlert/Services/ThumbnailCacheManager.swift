@@ -4,7 +4,7 @@ import WebKit
 import Combine
 import SwiftUI
 
-// MARK: - Thumbnail Cache Manager (AGGRESSIVE MEMORY MANAGEMENT + RATE LIMITING)
+// MARK: - CRASH-PROOF Thumbnail Cache Manager
 class ThumbnailCacheManager: ObservableObject {
     static let shared = ThumbnailCacheManager()
     
@@ -17,17 +17,17 @@ class ThumbnailCacheManager: ObservableObject {
     private let fileManager = FileManager.default
     private let cacheDirectory: URL
     
-    // CRITICAL: Single capture operation at a time
-    private var isCapturing = false
-    private let lock = NSLock()
+    // CRITICAL: Separate queue for ALL thumbnail operations
+    private let captureQueue = DispatchQueue(label: "com.iccc.thumbnail.capture", qos: .userInitiated)
+    private let cleanupQueue = DispatchQueue(label: "com.iccc.thumbnail.cleanup", qos: .utility)
     
-    // NEW: Rate limiting properties (prevents rapid-fire crashes)
+    // FIXED: Per-camera state tracking (not global)
+    private var activeCaptureStates: [String: CaptureState] = [:]
+    private let stateLock = NSLock()
+    
+    // Rate limiting
     private var lastCaptureTime: TimeInterval = 0
-    private let minimumCaptureInterval: TimeInterval = 3.0  // 3 seconds between captures
-    
-    // CRITICAL: Track active WebViews for aggressive cleanup
-    private var activeWebViews: Set<WKWebView> = []
-    private var captureTimeouts: [String: DispatchWorkItem] = [:]
+    private let minimumCaptureInterval: TimeInterval = 3.0
     
     // Cache duration: 3 hours
     private let cacheDuration: TimeInterval = 3 * 60 * 60
@@ -38,15 +38,31 @@ class ThumbnailCacheManager: ObservableObject {
         
         try? fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
         
-        cache.countLimit = 30  // Reduced from 50 for low memory
-        cache.totalCostLimit = 10 * 1024 * 1024 // Reduced to 10MB
+        cache.countLimit = 30
+        cache.totalCostLimit = 10 * 1024 * 1024
         
         loadCachedThumbnails()
         loadTimestamps()
-        
         setupMemoryWarning()
         
-        DebugLogger.shared.log("🖼️ ThumbnailCacheManager initialized (LOW MEMORY MODE + RATE LIMITING)", emoji: "🖼️", color: .blue)
+        DebugLogger.shared.log("🖼️ ThumbnailCacheManager initialized (CRASH-PROOF)", emoji: "🖼️", color: .blue)
+    }
+    
+    // MARK: - Capture State Management
+    
+    private class CaptureState {
+        weak var webView: WKWebView?
+        weak var handler: ThumbnailCaptureHandler?
+        var timeoutWork: DispatchWorkItem?
+        let startTime: Date
+        var isCleanedUp: Bool = false
+        
+        init(webView: WKWebView, handler: ThumbnailCaptureHandler, timeoutWork: DispatchWorkItem) {
+            self.webView = webView
+            self.handler = handler
+            self.timeoutWork = timeoutWork
+            self.startTime = Date()
+        }
     }
     
     private func setupMemoryWarning() {
@@ -61,54 +77,48 @@ class ThumbnailCacheManager: ObservableObject {
     }
     
     private func emergencyCleanup() {
-        lock.lock()
+        DebugLogger.shared.log("🧹 Starting emergency cleanup", emoji: "🧹", color: .orange)
         
-        // Cancel all ongoing captures
-        captureTimeouts.values.forEach { $0.cancel() }
-        captureTimeouts.removeAll()
+        stateLock.lock()
+        let allStates = activeCaptureStates.values.map { $0 }
+        activeCaptureStates.removeAll()
+        stateLock.unlock()
         
-        // Destroy all active WebViews IMMEDIATELY
-        let webViewsToDestroy = Array(activeWebViews)
-        activeWebViews.removeAll()
-        
-        loadingCameras.removeAll()
-        isCapturing = false
-        
-        lock.unlock()
-        
-        // Destroy WebViews on main thread
         DispatchQueue.main.async {
-            webViewsToDestroy.forEach { webView in
-                self.destroyWebViewAggressively(webView)
+            self.loadingCameras.removeAll()
+        }
+        
+        // Cancel all timeouts first
+        allStates.forEach { $0.timeoutWork?.cancel() }
+        
+        // Cleanup WebViews on background queue with delay
+        cleanupQueue.async {
+            allStates.forEach { state in
+                if let webView = state.webView {
+                    DispatchQueue.main.async {
+                        self.safeDestroyWebView(webView)
+                    }
+                }
             }
         }
         
-        // Clear memory cache but keep disk cache
+        // Clear memory cache
         cache.removeAllObjects()
         thumbnails.removeAll()
         
-        // Force garbage collection hint
-        autoreleasepool {}
-        
-        DebugLogger.shared.log("🧹 Emergency cleanup complete", emoji: "🧹", color: .orange)
+        DebugLogger.shared.log("✅ Emergency cleanup complete", emoji: "✅", color: .green)
     }
     
-    // MARK: - Get Thumbnail
+    // MARK: - Public API
     
     func getThumbnail(for cameraId: String) -> UIImage? {
-        lock.lock()
-        defer { lock.unlock() }
-        
         if let cached = cache.object(forKey: cameraId as NSString) {
             return cached
         }
-        
         return thumbnails[cameraId]
     }
     
     func isLoading(for cameraId: String) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
         return loadingCameras.contains(cameraId)
     }
     
@@ -120,89 +130,78 @@ class ThumbnailCacheManager: ObservableObject {
         guard let timestamp = thumbnailTimestamps[cameraId] else {
             return false
         }
-        
         let age = Date().timeIntervalSince(timestamp)
         return age < cacheDuration
     }
     
-    // MARK: - Manual Load ONLY (WITH RATE LIMITING + AGGRESSIVE CLEANUP)
+    // MARK: - Manual Load (CRASH-PROOF)
     
     func manualLoad(for camera: Camera, completion: @escaping (Bool) -> Void) {
-        lock.lock()
-        
-        // NEW: Enforce minimum time between captures (prevents rapid-fire crashes)
+        // Check rate limiting
         let now = Date().timeIntervalSince1970
         let timeSinceLastCapture = now - lastCaptureTime
         
         if timeSinceLastCapture < minimumCaptureInterval {
             let remainingTime = Int(ceil(minimumCaptureInterval - timeSinceLastCapture))
-            lock.unlock()
-            
-            DebugLogger.shared.log("⏳ Too fast! Wait \(remainingTime)s before next capture", emoji: "⏳", color: .orange)
+            DebugLogger.shared.log("⏳ Rate limit: wait \(remainingTime)s", emoji: "⏳", color: .orange)
             
             DispatchQueue.main.async {
                 UINotificationFeedbackGenerator().notificationOccurred(.warning)
+                completion(false)
             }
-            
+            return
+        }
+        
+        // Check if already loading
+        stateLock.lock()
+        let isAlreadyLoading = activeCaptureStates[camera.id] != nil
+        stateLock.unlock()
+        
+        if isAlreadyLoading {
+            DebugLogger.shared.log("⚠️ Already loading: \(camera.id)", emoji: "⚠️", color: .orange)
             completion(false)
             return
         }
         
-        // CRITICAL: Block if ANY capture is in progress
-        if isCapturing {
-            lock.unlock()
-            DebugLogger.shared.log("⚠️ Capture blocked - already in progress", emoji: "⚠️", color: .orange)
-            completion(false)
-            return
-        }
-        
-        // Check if already loading this specific camera
-        if loadingCameras.contains(camera.id) {
-            lock.unlock()
-            DebugLogger.shared.log("⚠️ Already loading this camera", emoji: "⚠️", color: .orange)
-            completion(false)
-            return
-        }
-        
-        // Check if already have fresh thumbnail
+        // Check if fresh thumbnail exists
         if isThumbnailFresh(for: camera.id), getThumbnail(for: camera.id) != nil {
-            lock.unlock()
+            DebugLogger.shared.log("✅ Using cached thumbnail", emoji: "✅", color: .green)
             completion(true)
             return
         }
         
-        // Mark as loading and capturing
-        loadingCameras.insert(camera.id)
-        failedCameras.remove(camera.id)
-        isCapturing = true
-        lastCaptureTime = now  // Record capture start time
-        
-        lock.unlock()
-        
-        DebugLogger.shared.log("🔄 Starting capture: \(camera.displayName)", emoji: "🔄", color: .blue)
-        
-        startCapture(for: camera, completion: completion)
+        // Start capture on dedicated queue
+        captureQueue.async {
+            self.performCapture(for: camera, completion: completion)
+        }
     }
     
-    // MARK: - Core Capture Logic (7 SECOND TIMEOUT - AGGRESSIVE)
+    // MARK: - Capture Implementation (ISOLATED)
     
-    private func startCapture(for camera: Camera, completion: @escaping (Bool) -> Void) {
+    private func performCapture(for camera: Camera, completion: @escaping (Bool) -> Void) {
         guard let streamURL = camera.webrtcStreamURL else {
-            DebugLogger.shared.log("⚠️ No stream URL: \(camera.id)", emoji: "⚠️", color: .orange)
+            DebugLogger.shared.log("❌ No stream URL", emoji: "❌", color: .red)
             markAsFailed(camera.id)
-            finishCapture(camera.id, success: false, completion: completion)
+            completion(false)
             return
         }
         
-        DebugLogger.shared.log("📸 Attempting capture: \(camera.displayName)", emoji: "📸", color: .blue)
+        lastCaptureTime = Date().timeIntervalSince1970
+        
+        DispatchQueue.main.async {
+            self.loadingCameras.insert(camera.id)
+            self.failedCameras.remove(camera.id)
+        }
+        
+        DebugLogger.shared.log("📸 Starting capture: \(camera.displayName)", emoji: "📸", color: .blue)
         
         // Create WebView on main thread
         DispatchQueue.main.async {
-            self.executeSingleCapture(streamURL: streamURL, cameraId: camera.id, completion: completion)
+            self.createAndExecuteCapture(streamURL: streamURL, cameraId: camera.id, completion: completion)
         }
     }
     
-    private func executeSingleCapture(streamURL: String, cameraId: String, completion: @escaping (Bool) -> Void) {
+    private func createAndExecuteCapture(streamURL: String, cameraId: String, completion: @escaping (Bool) -> Void) {
         // Create configuration
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
@@ -214,83 +213,127 @@ class ThumbnailCacheManager: ObservableObject {
         prefs.allowsContentJavaScript = true
         config.defaultWebpagePreferences = prefs
         
-        // Create temporary handler
+        // CRITICAL: Use weak capture in handler to prevent retain cycles
         let handler = ThumbnailCaptureHandler(cameraId: cameraId) { [weak self] success, imageData in
             guard let self = self else { return }
             
-            // Cancel timeout
-            self.lock.lock()
-            if let timeout = self.captureTimeouts[cameraId] {
-                timeout.cancel()
-                self.captureTimeouts.removeValue(forKey: cameraId)
-            }
-            self.lock.unlock()
-            
-            if success, let imageData = imageData {
-                DebugLogger.shared.log("✅ Capture succeeded: \(cameraId)", emoji: "✅", color: .green)
-                self.processCapturedImage(cameraId: cameraId, imageDataURL: imageData, completion: completion)
-            } else {
-                DebugLogger.shared.log("❌ Capture failed: \(cameraId)", emoji: "❌", color: .red)
-                self.markAsFailed(cameraId)
-                self.finishCapture(cameraId, success: false, completion: completion)
+            // Process result on capture queue
+            self.captureQueue.async {
+                self.handleCaptureResult(cameraId: cameraId, success: success, imageData: imageData, completion: completion)
             }
         }
         
+        // Add handler BEFORE creating WebView
         config.userContentController.add(handler, name: "captureComplete")
         
-        // Create WebView with smaller frame for lower memory
+        // Create WebView
         let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 240, height: 180), configuration: config)
         webView.scrollView.isScrollEnabled = false
         webView.backgroundColor = .black
         webView.isOpaque = true
         webView.alpha = 0.01
         
-        // Track WebView
-        lock.lock()
-        activeWebViews.insert(webView)
-        lock.unlock()
-        
-        // Add off-screen
+        // Add to window (off-screen)
         if let window = UIApplication.shared.windows.first {
             window.addSubview(webView)
             webView.frame = CGRect(x: -2000, y: -2000, width: 240, height: 180)
         }
         
-        let html = generateCaptureHTML(streamURL: streamURL)
-        webView.loadHTMLString(html, baseURL: nil)
-        
-        // CRITICAL: 7 second timeout (reduced from 10) with aggressive cleanup
+        // Create timeout work item
         let timeoutWork = DispatchWorkItem { [weak self, weak webView] in
-            guard let self = self, let webView = webView else { return }
+            guard let self = self else { return }
             
-            DebugLogger.shared.log("⏱️ Timeout - destroying WebView", emoji: "⏱️", color: .orange)
+            DebugLogger.shared.log("⏱️ Capture timeout: \(cameraId)", emoji: "⏱️", color: .orange)
             
-            // Remove from tracking
-            self.lock.lock()
-            self.activeWebViews.remove(webView)
-            self.captureTimeouts.removeValue(forKey: cameraId)
-            self.lock.unlock()
-            
-            self.destroyWebViewAggressively(webView)
-            
-            // Check if still capturing
-            self.lock.lock()
-            let stillCapturing = self.isCapturing && self.loadingCameras.contains(cameraId)
-            self.lock.unlock()
-            
-            if stillCapturing {
-                DebugLogger.shared.log("❌ Capture timeout: \(cameraId)", emoji: "❌", color: .red)
-                self.markAsFailed(cameraId)
-                self.finishCapture(cameraId, success: false, completion: completion)
+            // Cleanup on main thread
+            DispatchQueue.main.async {
+                if let wv = webView {
+                    self.safeDestroyWebView(wv)
+                }
+                
+                self.captureQueue.async {
+                    self.finishCapture(cameraId: cameraId, success: false, completion: completion)
+                }
             }
         }
         
-        lock.lock()
-        captureTimeouts[cameraId] = timeoutWork
-        lock.unlock()
+        // Store state
+        stateLock.lock()
+        activeCaptureStates[cameraId] = CaptureState(webView: webView, handler: handler, timeoutWork: timeoutWork)
+        stateLock.unlock()
         
+        // Load HTML
+        let html = generateCaptureHTML(streamURL: streamURL)
+        webView.loadHTMLString(html, baseURL: nil)
+        
+        // Schedule timeout (7 seconds)
         DispatchQueue.main.asyncAfter(deadline: .now() + 7.0, execute: timeoutWork)
     }
+    
+    private func handleCaptureResult(cameraId: String, success: Bool, imageData: String?, completion: @escaping (Bool) -> Void) {
+        // Remove state
+        stateLock.lock()
+        let state = activeCaptureStates.removeValue(forKey: cameraId)
+        stateLock.unlock()
+        
+        // Cancel timeout
+        state?.timeoutWork?.cancel()
+        
+        // Cleanup WebView on main thread
+        if let webView = state?.webView {
+            DispatchQueue.main.async {
+                self.safeDestroyWebView(webView)
+            }
+        }
+        
+        if success, let imageData = imageData {
+            DebugLogger.shared.log("✅ Capture succeeded: \(cameraId)", emoji: "✅", color: .green)
+            processCapturedImage(cameraId: cameraId, imageDataURL: imageData, completion: completion)
+        } else {
+            DebugLogger.shared.log("❌ Capture failed: \(cameraId)", emoji: "❌", color: .red)
+            markAsFailed(cameraId)
+            finishCapture(cameraId: cameraId, success: false, completion: completion)
+        }
+    }
+    
+    // MARK: - Safe WebView Destruction (NO CRASHES)
+    
+    private func safeDestroyWebView(_ webView: WKWebView) {
+        // Must be called on main thread
+        assert(Thread.isMainThread, "safeDestroyWebView must be called on main thread")
+        
+        // 1. Stop loading immediately
+        webView.stopLoading()
+        
+        // 2. Clear delegates
+        webView.navigationDelegate = nil
+        webView.uiDelegate = nil
+        
+        // 3. CRITICAL: Remove script handlers by name (not removeAll)
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "captureComplete")
+        
+        // 4. Remove from superview BEFORE loading blank
+        webView.removeFromSuperview()
+        
+        // 5. Load blank page (with delay to ensure JS cleanup)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            webView.loadHTMLString("", baseURL: nil)
+            
+            // 6. Clear website data after another delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                let dataStore = WKWebsiteDataStore.nonPersistent()
+                dataStore.removeData(
+                    ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
+                    modifiedSince: Date(timeIntervalSince1970: 0),
+                    completionHandler: {}
+                )
+            }
+        }
+        
+        DebugLogger.shared.log("🧹 WebView safely destroyed", emoji: "🧹", color: .gray)
+    }
+    
+    // MARK: - HTML Generation
     
     private func generateCaptureHTML(streamURL: String) -> String {
         return """
@@ -339,14 +382,11 @@ class ThumbnailCacheManager: ObservableObject {
                 async function start() {
                     try {
                         pc = new RTCPeerConnection({ 
-                            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-                            iceTransportPolicy: 'all'
+                            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
                         });
                         
                         pc.ontrack = (e) => { 
-                            if (!captured) {
-                                video.srcObject = e.streams[0]; 
-                            }
+                            if (!captured) video.srcObject = e.streams[0];
                         };
                         
                         pc.addTransceiver('video', { direction: 'recvonly' });
@@ -365,7 +405,7 @@ class ThumbnailCacheManager: ObservableObject {
                             signal: controller.signal
                         });
                         
-                        if (!res.ok) throw new Error('Server error: ' + res.status);
+                        if (!res.ok) throw new Error('Server error');
                         
                         const answer = await res.text();
                         await pc.setRemoteDescription({ type: 'answer', sdp: answer });
@@ -400,7 +440,8 @@ class ThumbnailCacheManager: ObservableObject {
                     }, 300);
                 });
                 
-                video.addEventListener('error', () => fail());
+                video.addEventListener('error', fail);
+                window.addEventListener('beforeunload', cleanup);
                 
                 start();
             })();
@@ -410,48 +451,12 @@ class ThumbnailCacheManager: ObservableObject {
         """
     }
     
-    private func destroyWebViewAggressively(_ webView: WKWebView) {
-        // CRITICAL: Aggressive WebView destruction for low memory devices
-        
-        // 1. Stop all loading
-        webView.stopLoading()
-        
-        // 2. Clear delegates
-        webView.navigationDelegate = nil
-        webView.uiDelegate = nil
-        
-        // 3. Remove all script handlers
-        webView.configuration.userContentController.removeAllScriptMessageHandlers()
-        
-        // 4. Load blank page to release resources
-        webView.loadHTMLString("", baseURL: nil)
-        
-        // 5. Remove from superview
-        webView.removeFromSuperview()
-        
-        // 6. Clear website data
-        let dataStore = WKWebsiteDataStore.nonPersistent()
-        dataStore.removeData(
-            ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
-            modifiedSince: Date(timeIntervalSince1970: 0),
-            completionHandler: {}
-        )
-        
-        // 7. Force memory release hint
-        autoreleasepool {}
-        
-        DebugLogger.shared.log("🧹 WebView destroyed aggressively", emoji: "🧹", color: .gray)
-    }
-    
-    // MARK: - Process Captured Image
+    // MARK: - Image Processing
     
     private func processCapturedImage(cameraId: String, imageDataURL: String, completion: @escaping (Bool) -> Void) {
-        DebugLogger.shared.log("📷 Processing capture: \(cameraId)", emoji: "📷", color: .green)
-        
         guard let commaIndex = imageDataURL.firstIndex(of: ",") else {
-            DebugLogger.shared.log("❌ Invalid image data", emoji: "❌", color: .red)
             markAsFailed(cameraId)
-            finishCapture(cameraId, success: false, completion: completion)
+            finishCapture(cameraId: cameraId, success: false, completion: completion)
             return
         }
         
@@ -459,13 +464,11 @@ class ThumbnailCacheManager: ObservableObject {
         
         guard let imageData = Data(base64Encoded: base64String),
               let image = UIImage(data: imageData) else {
-            DebugLogger.shared.log("❌ Failed to decode", emoji: "❌", color: .red)
             markAsFailed(cameraId)
-            finishCapture(cameraId, success: false, completion: completion)
+            finishCapture(cameraId: cameraId, success: false, completion: completion)
             return
         }
         
-        // Reduced size for low memory
         let resizedImage = resizeImage(image, targetWidth: 240)
         
         DispatchQueue.main.async {
@@ -474,41 +477,26 @@ class ThumbnailCacheManager: ObservableObject {
             self.thumbnailTimestamps[cameraId] = Date()
             self.failedCameras.remove(cameraId)
             
-            DebugLogger.shared.log("✅ Thumbnail saved: \(cameraId)", emoji: "✅", color: .green)
-            
             self.saveThumbnail(resizedImage, for: cameraId)
             self.saveTimestamps()
             
-            self.finishCapture(cameraId, success: true, completion: completion)
+            self.finishCapture(cameraId: cameraId, success: true, completion: completion)
         }
     }
     
-    private func finishCapture(_ cameraId: String, success: Bool, completion: ((Bool) -> Void)?) {
-        lock.lock()
-        loadingCameras.remove(cameraId)
-        captureTimeouts.removeValue(forKey: cameraId)
-        lock.unlock()
-        
-        // Add 0.5 second cooldown before allowing next capture
-        // This prevents race conditions and gives WebView time to fully cleanup
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.lock.lock()
-            self.isCapturing = false
-            self.lock.unlock()
-            DebugLogger.shared.log("✅ Ready for next capture", emoji: "✅", color: .green)
-        }
-        
-        DebugLogger.shared.log("🏁 Capture finished: \(cameraId) - \(success ? "SUCCESS" : "FAILED")", emoji: "🏁", color: success ? .green : .red)
-        
+    private func finishCapture(_ cameraId: String, success: Bool, completion: @escaping (Bool) -> Void) {
         DispatchQueue.main.async {
-            completion?(success)
+            self.loadingCameras.remove(cameraId)
+            
+            DebugLogger.shared.log("🏁 Capture finished: \(cameraId) - \(success ? "SUCCESS" : "FAILED")", emoji: "🏁", color: success ? .green : .red)
+            
+            completion(success)
         }
     }
     
     private func markAsFailed(_ cameraId: String) {
         DispatchQueue.main.async {
             self.failedCameras.insert(cameraId)
-            DebugLogger.shared.log("❌ Marked as failed: \(cameraId)", emoji: "❌", color: .red)
         }
     }
     
@@ -555,9 +543,7 @@ class ThumbnailCacheManager: ObservableObject {
             guard let files = try? self.fileManager.contentsOfDirectory(
                 at: self.cacheDirectory,
                 includingPropertiesForKeys: nil
-            ) else {
-                return
-            }
+            ) else { return }
             
             DispatchQueue.main.async {
                 for file in files where file.pathExtension == "jpg" {
@@ -576,13 +562,11 @@ class ThumbnailCacheManager: ObservableObject {
     }
     
     func clearThumbnail(for cameraId: String) {
-        lock.lock()
         thumbnails.removeValue(forKey: cameraId)
         thumbnailTimestamps.removeValue(forKey: cameraId)
         cache.removeObject(forKey: cameraId as NSString)
         failedCameras.remove(cameraId)
         loadingCameras.remove(cameraId)
-        lock.unlock()
         
         let fileURL = cacheDirectory.appendingPathComponent("\(cameraId).jpg")
         try? fileManager.removeItem(at: fileURL)
@@ -600,9 +584,7 @@ class ThumbnailCacheManager: ObservableObject {
     }
     
     func clearChannelThumbnails() {
-        lock.lock()
         let keysToRemove = Array(thumbnails.keys)
-        lock.unlock()
         
         for key in keysToRemove {
             cache.removeObject(forKey: key as NSString)
@@ -612,7 +594,7 @@ class ThumbnailCacheManager: ObservableObject {
     }
 }
 
-// MARK: - Capture Handler (Simplified)
+// MARK: - Capture Handler (WEAK REFERENCES)
 class ThumbnailCaptureHandler: NSObject, WKScriptMessageHandler {
     let cameraId: String
     let callback: (Bool, String?) -> Void
@@ -620,6 +602,7 @@ class ThumbnailCaptureHandler: NSObject, WKScriptMessageHandler {
     init(cameraId: String, callback: @escaping (Bool, String?) -> Void) {
         self.cameraId = cameraId
         self.callback = callback
+        super.init()
     }
     
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
