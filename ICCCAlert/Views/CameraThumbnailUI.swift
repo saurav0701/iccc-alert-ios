@@ -17,10 +17,8 @@ struct CameraThumbnail: View {
                 } else if thumbnailCache.isLoading(for: camera.id) {
                     loadingView
                 } else if thumbnailCache.hasFailed(for: camera.id) {
-                    // SHOW ERROR STATE WITH RETRY
                     errorView
                 } else {
-                    // SHOW "TAP TO LOAD" BY DEFAULT
                     tapToLoadView
                 }
             }
@@ -171,8 +169,7 @@ struct CameraThumbnail: View {
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
             return
         }
-        
-        // Check if another capture is in progress
+
         if thumbnailCache.loadingCameras.contains(where: { _ in true }) {
             DebugLogger.shared.log("⚠️ Another capture in progress", emoji: "⚠️", color: .orange)
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
@@ -254,7 +251,6 @@ struct CameraThumbnail: View {
     }
 }
 
-// MARK: - Camera Grid Card (Updated for Manual Load)
 struct CameraGridCardFixed: View {
     let camera: Camera
     let mode: GridViewMode
