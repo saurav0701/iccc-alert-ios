@@ -2,7 +2,7 @@ import SwiftUI
 import WebKit
 import Combine
 
-// MARK: - Player Manager (SIMPLIFIED & STABLE)
+// MARK: - Player Manager (LOW MEMORY MODE - AGGRESSIVE CLEANUP)
 class PlayerManager: ObservableObject {
     static let shared = PlayerManager()
     
@@ -10,10 +10,15 @@ class PlayerManager: ObservableObject {
     private let lock = NSLock()
     private let maxPlayers = 1
     
+    // Memory monitoring
+    private var memoryCheckTimer: Timer?
+    private var streamStartTime: Date?
+    
     private init() {
         setupMemoryWarning()
         setupAppStateObservers()
-        DebugLogger.shared.log("📹 PlayerManager initialized", emoji: "📹", color: .blue)
+        startMemoryMonitoring()
+        DebugLogger.shared.log("📹 PlayerManager initialized (LOW MEMORY MODE)", emoji: "📹", color: .blue)
     }
     
     private func setupMemoryWarning() {
@@ -22,7 +27,7 @@ class PlayerManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            DebugLogger.shared.log("⚠️ MEMORY WARNING - cleanup", emoji: "🆘", color: .red)
+            DebugLogger.shared.log("🆘 MEMORY WARNING - Emergency player cleanup", emoji: "🆘", color: .red)
             self?.clearAll()
         }
     }
@@ -34,8 +39,60 @@ class PlayerManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            DebugLogger.shared.log("📱 Backgrounded - cleanup", emoji: "📱", color: .orange)
+            DebugLogger.shared.log("📱 Backgrounded - cleanup players", emoji: "📱", color: .orange)
             self?.clearAll()
+        }
+        
+        // Foreground - log
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            DebugLogger.shared.log("📱 Foregrounded", emoji: "📱", color: .blue)
+        }
+    }
+    
+    // MARK: - Memory Monitoring (NEW - CRITICAL FOR LOW RAM)
+    
+    private func startMemoryMonitoring() {
+        memoryCheckTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
+            self?.checkMemoryUsage()
+        }
+    }
+    
+    private func checkMemoryUsage() {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
+        
+        let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+                task_info(mach_task_self_,
+                         task_flavor_t(MACH_TASK_BASIC_INFO),
+                         $0,
+                         &count)
+            }
+        }
+        
+        if kerr == KERN_SUCCESS {
+            let usedMemoryMB = Double(info.resident_size) / 1024 / 1024
+            
+            DebugLogger.shared.log("💾 Memory: \(String(format: "%.1f", usedMemoryMB)) MB", emoji: "💾", color: .gray)
+            
+            // CRITICAL: On iPhone 7 (2GB RAM), if app uses > 300MB, start aggressive cleanup
+            if usedMemoryMB > 300 {
+                DebugLogger.shared.log("⚠️ HIGH MEMORY - Clearing players", emoji: "⚠️", color: .orange)
+                clearAll()
+            }
+            
+            // Check stream duration - restart after 4 minutes to prevent memory buildup
+            if let startTime = streamStartTime {
+                let duration = Date().timeIntervalSince(startTime)
+                if duration > 240 { // 4 minutes
+                    DebugLogger.shared.log("⏱️ Stream running >4min - Restart recommended", emoji: "⏱️", color: .orange)
+                    // Don't auto-restart (user should manually), but warn
+                }
+            }
         }
     }
     
@@ -51,24 +108,47 @@ class PlayerManager: ObservableObject {
             for key in allKeys {
                 if let oldPlayer = activePlayers.removeValue(forKey: key) {
                     DispatchQueue.main.async {
-                        self.destroyWebView(oldPlayer)
+                        self.destroyWebViewAggressively(oldPlayer)
                     }
                 }
             }
         }
         
         activePlayers[cameraId] = webView
+        streamStartTime = Date()
+        
         DebugLogger.shared.log("✅ Registered: \(cameraId)", emoji: "✅", color: .green)
     }
     
-    private func destroyWebView(_ webView: WKWebView) {
-        DebugLogger.shared.log("🧹 Destroying WebView", emoji: "🧹", color: .blue)
+    private func destroyWebViewAggressively(_ webView: WKWebView) {
+        DebugLogger.shared.log("🧹 Destroying WebView (aggressive)", emoji: "🧹", color: .blue)
         
+        // 1. Stop loading
         webView.stopLoading()
+        
+        // 2. Clear delegates
         webView.navigationDelegate = nil
-        webView.loadHTMLString("", baseURL: nil)
+        webView.uiDelegate = nil
+        
+        // 3. Remove script handlers
         webView.configuration.userContentController.removeAllScriptMessageHandlers()
+        
+        // 4. Load blank page to release video resources
+        webView.loadHTMLString("", baseURL: nil)
+        
+        // 5. Remove from view hierarchy
         webView.removeFromSuperview()
+        
+        // 6. Clear website data
+        let dataStore = WKWebsiteDataStore.nonPersistent()
+        dataStore.removeData(
+            ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
+            modifiedSince: Date(timeIntervalSince1970: 0),
+            completionHandler: {}
+        )
+        
+        // 7. Force autoreleasepool drain
+        autoreleasepool {}
         
         DebugLogger.shared.log("✅ WebView destroyed", emoji: "✅", color: .green)
     }
@@ -80,8 +160,10 @@ class PlayerManager: ObservableObject {
         if let webView = activePlayers.removeValue(forKey: cameraId) {
             DebugLogger.shared.log("🗑️ Releasing: \(cameraId)", emoji: "🗑️", color: .orange)
             
+            streamStartTime = nil
+            
             DispatchQueue.main.async {
-                self.destroyWebView(webView)
+                self.destroyWebViewAggressively(webView)
             }
         }
     }
@@ -98,9 +180,10 @@ class PlayerManager: ObservableObject {
         
         let allPlayers = activePlayers
         activePlayers.removeAll()
+        streamStartTime = nil
         
         DispatchQueue.main.async {
-            allPlayers.forEach { self.destroyWebView($0.value) }
+            allPlayers.forEach { self.destroyWebViewAggressively($0.value) }
         }
     }
     
@@ -109,9 +192,13 @@ class PlayerManager: ObservableObject {
         defer { lock.unlock() }
         return activePlayers.count
     }
+    
+    deinit {
+        memoryCheckTimer?.invalidate()
+    }
 }
 
-// MARK: - WebRTC Player View (SIMPLIFIED)
+// MARK: - WebRTC Player View (MEMORY OPTIMIZED)
 struct WebRTCPlayerView: UIViewRepresentable {
     let streamURL: String
     let cameraId: String
@@ -129,6 +216,9 @@ struct WebRTCPlayerView: UIViewRepresentable {
         let prefs = WKWebpagePreferences()
         prefs.allowsContentJavaScript = true
         config.defaultWebpagePreferences = prefs
+        
+        // Suppress media cache to reduce memory
+        config.suppressesIncrementalRendering = true
         
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.scrollView.isScrollEnabled = false
@@ -199,6 +289,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
                     const live = document.getElementById('live');
                     const streamUrl = '\(streamURL)';
                     let pc = null, isActive = true;
+                    let memoryCheckInterval = null;
                     
                     function log(msg, isError = false) {
                         if (!isActive) return;
@@ -209,12 +300,15 @@ struct WebRTCPlayerView: UIViewRepresentable {
                     
                     function cleanup() {
                         isActive = false;
+                        if (memoryCheckInterval) clearInterval(memoryCheckInterval);
                         try {
                             if (pc) { pc.close(); pc = null; }
                             if (video.srcObject) {
                                 video.srcObject.getTracks().forEach(t => t.stop());
                                 video.srcObject = null;
                             }
+                            video.src = '';
+                            video.load();
                         } catch(e) {}
                         live.classList.remove('show');
                     }
@@ -226,7 +320,8 @@ struct WebRTCPlayerView: UIViewRepresentable {
                         
                         try {
                             pc = new RTCPeerConnection({
-                                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+                                iceTransportPolicy: 'all'
                             });
                             
                             pc.ontrack = (e) => { 
@@ -243,7 +338,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
                                     log('Connected'); 
                                     live.classList.add('show');
                                 } else if (state === 'failed' || state === 'disconnected') {
-                                    log('Disconnected'); 
+                                    log('Disconnected', true); 
                                     live.classList.remove('show');
                                 }
                             };
@@ -275,7 +370,15 @@ struct WebRTCPlayerView: UIViewRepresentable {
                     video.addEventListener('playing', () => { 
                         if (isActive) { 
                             log('Playing'); 
-                            live.classList.add('show'); 
+                            live.classList.add('show');
+                            
+                            // Start memory check (every 30 seconds)
+                            memoryCheckInterval = setInterval(() => {
+                                if (performance.memory) {
+                                    const usedMB = (performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(1);
+                                    log('Playing | Mem: ' + usedMB + 'MB');
+                                }
+                            }, 30000);
                         } 
                     });
                     
@@ -313,12 +416,13 @@ struct WebRTCPlayerView: UIViewRepresentable {
     }
 }
 
-// MARK: - Fullscreen Player (SIMPLE VERSION)
+// MARK: - Fullscreen Player (MEMORY OPTIMIZED)
 struct FullscreenPlayerView: View {
     let camera: Camera
     @Environment(\.presentationMode) var presentationMode
     @State private var showControls = true
     @State private var orientation = UIDeviceOrientation.unknown
+    @State private var showMemoryWarning = false
     
     var body: some View {
         GeometryReader { geometry in
@@ -337,9 +441,14 @@ struct FullscreenPlayerView: View {
                 if showControls {
                     controlsOverlay
                 }
+                
+                if showMemoryWarning {
+                    memoryWarningOverlay
+                }
             }
             .onAppear {
                 setupOrientationObserver()
+                setupMemoryWarning()
             }
             .onDisappear {
                 PlayerManager.shared.releasePlayer(camera.id)
@@ -400,6 +509,32 @@ struct FullscreenPlayerView: View {
         .transition(.opacity)
     }
     
+    private var memoryWarningOverlay: some View {
+        VStack {
+            Spacer()
+            HStack {
+                Spacer()
+                VStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 24))
+                        .foregroundColor(.orange)
+                    Text("High Memory Usage")
+                        .font(.caption)
+                        .foregroundColor(.white)
+                    Text("Consider restarting")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.8))
+                }
+                .padding()
+                .background(Color.orange.opacity(0.9))
+                .cornerRadius(12)
+                .padding()
+                Spacer()
+            }
+            Spacer()
+        }
+    }
+    
     private var isLandscape: Bool {
         orientation.isLandscape
     }
@@ -411,6 +546,19 @@ struct FullscreenPlayerView: View {
             queue: .main
         ) { _ in
             orientation = UIDevice.current.orientation
+        }
+    }
+    
+    private func setupMemoryWarning() {
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            showMemoryWarning = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                showMemoryWarning = false
+            }
         }
     }
     
