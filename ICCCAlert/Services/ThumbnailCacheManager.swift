@@ -4,7 +4,7 @@ import WebKit
 import Combine
 import SwiftUI
 
-// MARK: - Thumbnail Cache Manager (AGGRESSIVE MEMORY MANAGEMENT)
+// MARK: - Thumbnail Cache Manager (AGGRESSIVE MEMORY MANAGEMENT + RATE LIMITING)
 class ThumbnailCacheManager: ObservableObject {
     static let shared = ThumbnailCacheManager()
     
@@ -20,6 +20,10 @@ class ThumbnailCacheManager: ObservableObject {
     // CRITICAL: Single capture operation at a time
     private var isCapturing = false
     private let lock = NSLock()
+    
+    // NEW: Rate limiting properties (prevents rapid-fire crashes)
+    private var lastCaptureTime: TimeInterval = 0
+    private let minimumCaptureInterval: TimeInterval = 3.0  // 3 seconds between captures
     
     // CRITICAL: Track active WebViews for aggressive cleanup
     private var activeWebViews: Set<WKWebView> = []
@@ -42,7 +46,7 @@ class ThumbnailCacheManager: ObservableObject {
         
         setupMemoryWarning()
         
-        DebugLogger.shared.log("🖼️ ThumbnailCacheManager initialized (LOW MEMORY MODE)", emoji: "🖼️", color: .blue)
+        DebugLogger.shared.log("🖼️ ThumbnailCacheManager initialized (LOW MEMORY MODE + RATE LIMITING)", emoji: "🖼️", color: .blue)
     }
     
     private func setupMemoryWarning() {
@@ -121,10 +125,28 @@ class ThumbnailCacheManager: ObservableObject {
         return age < cacheDuration
     }
     
-    // MARK: - Manual Load ONLY (SINGLE ATTEMPT WITH AGGRESSIVE CLEANUP)
+    // MARK: - Manual Load ONLY (WITH RATE LIMITING + AGGRESSIVE CLEANUP)
     
     func manualLoad(for camera: Camera, completion: @escaping (Bool) -> Void) {
         lock.lock()
+        
+        // NEW: Enforce minimum time between captures (prevents rapid-fire crashes)
+        let now = Date().timeIntervalSince1970
+        let timeSinceLastCapture = now - lastCaptureTime
+        
+        if timeSinceLastCapture < minimumCaptureInterval {
+            let remainingTime = Int(ceil(minimumCaptureInterval - timeSinceLastCapture))
+            lock.unlock()
+            
+            DebugLogger.shared.log("⏳ Too fast! Wait \(remainingTime)s before next capture", emoji: "⏳", color: .orange)
+            
+            DispatchQueue.main.async {
+                UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            }
+            
+            completion(false)
+            return
+        }
         
         // CRITICAL: Block if ANY capture is in progress
         if isCapturing {
@@ -153,6 +175,7 @@ class ThumbnailCacheManager: ObservableObject {
         loadingCameras.insert(camera.id)
         failedCameras.remove(camera.id)
         isCapturing = true
+        lastCaptureTime = now  // Record capture start time
         
         lock.unlock()
         
@@ -463,9 +486,17 @@ class ThumbnailCacheManager: ObservableObject {
     private func finishCapture(_ cameraId: String, success: Bool, completion: ((Bool) -> Void)?) {
         lock.lock()
         loadingCameras.remove(cameraId)
-        isCapturing = false
         captureTimeouts.removeValue(forKey: cameraId)
         lock.unlock()
+        
+        // Add 0.5 second cooldown before allowing next capture
+        // This prevents race conditions and gives WebView time to fully cleanup
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.lock.lock()
+            self.isCapturing = false
+            self.lock.unlock()
+            DebugLogger.shared.log("✅ Ready for next capture", emoji: "✅", color: .green)
+        }
         
         DebugLogger.shared.log("🏁 Capture finished: \(cameraId) - \(success ? "SUCCESS" : "FAILED")", emoji: "🏁", color: success ? .green : .red)
         
