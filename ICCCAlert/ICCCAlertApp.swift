@@ -11,6 +11,8 @@ struct ICCCAlertApp: App {
     init() {
         setupAppearance()
         _ = BackgroundWebSocketManager.shared
+
+        _ = MemoryMonitor.shared
         
         NotificationManager.shared.requestAuthorization()
         NotificationManager.shared.setupNotificationCategories()

@@ -44,12 +44,9 @@ struct AreaCamerasView: View {
             }
         )
         .fullScreenCover(item: $selectedCamera) { camera in
-            FullscreenPlayerView(camera: camera)
-                .onDisappear {
-                    // Ensure player is cleaned up when dismissed
-                    PlayerManager.shared.releasePlayer(camera.id)
-                }
-        }
+    FullscreenPlayerEnhanced(camera: camera)
+    // No onDisappear needed - handled inside
+}
         .alert(isPresented: $showStreamBlockedAlert) {
             Alert(
                 title: Text("Stream Blocked"),
