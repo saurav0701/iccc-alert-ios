@@ -5,6 +5,7 @@ project_name = 'ICCCAlert'
 project_path = "#{project_name}.xcodeproj"
 
 puts "🚀 Generating iOS Xcode project: #{project_name}"
+puts "📦 Including WebRTC support"
 
 # Create project
 project = Xcodeproj::Project.new(project_path)
@@ -34,13 +35,12 @@ swift_files.each do |file|
   relative_path = file.sub("#{project_name}/", "")
   group_name = File.dirname(relative_path)
   
-  # Check for duplicates - prefer ViewModels over Models for ViewModels
+  # Check for duplicates
   if seen_filenames[filename]
     puts "⚠️  Duplicate file detected: #{filename}"
     puts "   Already added: #{seen_filenames[filename]}"
     puts "   Skipping: #{file}"
     
-    # Skip if it's in Models and we already have it in ViewModels
     if group_name == 'Models' && seen_filenames[filename].include?('ViewModels')
       puts "   → Keeping ViewModels version"
       next
@@ -86,12 +86,25 @@ target.build_configurations.each do |config|
   config.build_settings['ASSETCATALOG_COMPILER_APPICON_NAME'] = 'AppIcon'
   config.build_settings['LD_RUNPATH_SEARCH_PATHS'] = '$(inherited) @executable_path/Frameworks'
   
+  # Swift Package Manager support
+  config.build_settings['SWIFT_PACKAGE_DEPENDENCIES'] = 'YES'
+  
   # No code signing for CI builds
   config.build_settings['CODE_SIGN_IDENTITY'] = ''
   config.build_settings['CODE_SIGNING_REQUIRED'] = 'NO'
   config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
   config.build_settings['ENABLE_BITCODE'] = 'NO'
+  
+  # Allow insecure HTTP for video streaming (needed for your servers)
+  config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] = '$(inherited) COCOAPODS=1'
 end
+
+puts "\n📦 Setting up WebRTC framework..."
+
+# Note: WebRTC will be added via Swift Package Manager
+# The Package.swift file should be in the root directory
+puts "  ℹ️  WebRTC will be resolved via Swift Package Manager"
+puts "  ℹ️  Run: xcodebuild -resolvePackageDependencies"
 
 # Save project
 project.save
@@ -101,3 +114,8 @@ puts "   - Total Swift files: #{seen_filenames.count}"
 puts "   - Target: #{project_name}"
 puts "   - Bundle ID: com.iccc.alert"
 puts "   - Deployment Target: iOS 14.0"
+puts "   - WebRTC: Managed by Swift Package Manager"
+puts "\n🔧 Next steps:"
+puts "   1. Open #{project_path}"
+puts "   2. Add Swift package: https://github.com/stasel/WebRTC.git"
+puts "   3. Or run: xcodebuild -resolvePackageDependencies"

@@ -46,17 +46,17 @@ struct AreaCamerasView: View {
             }
         )
         .fullScreenCover(item: $selectedCamera) { camera in
-            FullscreenPlayerEnhanced(camera: camera)
-                .onDisappear {
-                    // CRITICAL: Prevent stream opening immediately after close
-                    canOpenStream = false
-                    
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                        self.canOpenStream = true
-                        DebugLogger.shared.log("✅ Ready for next stream", emoji: "✅", color: .green)
-                    }
-                }
+    FullscreenPlayerNative(camera: camera)
+        .onDisappear {
+            // CRITICAL: Prevent stream opening immediately after close
+            canOpenStream = false
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                self.canOpenStream = true
+                DebugLogger.shared.log("✅ Ready for next stream", emoji: "✅", color: .green)
+            }
         }
+
         .alert(isPresented: $showStreamBlockedAlert) {
             Alert(
                 title: Text("Cannot Open Stream"),
