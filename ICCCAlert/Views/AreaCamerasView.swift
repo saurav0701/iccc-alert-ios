@@ -31,20 +31,18 @@ struct AreaCamerasView: View {
             cameras.isEmpty ? AnyView(emptyView) : AnyView(cameraGridView)
         }
         .navigationTitle(area)
-.navigationBarTitleDisplayMode(.inline)
-.toolbar {
-    ToolbarItem(placement: .topBarTrailing) {
-        Menu {
-            Picker("Layout", selection: $gridMode) {
-                ForEach(GridViewMode.allCases) { mode in
-                    Label(mode.rawValue, systemImage: mode.icon).tag(mode)
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarItems(trailing:
+            Menu {
+                Picker("Layout", selection: $gridMode) {
+                    ForEach(GridViewMode.allCases) { mode in
+                        Label(mode.rawValue, systemImage: mode.icon).tag(mode)
+                    }
                 }
+            } label: {
+                Image(systemName: gridMode.icon).font(.system(size: 18))
             }
-        } label: {
-            Image(systemName: gridMode.icon).font(.system(size: 18))
-        }
-    }
-}
+        )
         .fullScreenCover(item: $selectedCamera) { camera in
             FullscreenPlayerView(camera: camera)
                 .onDisappear {
