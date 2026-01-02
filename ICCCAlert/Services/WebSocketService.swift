@@ -686,7 +686,7 @@ class WebSocketService: ObservableObject {
                 self.webSocketTask?.sendPing { error in
                     if let error = error {
                         DebugLogger.shared.log("Ping failed: \(error.localizedDescription)", emoji: "❌", color: .red)
-                        // Don't immediately reconnect on single ping failure
+                
                     }
                 }
             } else {

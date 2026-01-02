@@ -2,33 +2,26 @@ import SwiftUI
 import WebKit
 import Combine
 
-// MARK: - Player Manager (ULTRA-STABLE FOR LOW MEMORY)
-class PlayerManager: ObservableObject {
-    static let shared = PlayerManager()
+// MARK: - AUTO-RESTART CONFIGURATION
+struct StreamConfig {
+    static let maxStreamDuration: TimeInterval = 300 // 5 minutes
+    static let thumbnailTimeout: TimeInterval = 8 // 8 seconds
+    static let memoryThresholdMB: Double = 250 // Aggressive threshold
+    static let maxConcurrentStreams = 1
+}
+
+// MARK: - Memory Monitor (Singleton)
+class MemoryMonitor: ObservableObject {
+    static let shared = MemoryMonitor()
     
-    private var activePlayers: [String: WKWebView] = [:]
-    private let lock = NSLock()
-    private let maxPlayers = 1
+    @Published var currentMemoryMB: Double = 0
+    @Published var isMemoryWarning: Bool = false
     
-    // CRITICAL: Track app state
-    private var isAppActive = true
-    
-    // Memory monitoring with aggressive thresholds
-    private var memoryCheckTimer: Timer?
-    private var streamStartTime: Date?
-    private var lastMemoryWarning: Date?
-    
-    // CRITICAL: Connection health monitoring
-    private var connectionHealthTimer: Timer?
-    private var lastHealthCheck: Date?
-    private var consecutiveHealthCheckFailures = 0
+    private var timer: Timer?
     
     private init() {
+        startMonitoring()
         setupMemoryWarning()
-        setupAppStateObservers()
-        startMemoryMonitoring()
-        startConnectionHealthMonitoring()
-        DebugLogger.shared.log("📹 PlayerManager initialized (ULTRA-STABLE MODE)", emoji: "📹", color: .blue)
     }
     
     private func setupMemoryWarning() {
@@ -37,60 +30,18 @@ class PlayerManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            DebugLogger.shared.log("🆘 MEMORY WARNING - Emergency cleanup", emoji: "🆘", color: .red)
-            self?.lastMemoryWarning = Date()
-            self?.clearAll()
-            
-            // Force garbage collection
-            autoreleasepool {
-                URLCache.shared.removeAllCachedResponses()
-            }
+            self?.isMemoryWarning = true
+            self?.handleMemoryWarning()
         }
     }
     
-    private func setupAppStateObservers() {
-        // Immediate cleanup on app state change
-        NotificationCenter.default.addObserver(
-            forName: UIApplication.willResignActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            DebugLogger.shared.log("⚠️ App will resign active - IMMEDIATE cleanup", emoji: "⚠️", color: .orange)
-            self?.isAppActive = false
-            self?.clearAll()
-        }
-        
-        NotificationCenter.default.addObserver(
-            forName: UIApplication.didBecomeActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            DebugLogger.shared.log("✅ App became active", emoji: "✅", color: .green)
-            self?.isAppActive = true
-            self?.consecutiveHealthCheckFailures = 0
-        }
-        
-        NotificationCenter.default.addObserver(
-            forName: UIApplication.didEnterBackgroundNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            DebugLogger.shared.log("📱 Backgrounded - cleanup", emoji: "📱", color: .orange)
-            self?.isAppActive = false
-            self?.clearAll()
+    private func startMonitoring() {
+        timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            self?.updateMemoryUsage()
         }
     }
     
-    // MARK: - Memory Monitoring (AGGRESSIVE FOR IPHONE 7)
-    
-    private func startMemoryMonitoring() {
-        // Check every 15 seconds (more frequent for iPhone 7)
-        memoryCheckTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { [weak self] _ in
-            self?.checkMemoryUsage()
-        }
-    }
-    
-    private func checkMemoryUsage() {
+    private func updateMemoryUsage() {
         var info = mach_task_basic_info()
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
         
@@ -104,334 +55,319 @@ class PlayerManager: ObservableObject {
         }
         
         if kerr == KERN_SUCCESS {
-            let usedMemoryMB = Double(info.resident_size) / 1024 / 1024
+            currentMemoryMB = Double(info.resident_size) / 1024 / 1024
             
-            DebugLogger.shared.log("💾 Memory: \(String(format: "%.1f", usedMemoryMB)) MB", emoji: "💾", color: .gray)
-            
-            // CRITICAL: iPhone 7 thresholds (2GB total RAM)
-            // Normal apps should stay under 200MB to be safe
-            if usedMemoryMB > 250 {
-                DebugLogger.shared.log("🚨 CRITICAL MEMORY (\(String(format: "%.1f", usedMemoryMB))MB) - Emergency restart", emoji: "🚨", color: .red)
-                clearAll()
-                
-                // Post notification to UI to show warning
-                NotificationCenter.default.post(name: NSNotification.Name("MemoryCritical"), object: nil)
-                
-            } else if usedMemoryMB > 200 {
-                DebugLogger.shared.log("⚠️ HIGH MEMORY (\(String(format: "%.1f", usedMemoryMB))MB) - Warning", emoji: "⚠️", color: .orange)
-            }
-            
-            // Check stream duration - iPhone 7 can't handle long streams
-            if let startTime = streamStartTime {
-                let duration = Date().timeIntervalSince(startTime)
-                let minutes = Int(duration / 60)
-                
-                DebugLogger.shared.log("⏱️ Stream duration: \(minutes)m", emoji: "⏱️", color: .gray)
-                
-                // CRITICAL: Auto-restart after 3 minutes on iPhone 7
-                if duration > 180 { // 3 minutes
-                    DebugLogger.shared.log("🔄 Auto-restart after 3min (iPhone 7 protection)", emoji: "🔄", color: .orange)
-                    clearAll()
-                    
-                    // Post notification to UI to restart stream
-                    NotificationCenter.default.post(name: NSNotification.Name("StreamAutoRestart"), object: nil)
-                }
+            if currentMemoryMB > StreamConfig.memoryThresholdMB {
+                handleMemoryWarning()
             }
         }
     }
     
-    // MARK: - Connection Health Monitoring (NEW - CRITICAL)
-    
-    private func startConnectionHealthMonitoring() {
-        // Check connection health every 20 seconds
-        connectionHealthTimer = Timer.scheduledTimer(withTimeInterval: 20.0, repeats: true) { [weak self] _ in
-            self?.checkConnectionHealth()
+    private func handleMemoryWarning() {
+        DebugLogger.shared.log("🆘 MEMORY WARNING - Triggering cleanup", emoji: "🆘", color: .red)
+        
+        // Cleanup all players
+        PlayerManager.shared.emergencyCleanup()
+        
+        // Cleanup thumbnails
+        ThumbnailCacheManager.shared.emergencyCleanup()
+        
+        // Force system cleanup
+        URLCache.shared.removeAllCachedResponses()
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            self.isMemoryWarning = false
         }
-    }
-    
-    private func checkConnectionHealth() {
-        guard isAppActive else { return }
-        
-        lock.lock()
-        guard !activePlayers.isEmpty else {
-            lock.unlock()
-            return
-        }
-        
-        let players = Array(activePlayers.values)
-        lock.unlock()
-        
-        // Check if WebView is responsive
-        for webView in players {
-            webView.evaluateJavaScript("typeof pc !== 'undefined' && pc ? pc.iceConnectionState : 'no-pc'") { [weak self] result, error in
-                guard let self = self else { return }
-                
-                if let error = error {
-                    DebugLogger.shared.log("⚠️ Health check failed: \(error.localizedDescription)", emoji: "⚠️", color: .orange)
-                    self.consecutiveHealthCheckFailures += 1
-                    
-                    // If 3 consecutive failures, restart
-                    if self.consecutiveHealthCheckFailures >= 3 {
-                        DebugLogger.shared.log("🚨 Connection dead - Force restart", emoji: "🚨", color: .red)
-                        self.clearAll()
-                        NotificationCenter.default.post(name: NSNotification.Name("ConnectionDead"), object: nil)
-                    }
-                    
-                } else if let state = result as? String {
-                    DebugLogger.shared.log("🔍 Connection health: \(state)", emoji: "🔍", color: .gray)
-                    
-                    if state == "failed" || state == "disconnected" || state == "closed" {
-                        DebugLogger.shared.log("🔄 Connection unhealthy - Restart", emoji: "🔄", color: .orange)
-                        self.clearAll()
-                        NotificationCenter.default.post(name: NSNotification.Name("ConnectionUnhealthy"), object: nil)
-                    } else {
-                        self.consecutiveHealthCheckFailures = 0
-                    }
-                }
-            }
-        }
-    }
-    
-    func registerPlayer(_ webView: WKWebView, for cameraId: String) {
-        guard isAppActive else {
-            DebugLogger.shared.log("⚠️ Cannot register - app not active", emoji: "⚠️", color: .orange)
-            return
-        }
-        
-        lock.lock()
-        defer { lock.unlock() }
-        
-        DebugLogger.shared.log("📹 Registering: \(cameraId)", emoji: "📹", color: .blue)
-        
-        // Clear existing players
-        if !activePlayers.isEmpty {
-            let allKeys = Array(activePlayers.keys)
-            for key in allKeys {
-                if let oldPlayer = activePlayers.removeValue(forKey: key) {
-                    DispatchQueue.main.async {
-                        self.destroyWebViewAggressively(oldPlayer)
-                    }
-                }
-            }
-        }
-        
-        activePlayers[cameraId] = webView
-        streamStartTime = Date()
-        consecutiveHealthCheckFailures = 0
-        
-        DebugLogger.shared.log("✅ Registered: \(cameraId)", emoji: "✅", color: .green)
-    }
-    
-    private func destroyWebViewAggressively(_ webView: WKWebView) {
-        DebugLogger.shared.log("🧹 Destroying WebView", emoji: "🧹", color: .blue)
-        
-        guard Thread.isMainThread else {
-            DispatchQueue.main.sync {
-                self.destroyWebViewAggressively(webView)
-            }
-            return
-        }
-        
-        // 1. Execute JavaScript cleanup FIRST (most critical)
-        let cleanupScript = """
-        (function() {
-            try {
-                // Stop all tracks
-                var video = document.getElementById('video');
-                if (video && video.srcObject) {
-                    video.srcObject.getTracks().forEach(function(track) { 
-                        track.stop(); 
-                    });
-                    video.srcObject = null;
-                }
-                video.pause();
-                video.removeAttribute('src');
-                video.load();
-                
-                // Close peer connection
-                if (typeof pc !== 'undefined' && pc) {
-                    pc.close();
-                    pc = null;
-                }
-                
-                // Clear any intervals
-                if (typeof heartbeatInterval !== 'undefined') {
-                    clearInterval(heartbeatInterval);
-                }
-                
-                return 'cleaned';
-            } catch(e) {
-                return 'error: ' + e.message;
-            }
-        })();
-        """
-        
-        let semaphore = DispatchSemaphore(value: 0)
-        webView.evaluateJavaScript(cleanupScript) { result, error in
-            if let result = result {
-                DebugLogger.shared.log("✅ JS cleanup: \(result)", emoji: "✅", color: .green)
-            }
-            if let error = error {
-                DebugLogger.shared.log("⚠️ JS cleanup error: \(error.localizedDescription)", emoji: "⚠️", color: .orange)
-            }
-            semaphore.signal()
-        }
-        
-        // Wait max 1 second for JS cleanup
-        _ = semaphore.wait(timeout: .now() + 1.0)
-        
-        // 2. Stop loading
-        webView.stopLoading()
-        
-        // 3. Clear delegates
-        webView.navigationDelegate = nil
-        webView.uiDelegate = nil
-        
-        // 4. Remove script handlers
-        let contentController = webView.configuration.userContentController
-        contentController.removeScriptMessageHandler(forName: "logging")
-        contentController.removeAllScriptMessageHandlers()
-        
-        // 5. Load blank page
-        webView.loadHTMLString("", baseURL: nil)
-        
-        // 6. Remove from view
-        webView.removeFromSuperview()
-        
-        // 7. Clear website data
-        let dataTypes = WKWebsiteDataStore.allWebsiteDataTypes()
-        WKWebsiteDataStore.default().removeData(
-            ofTypes: dataTypes,
-            modifiedSince: Date(timeIntervalSince1970: 0)
-        ) {
-            DebugLogger.shared.log("✅ Website data cleared", emoji: "✅", color: .gray)
-        }
-        
-        // 8. Force memory release
-        autoreleasepool {}
-        
-        DebugLogger.shared.log("✅ WebView destroyed", emoji: "✅", color: .green)
-    }
-    
-    func releasePlayer(_ cameraId: String) {
-        lock.lock()
-        
-        guard let webView = activePlayers.removeValue(forKey: cameraId) else {
-            lock.unlock()
-            return
-        }
-        
-        DebugLogger.shared.log("🗑️ Releasing: \(cameraId)", emoji: "🗑️", color: .orange)
-        streamStartTime = nil
-        consecutiveHealthCheckFailures = 0
-        
-        lock.unlock()
-        
-        DispatchQueue.main.async {
-            self.destroyWebViewAggressively(webView)
-        }
-    }
-    
-    func clearAll() {
-        lock.lock()
-        
-        guard !activePlayers.isEmpty else {
-            lock.unlock()
-            return
-        }
-        
-        DebugLogger.shared.log("🧹 Clearing all players", emoji: "🧹", color: .red)
-        
-        let allPlayers = activePlayers
-        activePlayers.removeAll()
-        streamStartTime = nil
-        consecutiveHealthCheckFailures = 0
-        
-        lock.unlock()
-        
-        DispatchQueue.main.async {
-            for (cameraId, webView) in allPlayers {
-                DebugLogger.shared.log("🗑️ Destroying: \(cameraId)", emoji: "🗑️", color: .orange)
-                self.destroyWebViewAggressively(webView)
-            }
-        }
-    }
-    
-    func getActiveCount() -> Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return activePlayers.count
     }
     
     deinit {
-        memoryCheckTimer?.invalidate()
-        connectionHealthTimer?.invalidate()
-        NotificationCenter.default.removeObserver(self)
+        timer?.invalidate()
     }
 }
 
-// MARK: - WebRTC Player View (ULTRA-STABLE)
-struct WebRTCPlayerView: UIViewRepresentable {
-    let streamURL: String
-    let cameraId: String
-    let isFullscreen: Bool
+// MARK: - WebView Pool (Reuse & Cleanup)
+class WebViewPool {
+    static let shared = WebViewPool()
     
-    func makeUIView(context: Context) -> WKWebView {
-        DebugLogger.shared.log("📹 Creating WebView: \(cameraId)", emoji: "📹", color: .blue)
+    private var availableWebViews: [WKWebView] = []
+    private var activeWebViews: Set<WKWebView> = []
+    private let lock = NSLock()
+    private let maxPoolSize = 2
+    
+    private init() {}
+    
+    func getWebView() -> WKWebView {
+        lock.lock()
+        defer { lock.unlock() }
         
+        if let webView = availableWebViews.first {
+            availableWebViews.removeFirst()
+            activeWebViews.insert(webView)
+            DebugLogger.shared.log("♻️ Reusing pooled WebView", emoji: "♻️", color: .green)
+            return webView
+        }
+        
+        let webView = createFreshWebView()
+        activeWebViews.insert(webView)
+        return webView
+    }
+    
+    func returnWebView(_ webView: WKWebView) {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        activeWebViews.remove(webView)
+        
+        // Clean before returning to pool
+        cleanWebView(webView)
+        
+        if availableWebViews.count < maxPoolSize {
+            availableWebViews.append(webView)
+            DebugLogger.shared.log("♻️ Returned WebView to pool", emoji: "♻️", color: .blue)
+        } else {
+            destroyWebView(webView)
+        }
+    }
+    
+    func destroyAll() {
+        lock.lock()
+        let all = activeWebViews + availableWebViews
+        activeWebViews.removeAll()
+        availableWebViews.removeAll()
+        lock.unlock()
+        
+        all.forEach { destroyWebView($0) }
+    }
+    
+    private func createFreshWebView() -> WKWebView {
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
         config.allowsPictureInPictureMediaPlayback = false
-        config.websiteDataStore = .default()
+        config.websiteDataStore = .nonPersistent()
         
         let prefs = WKWebpagePreferences()
         prefs.allowsContentJavaScript = true
         config.defaultWebpagePreferences = prefs
         
-        // CRITICAL: Process pool management
-        config.processPool = WKProcessPool()
-        
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.scrollView.isScrollEnabled = false
-        webView.scrollView.bounces = false
         webView.backgroundColor = .black
         webView.isOpaque = true
-        webView.navigationDelegate = context.coordinator
-        
-        webView.configuration.userContentController.add(context.coordinator, name: "logging")
-        
-        PlayerManager.shared.registerPlayer(webView, for: cameraId)
-        context.coordinator.loadPlayer(in: webView, streamURL: streamURL)
         
         return webView
+    }
+    
+    private func cleanWebView(_ webView: WKWebView) {
+        webView.stopLoading()
+        webView.navigationDelegate = nil
+        webView.uiDelegate = nil
+        webView.loadHTMLString("", baseURL: nil)
+    }
+    
+    private func destroyWebView(_ webView: WKWebView) {
+        webView.stopLoading()
+        webView.navigationDelegate = nil
+        webView.uiDelegate = nil
+        
+        // Critical: Remove ALL script handlers to break retain cycles
+        webView.configuration.userContentController.removeAllScriptMessageHandlers()
+        
+        webView.loadHTMLString("", baseURL: nil)
+        webView.removeFromSuperview()
+        
+        // Clear website data
+        let dataStore = WKWebsiteDataStore.nonPersistent()
+        dataStore.removeData(
+            ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
+            modifiedSince: Date(timeIntervalSince1970: 0),
+            completionHandler: {}
+        )
+    }
+}
+
+// MARK: - Stream Session (Auto-Restart)
+class StreamSession: ObservableObject {
+    let id: String
+    let cameraId: String
+    let streamURL: String
+    
+    @Published var isActive = false
+    @Published var needsRestart = false
+    @Published var secondsRemaining: Int = 0
+    
+    private var webView: WKWebView?
+    private var coordinator: WebRTCPlayerView.Coordinator?
+    private var startTime: Date?
+    private var restartTimer: Timer?
+    private var countdownTimer: Timer?
+    
+    init(cameraId: String, streamURL: String) {
+        self.id = UUID().uuidString
+        self.cameraId = cameraId
+        self.streamURL = streamURL
+    }
+    
+    func start() -> WKWebView {
+        guard webView == nil else { return webView! }
+        
+        isActive = true
+        startTime = Date()
+        secondsRemaining = Int(StreamConfig.maxStreamDuration)
+        
+        // Get WebView from pool
+        let wv = WebViewPool.shared.getWebView()
+        self.webView = wv
+        
+        // Create coordinator with proper cleanup callback
+        let coord = WebRTCPlayerView.Coordinator(
+            cameraId: cameraId,
+            onCleanup: { [weak self] in
+                self?.handleCoordinatorCleanup()
+            }
+        )
+        self.coordinator = coord
+        
+        // Setup coordinator
+        wv.navigationDelegate = coord
+        wv.configuration.userContentController.add(coord, name: "logging")
+        
+        // Load stream
+        coord.loadPlayer(in: wv, streamURL: streamURL)
+        
+        // Setup auto-restart timer
+        setupRestartTimer()
+        
+        DebugLogger.shared.log("▶️ Stream session started: \(cameraId)", emoji: "▶️", color: .green)
+        
+        return wv
+    }
+    
+    private func setupRestartTimer() {
+        restartTimer?.invalidate()
+        
+        // Countdown timer (updates UI every second)
+        countdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            guard let startTime = self.startTime else { return }
+            
+            let elapsed = Date().timeIntervalSince(startTime)
+            let remaining = Int(StreamConfig.maxStreamDuration - elapsed)
+            
+            self.secondsRemaining = max(0, remaining)
+        }
+        
+        // Auto-restart timer
+        restartTimer = Timer.scheduledTimer(
+            withTimeInterval: StreamConfig.maxStreamDuration,
+            repeats: false
+        ) { [weak self] _ in
+            self?.triggerRestart()
+        }
+    }
+    
+    private func triggerRestart() {
+        DebugLogger.shared.log("🔄 Auto-restart triggered for: \(cameraId)", emoji: "🔄", color: .orange)
+        needsRestart = true
+        stop()
+    }
+    
+    func stop() {
+        DebugLogger.shared.log("⏹️ Stopping stream session: \(cameraId)", emoji: "⏹️", color: .orange)
+        
+        isActive = false
+        restartTimer?.invalidate()
+        countdownTimer?.invalidate()
+        
+        // Cleanup coordinator FIRST (breaks retain cycles)
+        if let coord = coordinator {
+            coord.cleanup()
+            if let wv = webView {
+                wv.configuration.userContentController.removeScriptMessageHandler(forName: "logging")
+            }
+        }
+        coordinator = nil
+        
+        // Return WebView to pool (will be cleaned)
+        if let wv = webView {
+            WebViewPool.shared.returnWebView(wv)
+        }
+        webView = nil
+        startTime = nil
+    }
+    
+    private func handleCoordinatorCleanup() {
+        DebugLogger.shared.log("🧹 Coordinator cleanup callback", emoji: "🧹", color: .gray)
+    }
+    
+    deinit {
+        stop()
+    }
+}
+
+// MARK: - Enhanced Player Manager
+extension PlayerManager {
+    func createSession(for camera: Camera) -> StreamSession? {
+        guard let streamURL = camera.webrtcStreamURL else { return nil }
+        
+        // Force cleanup of existing sessions
+        clearAll()
+        
+        let session = StreamSession(cameraId: camera.id, streamURL: streamURL)
+        return session
+    }
+    
+    func emergencyCleanup() {
+        lock.lock()
+        let players = Array(activePlayers.values)
+        activePlayers.removeAll()
+        streamStartTime = nil
+        lock.unlock()
+        
+        DebugLogger.shared.log("🆘 EMERGENCY CLEANUP - Destroying all players", emoji: "🆘", color: .red)
+        
+        // Destroy all WebViews
+        players.forEach { destroyWebViewAggressively($0) }
+        
+        // Destroy pool
+        WebViewPool.shared.destroyAll()
+        
+        // Force memory hint
+        autoreleasepool {}
+    }
+}
+
+// MARK: - Enhanced WebRTC Player View
+struct WebRTCPlayerView: UIViewRepresentable {
+    let session: StreamSession
+    let isFullscreen: Bool
+    
+    func makeUIView(context: Context) -> WKWebView {
+        return session.start()
     }
     
     func updateUIView(_ uiView: WKWebView, context: Context) {}
     
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
-        DebugLogger.shared.log("🗑️ Dismantling WebView: \(coordinator.cameraId)", emoji: "🗑️", color: .orange)
-        coordinator.cleanup()
+        // Cleanup is handled by StreamSession
     }
     
     func makeCoordinator() -> Coordinator {
-        Coordinator(cameraId: cameraId)
+        // Coordinator is created by StreamSession
+        return Coordinator(cameraId: session.cameraId, onCleanup: {})
     }
     
     class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         let cameraId: String
+        let onCleanup: () -> Void
         private var isActive = true
-        private weak var webView: WKWebView?
         
-        init(cameraId: String) {
+        init(cameraId: String, onCleanup: @escaping () -> Void) {
             self.cameraId = cameraId
-            super.init()
+            self.onCleanup = onCleanup
         }
         
         func loadPlayer(in webView: WKWebView, streamURL: String) {
-            self.webView = webView
-            
-            // CRITICAL: Optimized HTML for iPhone 7
             let html = """
             <!DOCTYPE html>
             <html>
@@ -449,223 +385,94 @@ struct WebRTCPlayerView: UIViewRepresentable {
                     .dot { width: 6px; height: 6px; background: white; border-radius: 50%;
                            animation: pulse 1.5s ease-in-out infinite; }
                     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-                    #status { position: absolute; bottom: 10px; left: 10px; background: rgba(0,0,0,0.8);
-                              color: #4CAF50; padding: 6px 10px; border-radius: 6px;
-                              font: 11px -apple-system; z-index: 10; }
-                    #status.error { color: #ff5252; }
                 </style>
             </head>
             <body>
                 <video id="video" playsinline autoplay muted></video>
                 <div id="live"><span class="dot"></span>LIVE</div>
-                <div id="status">Connecting...</div>
                 <script>
                 (function() {
                     const video = document.getElementById('video');
-                    const status = document.getElementById('status');
                     const live = document.getElementById('live');
                     const streamUrl = '\(streamURL)';
-                    let pc = null, isActive = true;
-                    let heartbeatInterval = null;
-                    let reconnectAttempts = 0;
-                    const MAX_RECONNECT = 2;
-                    
-                    function log(msg, isError = false) {
-                        if (!isActive) return;
-                        status.textContent = msg;
-                        status.className = isError ? 'error' : '';
-                        try { 
-                            if (window.webkit?.messageHandlers?.logging) {
-                                window.webkit.messageHandlers.logging.postMessage(msg); 
-                            }
-                        } catch(e) {}
-                    }
+                    let pc = null;
+                    let cleanupDone = false;
                     
                     function cleanup() {
-                        if (!isActive) return;
-                        isActive = false;
-                        
-                        log('Cleaning up...');
-                        
-                        if (heartbeatInterval) {
-                            clearInterval(heartbeatInterval);
-                            heartbeatInterval = null;
-                        }
+                        if (cleanupDone) return;
+                        cleanupDone = true;
                         
                         try {
-                            if (pc) { 
-                                pc.close(); 
-                                pc = null; 
+                            if (pc) {
+                                pc.close();
+                                pc = null;
                             }
-                            
                             if (video.srcObject) {
-                                video.srcObject.getTracks().forEach(function(t) {
-                                    t.stop();
-                                });
+                                video.srcObject.getTracks().forEach(t => t.stop());
                                 video.srcObject = null;
                             }
-                            
-                            video.pause();
-                            video.removeAttribute('src');
+                            video.src = '';
                             video.load();
-                            
                         } catch(e) {
-                            log('Cleanup error: ' + e.message, true);
+                            console.error('Cleanup error:', e);
                         }
                         
                         live.classList.remove('show');
-                        log('Cleaned up');
                     }
                     
+                    // Ensure cleanup on page unload
+                    window.addEventListener('beforeunload', cleanup);
+                    window.addEventListener('pagehide', cleanup);
+                    
                     async function start() {
-                        if (!isActive) return;
-                        
-                        if (reconnectAttempts >= MAX_RECONNECT) {
-                            log('Max reconnect attempts', true);
-                            return;
-                        }
-                        
-                        log('Connecting... (attempt ' + (reconnectAttempts + 1) + ')');
-                        
                         try {
                             pc = new RTCPeerConnection({
                                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-                                iceTransportPolicy: 'all',
-                                // CRITICAL: Optimize for mobile
-                                bundlePolicy: 'max-bundle',
-                                rtcpMuxPolicy: 'require'
+                                iceTransportPolicy: 'all'
                             });
                             
-                            // CRITICAL: Monitor memory in JavaScript
-                            let lastMemoryCheck = Date.now();
-                            
                             pc.ontrack = (e) => { 
-                                if (!isActive || !e.streams || !e.streams[0]) return;
-                                
-                                log('Stream ready'); 
-                                video.srcObject = e.streams[0];
-                                reconnectAttempts = 0;
-                            };
-                            
-                            pc.oniceconnectionstatechange = () => {
-                                if (!isActive) return;
-                                const state = pc.iceConnectionState;
-                                log('ICE: ' + state);
-                                
-                                if (state === 'connected' || state === 'completed') {
+                                if (!cleanupDone) {
+                                    video.srcObject = e.streams[0];
                                     live.classList.add('show');
-                                } else if (state === 'failed') {
-                                    live.classList.remove('show');
-                                    log('Connection failed', true);
-                                    
-                                    // Try reconnect
-                                    setTimeout(() => {
-                                        if (isActive && reconnectAttempts < MAX_RECONNECT) {
-                                            reconnectAttempts++;
-                                            cleanup();
-                                            isActive = true;
-                                            start();
-                                        }
-                                    }, 2000);
-                                    
-                                } else if (state === 'disconnected') {
-                                    live.classList.remove('show');
-                                    log('Disconnected', true);
                                 }
                             };
                             
-                            // CRITICAL: Lower bandwidth for iPhone 7
-                            const videoTransceiver = pc.addTransceiver('video', { 
-                                direction: 'recvonly'
-                            });
+                            pc.oniceconnectionstatechange = () => {
+                                const state = pc.iceConnectionState;
+                                if (state === 'failed' || state === 'disconnected') {
+                                    cleanup();
+                                }
+                            };
                             
-                            // Request lower bitrate
-                            const sender = videoTransceiver.sender;
-                            const params = sender.getParameters();
-                            if (!params.encodings) params.encodings = [{}];
-                            params.encodings[0].maxBitrate = 500000; // 500kbps max
-                            sender.setParameters(params);
-                            
+                            pc.addTransceiver('video', { direction: 'recvonly' });
                             pc.addTransceiver('audio', { direction: 'recvonly' });
                             
                             const offer = await pc.createOffer();
                             await pc.setLocalDescription(offer);
                             
                             const controller = new AbortController();
-                            const timeoutId = setTimeout(() => controller.abort(), 8000);
+                            setTimeout(() => controller.abort(), 8000);
                             
                             const res = await fetch(streamUrl, {
-                                method: 'POST', 
-                                headers: { 'Content-Type': 'application/sdp' }, 
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/sdp' },
                                 body: offer.sdp,
                                 signal: controller.signal
                             });
                             
-                            clearTimeout(timeoutId);
-                            
-                            if (!res.ok) {
-                                throw new Error('Server error: ' + res.status);
-                            }
+                            if (!res.ok) throw new Error('Server error: ' + res.status);
                             
                             const answer = await res.text();
-                            if (isActive) {
+                            if (!cleanupDone) {
                                 await pc.setRemoteDescription({ type: 'answer', sdp: answer });
-                                log('Connected');
                             }
-                            
-                        } catch (err) {
-                            log('Error: ' + err.message, true);
-                            
-                            if (reconnectAttempts < MAX_RECONNECT) {
-                                reconnectAttempts++;
-                                setTimeout(() => {
-                                    if (isActive) start();
-                                }, 3000);
-                            }
+                        } catch(err) {
+                            console.error('Stream error:', err);
+                            cleanup();
                         }
                     }
                     
-                    video.addEventListener('playing', () => { 
-                        if (!isActive) return;
-                        log('Playing'); 
-                        live.classList.add('show');
-                        
-                        // Heartbeat - check connection health
-                        heartbeatInterval = setInterval(() => {
-                            if (!isActive || !pc) return;
-                            
-                            const state = pc.iceConnectionState;
-                            log('▶️ ' + state);
-                            
-                            if (state === 'failed' || state === 'closed') {
-                                cleanup();
-                            }
-                        }, 15000); // Every 15 seconds
-                    });
-                    
-                    video.addEventListener('error', (e) => {
-                        log('Video error', true);
-                        cleanup();
-                    });
-                    
-                    video.addEventListener('stalled', () => {
-                        log('Video stalled', true);
-                    });
-                    
-                    // Page visibility
-                    document.addEventListener('visibilitychange', () => {
-                        if (document.hidden) {
-                            log('Page hidden - cleanup');
-                            cleanup();
-                        }
-                    });
-                    
-                    // Cleanup handlers
-                    window.addEventListener('beforeunload', cleanup);
-                    window.addEventListener('pagehide', cleanup);
-                    window.addEventListener('unload', cleanup);
-                    
-                    // Start connection
                     start();
                 })();
                 </script>
@@ -680,12 +487,8 @@ struct WebRTCPlayerView: UIViewRepresentable {
             guard isActive else { return }
             isActive = false
             
-            DebugLogger.shared.log("🧹 Coordinator cleanup: \(cameraId)", emoji: "🧹", color: .orange)
-            
-            webView?.evaluateJavaScript("if (typeof cleanup === 'function') cleanup();") { _, _ in }
-            
-            PlayerManager.shared.releasePlayer(cameraId)
-            webView = nil
+            DebugLogger.shared.log("🧹 Coordinator cleanup: \(cameraId)", emoji: "🧹", color: .gray)
+            onCleanup()
         }
         
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -693,13 +496,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
         }
         
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            DebugLogger.shared.log("❌ Navigation error: \(error.localizedDescription)", emoji: "❌", color: .red)
-        }
-        
-        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-            DebugLogger.shared.log("💀 WebView process terminated - CRASH!", emoji: "💀", color: .red)
-            cleanup()
-            NotificationCenter.default.post(name: NSNotification.Name("WebViewCrashed"), object: nil)
+            DebugLogger.shared.log("❌ Error: \(error.localizedDescription)", emoji: "❌", color: .red)
         }
         
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -709,146 +506,61 @@ struct WebRTCPlayerView: UIViewRepresentable {
         }
         
         deinit {
-            DebugLogger.shared.log("💀 Coordinator deinit: \(cameraId)", emoji: "💀", color: .gray)
+            cleanup()
         }
     }
 }
 
-// MARK: - Fullscreen Player (WITH AUTO-RECOVERY)
+// MARK: - Enhanced Fullscreen Player with Auto-Restart
 struct FullscreenPlayerView: View {
     let camera: Camera
     @Environment(\.presentationMode) var presentationMode
-    @Environment(\.scenePhase) var scenePhase
+    
+    @StateObject private var session: StreamSession
+    @StateObject private var memoryMonitor = MemoryMonitor.shared
+    
     @State private var showControls = true
-    @State private var orientation = UIDeviceOrientation.unknown
-    @State private var showWarning = false
-    @State private var warningMessage = ""
-    @State private var shouldRestart = false
+    @State private var isRestarting = false
+    
+    init(camera: Camera) {
+        self.camera = camera
+        _session = StateObject(wrappedValue: StreamSession(
+            cameraId: camera.id,
+            streamURL: camera.webrtcStreamURL ?? ""
+        ))
+    }
     
     var body: some View {
-        GeometryReader { geometry in
-            ZStack {
-                Color.black.ignoresSafeArea()
-                
-                if let url = camera.webrtcStreamURL, !shouldRestart {
-                    WebRTCPlayerView(streamURL: url, cameraId: camera.id, isFullscreen: true)
-                        .ignoresSafeArea()
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .onTapGesture {
-                            withAnimation { showControls.toggle() }
-                        }
-                }
-                
-                if showControls {
-                    controlsOverlay
-                }
-                
-                if showWarning {
-                    warningOverlay
-                }
+        ZStack {
+            Color.black.ignoresSafeArea()
+            
+            if isRestarting {
+                restartingView
+            } else {
+                WebRTCPlayerView(session: session, isFullscreen: true)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        withAnimation { showControls.toggle() }
+                    }
             }
-            .onAppear {
-                setupOrientationObserver()
-                setupNotificationObservers()
+            
+            if showControls {
+                controlsOverlay
             }
-            .onDisappear {
-                DebugLogger.shared.log("🔚 FullscreenPlayerView disappeared", emoji: "🔚", color: .orange)
-                PlayerManager.shared.releasePlayer(camera.id)
-                resetOrientation()
-                removeNotificationObservers()
-            }
-            .onChange(of: scenePhase) { newPhase in
-                handleScenePhase(newPhase)
+            
+            if memoryMonitor.isMemoryWarning {
+                memoryWarningOverlay
             }
         }
         .navigationBarHidden(true)
         .statusBar(hidden: !showControls)
-    }
-    
-    private func setupNotificationObservers() {
-        NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("MemoryCritical"),
-            object: nil,
-            queue: .main
-        ) { _ in
-            showWarningMessage("Memory Critical - Restarting...")
-            restartStream()
-        }
-        
-        NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("StreamAutoRestart"),
-            object: nil,
-            queue: .main
-        ) { _ in
-            showWarningMessage("Auto-restart (3min protection)")
-            restartStream()
-        }
-        
-        NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("WebViewCrashed"),
-            object: nil,
-            queue: .main
-        ) { _ in
-            showWarningMessage("Stream crashed - Restarting...")
-            restartStream()
-        }
-    }
-    
-    private func removeNotificationObservers() {
-        NotificationCenter.default.removeObserver(self)
-    }
-    
-    private func showWarningMessage(_ message: String) {
-        warningMessage = message
-        showWarning = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-            showWarning = false
-        }
-    }
-    
-    private func restartStream() {
-        shouldRestart = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            shouldRestart = false
-        }
-    }
-    
-    private var warningOverlay: some View {
-        VStack {
-            Spacer()
-            HStack {
-                Spacer()
-                VStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 24))
-                        .foregroundColor(.orange)
-                    Text(warningMessage)
-                        .font(.caption)
-                        .foregroundColor(.white)
-                        .multilineTextAlignment(.center)
-                }
-                .padding()
-                .background(Color.orange.opacity(0.9))
-                .cornerRadius(12)
-                .padding()
-                Spacer()
+        .onChange(of: session.needsRestart) { needs in
+            if needs {
+                performRestart()
             }
-            Spacer()
         }
-    }
-    
-    private func handleScenePhase(_ phase: ScenePhase) {
-        switch phase {
-        case .active:
-            DebugLogger.shared.log("📱 Player scene active", emoji: "📱", color: .green)
-        case .inactive:
-            DebugLogger.shared.log("⚠️ Player scene inactive - cleanup", emoji: "⚠️", color: .orange)
-            PlayerManager.shared.releasePlayer(camera.id)
-        case .background:
-            DebugLogger.shared.log("📱 Player scene background - cleanup", emoji: "📱", color: .red)
-            PlayerManager.shared.releasePlayer(camera.id)
-        @unknown default:
-            break
+        .onDisappear {
+            session.stop()
         }
     }
     
@@ -856,24 +568,36 @@ struct FullscreenPlayerView: View {
         VStack {
             HStack {
                 Button(action: {
-                    DebugLogger.shared.log("👈 Back button tapped", emoji: "👈", color: .blue)
-                    PlayerManager.shared.releasePlayer(camera.id)
+                    session.stop()
                     presentationMode.wrappedValue.dismiss()
                 }) {
                     HStack(spacing: 8) {
-                        Image(systemName: "chevron.left").font(.system(size: 18, weight: .semibold))
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 18, weight: .semibold))
                         Text("Back").font(.headline)
                     }
                     .foregroundColor(.white)
-                    .padding(.horizontal, 16).padding(.vertical, 10)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
                     .background(Color.black.opacity(0.6))
                     .cornerRadius(10)
                 }
                 
                 Spacer()
                 
-                Button(action: toggleOrientation) {
-                    Image(systemName: isLandscape ? "arrow.up.left.and.arrow.down.right" : "arrow.left.and.right")
+                // Restart countdown
+                if session.secondsRemaining > 0 {
+                    Text(formatTime(session.secondsRemaining))
+                        .font(.caption)
+                        .foregroundColor(.white)
+                        .padding(8)
+                        .background(Color.orange.opacity(0.8))
+                        .cornerRadius(8)
+                }
+                
+                // Manual restart button
+                Button(action: { performRestart() }) {
+                    Image(systemName: "arrow.clockwise")
                         .font(.system(size: 20))
                         .foregroundColor(.white)
                         .padding(12)
@@ -887,70 +611,201 @@ struct FullscreenPlayerView: View {
             
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(camera.displayName).font(.headline).foregroundColor(.white)
+                    Text(camera.displayName)
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    
                     HStack(spacing: 8) {
-                        Circle().fill(camera.isOnline ? Color.green : Color.red).frame(width: 8, height: 8)
-                        Text(camera.area).font(.caption).foregroundColor(.white.opacity(0.8))
+                        Circle()
+                            .fill(camera.isOnline ? Color.green : Color.red)
+                            .frame(width: 8, height: 8)
+                        Text(camera.area)
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.8))
                     }
                 }
                 .padding()
                 .background(Color.black.opacity(0.6))
                 .cornerRadius(10)
+                
                 Spacer()
             }
             .padding()
         }
-        .transition(.opacity)
     }
     
-    private var isLandscape: Bool {
-        orientation.isLandscape
-    }
-    
-    private func setupOrientationObserver() {
-        NotificationCenter.default.addObserver(
-            forName: UIDevice.orientationDidChangeNotification,
-            object: nil,
-            queue: .main
-        ) { _ in
-            orientation = UIDevice.current.orientation
+    private var restartingView: some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                .scaleEffect(1.5)
+            
+            Text("Restarting stream...")
+                .font(.headline)
+                .foregroundColor(.white)
         }
     }
     
-    private func toggleOrientation() {
-        if isLandscape {
-            UIDevice.current.setValue(UIInterfaceOrientation.portrait.rawValue, forKey: "orientation")
-        } else {
-            UIDevice.current.setValue(UIInterfaceOrientation.landscapeRight.rawValue, forKey: "orientation")
+    private var memoryWarningOverlay: some View {
+        VStack {
+            Spacer()
+            HStack {
+                Spacer()
+                VStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 24))
+                        .foregroundColor(.orange)
+                    
+                    Text("High Memory")
+                        .font(.caption)
+                        .foregroundColor(.white)
+                    
+                    Text("\(Int(memoryMonitor.currentMemoryMB)) MB")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.8))
+                }
+                .padding()
+                .background(Color.orange.opacity(0.9))
+                .cornerRadius(12)
+                .padding()
+                Spacer()
+            }
+            Spacer()
         }
-        UIViewController.attemptRotationToDeviceOrientation()
     }
     
-    private func resetOrientation() {
-        UIDevice.current.setValue(UIInterfaceOrientation.portrait.rawValue, forKey: "orientation")
-        UIViewController.attemptRotationToDeviceOrientation()
+    private func performRestart() {
+        isRestarting = true
+        
+        // Stop current session
+        session.stop()
+        
+        // Wait for cleanup
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            // Start new session
+            _ = session.start()
+            isRestarting = false
+        }
+    }
+    
+    private func formatTime(_ seconds: Int) -> String {
+        let mins = seconds / 60
+        let secs = seconds % 60
+        return String(format: "%d:%02d", mins, secs)
     }
 }
 
-// MARK: - Grid Modes
-enum GridViewMode: String, CaseIterable, Identifiable {
-    case list = "List", grid2x2 = "2×2", grid3x3 = "3×3", grid4x4 = "4×4"
+// MARK: - Enhanced Thumbnail Cache Manager
+extension ThumbnailCacheManager {
+    func emergencyCleanup() {
+        lock.lock()
+        
+        // Cancel all captures
+        captureTimeouts.values.forEach { $0.cancel() }
+        captureTimeouts.removeAll()
+        
+        // Destroy WebViews
+        let webViewsToDestroy = Array(activeWebViews)
+        activeWebViews.removeAll()
+        
+        loadingCameras.removeAll()
+        isCapturing = false
+        
+        lock.unlock()
+        
+        DispatchQueue.main.async {
+            webViewsToDestroy.forEach { webView in
+                self.destroyWebViewAggressively(webView)
+            }
+        }
+        
+        // Clear memory cache
+        cache.removeAllObjects()
+        thumbnails.removeAll()
+        
+        autoreleasepool {}
+        
+        DebugLogger.shared.log("🧹 Emergency thumbnail cleanup complete", emoji: "🧹", color: .orange)
+    }
+}
+
+// MARK: - App Delegate for Background Handling
+class AppDelegate: NSObject, UIApplicationDelegate {
+    func applicationDidEnterBackground(_ application: UIApplication) {
+        DebugLogger.shared.log("📱 App entering background - cleanup", emoji: "📱", color: .orange)
+        
+        // Stop all streams
+        PlayerManager.shared.emergencyCleanup()
+        
+        // Stop thumbnail captures
+        ThumbnailCacheManager.shared.emergencyCleanup()
+        
+        // Clear URL cache
+        URLCache.shared.removeAllCachedResponses()
+    }
     
-    var id: String { rawValue }
-    var columns: Int {
-        switch self {
-        case .list: return 1
-        case .grid2x2: return 2
-        case .grid3x3: return 3
-        case .grid4x4: return 4
+    func applicationWillEnterForeground(_ application: UIApplication) {
+        DebugLogger.shared.log("📱 App entering foreground", emoji: "📱", color: .green)
+        
+        // Force reconnect WebSocket
+        if AuthManager.shared.isAuthenticated {
+            WebSocketService.shared.reconnect()
         }
     }
-    var icon: String {
-        switch self {
-        case .list: return "list.bullet"
-        case .grid2x2: return "square.grid.2x2"
-        case .grid3x3: return "square.grid.3x3"
-        case .grid4x4: return "square.grid.4x4"
+    
+    func applicationWillTerminate(_ application: UIApplication) {
+        DebugLogger.shared.log("🛑 App terminating - final cleanup", emoji: "🛑", color: .red)
+        
+        PlayerManager.shared.emergencyCleanup()
+        ThumbnailCacheManager.shared.emergencyCleanup()
+        WebViewPool.shared.destroyAll()
+    }
+}
+
+// MARK: - Enhanced App with Lifecycle Management
+@main
+struct ICCCAlertApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @StateObject private var authManager = AuthManager.shared
+    @StateObject private var webSocketService = WebSocketService.shared
+    @StateObject private var subscriptionManager = SubscriptionManager.shared
+    @StateObject private var memoryMonitor = MemoryMonitor.shared
+    
+    @Environment(\.scenePhase) var scenePhase
+    
+    var body: some Scene {
+        WindowGroup {
+            if authManager.isAuthenticated {
+                ContentView()
+                    .environmentObject(authManager)
+                    .environmentObject(webSocketService)
+                    .environmentObject(subscriptionManager)
+            } else {
+                LoginView()
+                    .environmentObject(authManager)
+            }
+        }
+        .onChange(of: scenePhase) { newPhase in
+            handleScenePhaseChange(newPhase)
+        }
+    }
+    
+    private func handleScenePhaseChange(_ phase: ScenePhase) {
+        switch phase {
+        case .active:
+            DebugLogger.shared.log("📱 App active", emoji: "📱", color: .green)
+            
+        case .inactive:
+            DebugLogger.shared.log("📱 App inactive - cleanup", emoji: "📱", color: .orange)
+            PlayerManager.shared.clearAll()
+            
+        case .background:
+            DebugLogger.shared.log("📱 App background - aggressive cleanup", emoji: "📱", color: .red)
+            PlayerManager.shared.emergencyCleanup()
+            ThumbnailCacheManager.shared.emergencyCleanup()
+            
+        @unknown default:
+            break
         }
     }
 }
