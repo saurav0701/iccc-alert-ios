@@ -3,7 +3,7 @@ import UIKit
 import WebKit
 import Combine
 
-// MARK: - Thumbnail Cache Manager (CRASH-PROOF - MANUAL LOAD ONLY)
+// MARK: - Thumbnail Cache Manager (ULTRA CRASH-PROOF - ZERO WEBVIEWS)
 class ThumbnailCacheManager: ObservableObject {
     static let shared = ThumbnailCacheManager()
     
@@ -16,15 +16,9 @@ class ThumbnailCacheManager: ObservableObject {
     private let fileManager = FileManager.default
     private let cacheDirectory: URL
     
-    // CRITICAL: Only ONE capture at a time
-    private var activeFetches: Set<String> = []
+    // CRITICAL: Track active operations
+    private var isCapturing = false
     private let lock = NSLock()
-    
-    // Single shared WebView for ALL captures (reused)
-    private var captureWebView: WKWebView?
-    private var currentCapture: String?
-    private var captureCompletion: ((Bool) -> Void)?
-    private var captureTimeout: DispatchWorkItem?
     
     // Cache duration: 3 hours
     private let cacheDuration: TimeInterval = 3 * 60 * 60
@@ -35,7 +29,7 @@ class ThumbnailCacheManager: ObservableObject {
         
         try? fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
         
-        cache.countLimit = 50 // Reduced
+        cache.countLimit = 50
         cache.totalCostLimit = 20 * 1024 * 1024 // 20MB max
         
         loadCachedThumbnails()
@@ -43,7 +37,7 @@ class ThumbnailCacheManager: ObservableObject {
         
         setupMemoryWarning()
         
-        DebugLogger.shared.log("🖼️ ThumbnailCacheManager initialized (MANUAL LOAD ONLY)", emoji: "🖼️", color: .blue)
+        DebugLogger.shared.log("🖼️ ThumbnailCacheManager initialized (ZERO WEBVIEW MODE)", emoji: "🖼️", color: .blue)
     }
     
     private func setupMemoryWarning() {
@@ -60,25 +54,8 @@ class ThumbnailCacheManager: ObservableObject {
     private func handleMemoryWarning() {
         lock.lock()
         
-        // Cancel current capture
-        if let timeout = captureTimeout {
-            timeout.cancel()
-            captureTimeout = nil
-        }
-        
-        // Clear states
         loadingCameras.removeAll()
-        activeFetches.removeAll()
-        currentCapture = nil
-        captureCompletion = nil
-        
-        // Clean up WebView immediately
-        if let webView = captureWebView {
-            DispatchQueue.main.async {
-                self.destroyWebView(webView)
-            }
-            captureWebView = nil
-        }
+        isCapturing = false
         
         // Clear memory cache
         cache.removeAllObjects()
@@ -105,7 +82,7 @@ class ThumbnailCacheManager: ObservableObject {
     func isLoading(for cameraId: String) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return loadingCameras.contains(cameraId) || currentCapture == cameraId
+        return loadingCameras.contains(cameraId)
     }
     
     func hasFailed(for cameraId: String) -> Bool {
@@ -121,13 +98,21 @@ class ThumbnailCacheManager: ObservableObject {
         return age < cacheDuration
     }
     
-    // MARK: - Manual Load ONLY (No Auto-Load)
+    // MARK: - Manual Load ONLY
     
     func manualLoad(for camera: Camera, completion: @escaping (Bool) -> Void) {
         lock.lock()
         
+        // CRITICAL: Block if ANYTHING is capturing
+        if isCapturing {
+            lock.unlock()
+            DebugLogger.shared.log("⚠️ Already capturing - wait", emoji: "⚠️", color: .orange)
+            completion(false)
+            return
+        }
+        
         // Check if already loading
-        if loadingCameras.contains(camera.id) || currentCapture == camera.id {
+        if loadingCameras.contains(camera.id) {
             lock.unlock()
             completion(false)
             return
@@ -140,16 +125,9 @@ class ThumbnailCacheManager: ObservableObject {
             return
         }
         
-        // Check if already capturing something
-        if currentCapture != nil {
-            lock.unlock()
-            DebugLogger.shared.log("⚠️ Already capturing - please wait", emoji: "⚠️", color: .orange)
-            completion(false)
-            return
-        }
-        
         loadingCameras.insert(camera.id)
         failedCameras.remove(camera.id)
+        isCapturing = true
         
         lock.unlock()
         
@@ -158,7 +136,7 @@ class ThumbnailCacheManager: ObservableObject {
         startCapture(for: camera, completion: completion)
     }
     
-    // MARK: - Core Capture Logic (Single WebView)
+    // MARK: - Core Capture Logic (Create & Destroy IMMEDIATELY)
     
     private func startCapture(for camera: Camera, completion: @escaping (Bool) -> Void) {
         guard let streamURL = camera.webrtcStreamURL else {
@@ -168,48 +146,16 @@ class ThumbnailCacheManager: ObservableObject {
             return
         }
         
-        lock.lock()
-        currentCapture = camera.id
-        captureCompletion = completion
-        activeFetches.insert(camera.id)
-        lock.unlock()
-        
         DebugLogger.shared.log("📸 Starting capture: \(camera.displayName)", emoji: "📸", color: .blue)
         
-        // Setup on main thread
+        // Create WebView on main thread
         DispatchQueue.main.async {
-            self.setupCaptureWebView(streamURL: streamURL, cameraId: camera.id)
+            self.executeCaptureWithImmediateCleanup(streamURL: streamURL, cameraId: camera.id, completion: completion)
         }
-        
-        // Timeout: 15 seconds
-        let timeoutWork = DispatchWorkItem { [weak self] in
-            guard let self = self else { return }
-            
-            self.lock.lock()
-            let stillActive = self.currentCapture == camera.id
-            self.lock.unlock()
-            
-            if stillActive {
-                DebugLogger.shared.log("⏱️ Timeout: \(camera.id)", emoji: "⏱️", color: .orange)
-                self.markAsFailed(camera.id)
-                self.finishCapture(camera.id, success: false, completion: completion)
-            }
-        }
-        
-        lock.lock()
-        captureTimeout = timeoutWork
-        lock.unlock()
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15.0, execute: timeoutWork)
     }
     
-    private func setupCaptureWebView(streamURL: String, cameraId: String) {
-        // CRITICAL: Destroy existing WebView first
-        if let existing = captureWebView {
-            destroyWebView(existing)
-            captureWebView = nil
-        }
-        
+    private func executeCaptureWithImmediateCleanup(streamURL: String, cameraId: String, completion: @escaping (Bool) -> Void) {
+        // Create configuration
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
@@ -220,47 +166,53 @@ class ThumbnailCacheManager: ObservableObject {
         prefs.allowsContentJavaScript = true
         config.defaultWebpagePreferences = prefs
         
-        // Add message handler
-        let handler = ThumbnailCaptureHandler(cameraId: cameraId, manager: self)
+        // Create temporary handler
+        let handler = ThumbnailCaptureHandler(cameraId: cameraId) { [weak self] success, imageData in
+            guard let self = self else { return }
+            
+            if success, let imageData = imageData {
+                self.processCapturedImage(cameraId: cameraId, imageDataURL: imageData, completion: completion)
+            } else {
+                self.markAsFailed(cameraId)
+                self.finishCapture(cameraId, success: false, completion: completion)
+            }
+        }
+        
         config.userContentController.add(handler, name: "captureComplete")
         
+        // Create WebView
         let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 320, height: 240), configuration: config)
         webView.scrollView.isScrollEnabled = false
         webView.backgroundColor = .black
         webView.isOpaque = true
         webView.alpha = 0.01
         
-        // Add to window (off-screen)
+        // Add off-screen
         if let window = UIApplication.shared.windows.first {
             window.addSubview(webView)
             webView.frame = CGRect(x: -2000, y: -2000, width: 320, height: 240)
         }
         
-        captureWebView = webView
-        
         let html = generateCaptureHTML(streamURL: streamURL)
         webView.loadHTMLString(html, baseURL: nil)
-    }
-    
-    private func destroyWebView(_ webView: WKWebView) {
-        // CRITICAL: Proper WebView cleanup
-        webView.stopLoading()
-        webView.navigationDelegate = nil
-        webView.loadHTMLString("", baseURL: nil)
         
-        // Remove all script handlers
-        webView.configuration.userContentController.removeAllScriptMessageHandlers()
-        
-        // Remove from superview
-        webView.removeFromSuperview()
-        
-        // Clear data store
-        let dataStore = WKWebsiteDataStore.nonPersistent()
-        dataStore.removeData(
-            ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
-            modifiedSince: Date(timeIntervalSince1970: 0),
-            completionHandler: {}
-        )
+        // CRITICAL: Destroy after 12 seconds NO MATTER WHAT
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12.0) { [weak webView] in
+            guard let webView = webView else { return }
+            
+            DebugLogger.shared.log("⏱️ Timeout - destroying WebView", emoji: "⏱️", color: .orange)
+            self.destroyWebView(webView)
+            
+            // If still capturing, mark as failed
+            self.lock.lock()
+            let stillCapturing = self.isCapturing
+            self.lock.unlock()
+            
+            if stillCapturing {
+                self.markAsFailed(cameraId)
+                self.finishCapture(cameraId, success: false, completion: completion)
+            }
+        }
     }
     
     private func generateCaptureHTML(streamURL: String) -> String {
@@ -269,7 +221,6 @@ class ThumbnailCacheManager: ObservableObject {
         <html>
         <head>
             <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <style>
                 * { margin: 0; padding: 0; }
                 body { width: 320px; height: 240px; background: #000; }
@@ -285,41 +236,24 @@ class ThumbnailCacheManager: ObservableObject {
                 const video = document.getElementById('video');
                 const canvas = document.getElementById('canvas');
                 const ctx = canvas.getContext('2d');
-                const streamUrl = '\(streamURL)';
-                let pc = null;
-                let captured = false;
-                let cleanedUp = false;
+                let pc = null, captured = false, cleaned = false;
                 
                 function cleanup() {
-                    if (cleanedUp) return;
-                    cleanedUp = true;
-                    
+                    if (cleaned) return;
+                    cleaned = true;
                     try {
-                        if (pc) {
-                            pc.close();
-                            pc = null;
-                        }
+                        if (pc) { pc.close(); pc = null; }
                         if (video.srcObject) {
                             video.srcObject.getTracks().forEach(t => t.stop());
                             video.srcObject = null;
                         }
-                    } catch(e) {
-                        console.error('Cleanup error:', e);
-                    }
+                    } catch(e) {}
                 }
                 
                 async function start() {
                     try {
-                        pc = new RTCPeerConnection({
-                            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-                        });
-                        
-                        pc.ontrack = (e) => {
-                            if (!captured) {
-                                video.srcObject = e.streams[0];
-                            }
-                        };
-                        
+                        pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+                        pc.ontrack = (e) => { if (!captured) video.srcObject = e.streams[0]; };
                         pc.addTransceiver('video', { direction: 'recvonly' });
                         pc.addTransceiver('audio', { direction: 'recvonly' });
                         
@@ -327,16 +261,14 @@ class ThumbnailCacheManager: ObservableObject {
                         await pc.setLocalDescription(offer);
                         
                         const controller = new AbortController();
-                        const timeoutId = setTimeout(() => controller.abort(), 10000);
+                        setTimeout(() => controller.abort(), 8000);
                         
-                        const res = await fetch(streamUrl, {
+                        const res = await fetch('\(streamURL)', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/sdp' },
                             body: offer.sdp,
                             signal: controller.signal
                         });
-                        
-                        clearTimeout(timeoutId);
                         
                         if (!res.ok) throw new Error('Server error');
                         
@@ -346,10 +278,7 @@ class ThumbnailCacheManager: ObservableObject {
                     } catch(err) {
                         cleanup();
                         if (window.webkit?.messageHandlers?.captureComplete) {
-                            window.webkit.messageHandlers.captureComplete.postMessage({ 
-                                success: false,
-                                error: err.toString()
-                            });
+                            window.webkit.messageHandlers.captureComplete.postMessage({ success: false });
                         }
                     }
                 }
@@ -360,14 +289,10 @@ class ThumbnailCacheManager: ObservableObject {
                     
                     setTimeout(() => {
                         try {
-                            const width = video.videoWidth || 320;
-                            const height = video.videoHeight || 240;
-                            
-                            canvas.width = width;
-                            canvas.height = height;
-                            ctx.drawImage(video, 0, 0, width, height);
-                            
-                            const imageData = canvas.toDataURL('image/jpeg', 0.7);
+                            canvas.width = video.videoWidth || 320;
+                            canvas.height = video.videoHeight || 240;
+                            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                            const imageData = canvas.toDataURL('image/jpeg', 0.6);
                             
                             cleanup();
                             
@@ -380,17 +305,11 @@ class ThumbnailCacheManager: ObservableObject {
                         } catch(err) {
                             cleanup();
                             if (window.webkit?.messageHandlers?.captureComplete) {
-                                window.webkit.messageHandlers.captureComplete.postMessage({ 
-                                    success: false,
-                                    error: err.toString()
-                                });
+                                window.webkit.messageHandlers.captureComplete.postMessage({ success: false });
                             }
                         }
-                    }, 500);
+                    }, 400);
                 });
-                
-                // Cleanup on page unload
-                window.addEventListener('beforeunload', cleanup);
                 
                 start();
             })();
@@ -400,15 +319,30 @@ class ThumbnailCacheManager: ObservableObject {
         """
     }
     
-    // MARK: - Handle Captured Image
+    private func destroyWebView(_ webView: WKWebView) {
+        webView.stopLoading()
+        webView.navigationDelegate = nil
+        webView.loadHTMLString("", baseURL: nil)
+        webView.configuration.userContentController.removeAllScriptMessageHandlers()
+        webView.removeFromSuperview()
+        
+        let dataStore = WKWebsiteDataStore.nonPersistent()
+        dataStore.removeData(
+            ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
+            modifiedSince: Date(timeIntervalSince1970: 0),
+            completionHandler: {}
+        )
+    }
     
-    func handleCapturedImage(cameraId: String, imageDataURL: String) {
-        DebugLogger.shared.log("📷 Received capture: \(cameraId)", emoji: "📷", color: .green)
+    // MARK: - Process Captured Image
+    
+    private func processCapturedImage(cameraId: String, imageDataURL: String, completion: @escaping (Bool) -> Void) {
+        DebugLogger.shared.log("📷 Processing capture: \(cameraId)", emoji: "📷", color: .green)
         
         guard let commaIndex = imageDataURL.firstIndex(of: ",") else {
             DebugLogger.shared.log("❌ Invalid image data", emoji: "❌", color: .red)
             markAsFailed(cameraId)
-            finishCapture(cameraId, success: false, completion: nil)
+            finishCapture(cameraId, success: false, completion: completion)
             return
         }
         
@@ -418,7 +352,7 @@ class ThumbnailCacheManager: ObservableObject {
               let image = UIImage(data: imageData) else {
             DebugLogger.shared.log("❌ Failed to decode", emoji: "❌", color: .red)
             markAsFailed(cameraId)
-            finishCapture(cameraId, success: false, completion: nil)
+            finishCapture(cameraId, success: false, completion: completion)
             return
         }
         
@@ -435,45 +369,18 @@ class ThumbnailCacheManager: ObservableObject {
             self.saveThumbnail(resizedImage, for: cameraId)
             self.saveTimestamps()
             
-            self.finishCapture(cameraId, success: true, completion: nil)
+            self.finishCapture(cameraId, success: true, completion: completion)
         }
-    }
-    
-    func handleCaptureFailed(cameraId: String) {
-        markAsFailed(cameraId)
-        finishCapture(cameraId, success: false, completion: nil)
     }
     
     private func finishCapture(_ cameraId: String, success: Bool, completion: ((Bool) -> Void)?) {
         lock.lock()
-        
-        // Cancel timeout
-        if let timeout = captureTimeout {
-            timeout.cancel()
-            captureTimeout = nil
-        }
-        
-        let captureCompletion = self.captureCompletion
-        
-        currentCapture = nil
-        self.captureCompletion = nil
-        activeFetches.remove(cameraId)
         loadingCameras.remove(cameraId)
-        
-        // Destroy WebView on main thread
-        if let webView = captureWebView {
-            DispatchQueue.main.async {
-                self.destroyWebView(webView)
-            }
-            captureWebView = nil
-        }
-        
+        isCapturing = false
         lock.unlock()
         
-        // Call completions
         DispatchQueue.main.async {
             completion?(success)
-            captureCompletion?(success)
         }
     }
     
@@ -560,31 +467,13 @@ class ThumbnailCacheManager: ObservableObject {
     
     func clearAllThumbnails() {
         lock.lock()
-        
-        // Cancel any active capture
-        if let timeout = captureTimeout {
-            timeout.cancel()
-            captureTimeout = nil
-        }
-        
         thumbnails.removeAll()
         thumbnailTimestamps.removeAll()
         failedCameras.removeAll()
         cache.removeAllObjects()
-        activeFetches.removeAll()
         loadingCameras.removeAll()
-        currentCapture = nil
-        captureCompletion = nil
-        
+        isCapturing = false
         lock.unlock()
-        
-        // Clean up WebView
-        if let webView = captureWebView {
-            DispatchQueue.main.async {
-                self.destroyWebView(webView)
-            }
-            captureWebView = nil
-        }
         
         try? fileManager.removeItem(at: cacheDirectory)
         try? fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
@@ -607,28 +496,28 @@ class ThumbnailCacheManager: ObservableObject {
     }
 }
 
-// MARK: - Capture Handler
+// MARK: - Capture Handler (Simplified)
 class ThumbnailCaptureHandler: NSObject, WKScriptMessageHandler {
     let cameraId: String
-    weak var manager: ThumbnailCacheManager?
+    let callback: (Bool, String?) -> Void
     
-    init(cameraId: String, manager: ThumbnailCacheManager) {
+    init(cameraId: String, callback: @escaping (Bool, String?) -> Void) {
         self.cameraId = cameraId
-        self.manager = manager
+        self.callback = callback
     }
     
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.name == "captureComplete",
               let dict = message.body as? [String: Any] else {
-            manager?.handleCaptureFailed(cameraId: cameraId)
+            callback(false, nil)
             return
         }
         
         if let success = dict["success"] as? Bool, success,
            let imageData = dict["imageData"] as? String {
-            manager?.handleCapturedImage(cameraId: cameraId, imageDataURL: imageData)
+            callback(true, imageData)
         } else {
-            manager?.handleCaptureFailed(cameraId: cameraId)
+            callback(false, nil)
         }
     }
 }

@@ -8,6 +8,7 @@ struct AreaCamerasView: View {
     @State private var showOnlineOnly = true
     @State private var gridMode: GridViewMode = .grid2x2
     @State private var selectedCamera: Camera? = nil
+    @State private var showStreamBlockedAlert = false
     @Environment(\.scenePhase) var scenePhase
     
     var cameras: [Camera] {
@@ -50,6 +51,11 @@ struct AreaCamerasView: View {
                     // Ensure player is cleaned up when dismissed
                     PlayerManager.shared.releasePlayer(camera.id)
                 }
+        }
+        .alert("Stream Blocked", isPresented: $showStreamBlockedAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Please wait - a thumbnail is currently being captured. Try again in a few seconds.")
         }
         .onAppear {
             DebugLogger.shared.log("📹 AreaCamerasView appeared: \(area)", emoji: "📹", color: .blue)
@@ -131,7 +137,7 @@ struct AreaCamerasView: View {
                     .foregroundColor(.blue)
                     .font(.system(size: 14))
                 
-                Text("Tap camera thumbnails to load preview images")
+                Text("Tap camera thumbnails to load preview. Wait for capture to finish before playing streams.")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 
@@ -153,23 +159,43 @@ struct AreaCamerasView: View {
                 ForEach(cameras, id: \.id) { camera in
                     CameraGridCardFixed(camera: camera, mode: gridMode)
                         .onTapGesture {
-                            if camera.isOnline {
-                                // Check if we can play (max 1 concurrent stream)
-                                if PlayerManager.shared.getActiveCount() > 0 {
-                                    // Show alert that we need to close other streams first
-                                    UINotificationFeedbackGenerator().notificationOccurred(.warning)
-                                } else {
-                                    selectedCamera = camera
-                                }
-                            } else {
-                                UINotificationFeedbackGenerator().notificationOccurred(.warning)
-                            }
+                            handleCameraTap(camera)
                         }
                 }
             }
             .padding()
         }
         .background(Color(.systemGroupedBackground))
+    }
+    
+    private func handleCameraTap(_ camera: Camera) {
+        guard camera.isOnline else {
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            return
+        }
+        
+        // CRITICAL: Check if thumbnail is currently being captured
+        if thumbnailCache.isLoading(for: camera.id) {
+            DebugLogger.shared.log("⚠️ Cannot play stream - thumbnail capture in progress", emoji: "⚠️", color: .orange)
+            showStreamBlockedAlert = true
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            return
+        }
+        
+        // Check if other streams are active
+        if PlayerManager.shared.getActiveCount() > 0 {
+            DebugLogger.shared.log("⚠️ Another stream is active", emoji: "⚠️", color: .orange)
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            return
+        }
+        
+        // CRITICAL: Add 1 second delay before opening player to ensure thumbnail cleanup
+        DebugLogger.shared.log("▶️ Opening player for: \(camera.displayName)", emoji: "▶️", color: .green)
+        
+        // Small delay to ensure any lingering WebViews are destroyed
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            self.selectedCamera = camera
+        }
     }
     
     private var emptyView: some View {

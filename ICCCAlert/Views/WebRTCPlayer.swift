@@ -2,16 +2,18 @@ import SwiftUI
 import WebKit
 import Combine
 
-// MARK: - Player Manager (STRICT LIMITS - CRASH-PROOF)
+// MARK: - Player Manager (ULTRA STRICT - ZERO TOLERANCE)
 class PlayerManager: ObservableObject {
     static let shared = PlayerManager()
     
     private var activePlayers: [String: WKWebView] = [:]
     private let lock = NSLock()
-    private let maxPlayers = 1 // CRITICAL: Only 1 concurrent stream
+    private let maxPlayers = 1 // ABSOLUTE MAXIMUM
+    private var lastCleanupTime: Date?
     
     private init() {
         setupMemoryWarning()
+        DebugLogger.shared.log("📹 PlayerManager initialized (MAX 1 STREAM)", emoji: "📹", color: .blue)
     }
     
     private func setupMemoryWarning() {
@@ -29,9 +31,11 @@ class PlayerManager: ObservableObject {
         lock.lock()
         defer { lock.unlock() }
         
-        // CRITICAL: Only allow 1 player at a time
-        if activePlayers.count >= maxPlayers {
-            // Stop ALL existing players before starting new one
+        DebugLogger.shared.log("📹 Registering player: \(cameraId)", emoji: "📹", color: .blue)
+        
+        // CRITICAL: Force cleanup of ALL existing players first
+        if !activePlayers.isEmpty {
+            DebugLogger.shared.log("⚠️ Forcing cleanup of existing players", emoji: "⚠️", color: .orange)
             let allKeys = Array(activePlayers.keys)
             for key in allKeys {
                 if let oldPlayer = activePlayers.removeValue(forKey: key) {
@@ -40,19 +44,28 @@ class PlayerManager: ObservableObject {
                     }
                 }
             }
+            
+            // Wait briefly for cleanup
+            Thread.sleep(forTimeInterval: 0.5)
         }
         
         activePlayers[cameraId] = webView
-        print("📹 Registered: \(cameraId) (Active: \(activePlayers.count)/\(maxPlayers))")
+        lastCleanupTime = Date()
+        
+        DebugLogger.shared.log("✅ Player registered: \(cameraId) (Active: \(activePlayers.count)/\(maxPlayers))", emoji: "✅", color: .green)
     }
     
     private func cleanupWebView(_ webView: WKWebView) {
-        // CRITICAL: Proper WebView destruction
+        DebugLogger.shared.log("🧹 Cleaning up WebView", emoji: "🧹", color: .blue)
+        
+        // CRITICAL: Complete destruction sequence
         webView.stopLoading()
         webView.navigationDelegate = nil
+        
+        // Clear all content
         webView.loadHTMLString("", baseURL: nil)
         
-        // Remove all handlers
+        // Remove ALL handlers
         webView.configuration.userContentController.removeAllScriptMessageHandlers()
         
         // Remove from view hierarchy
@@ -63,8 +76,12 @@ class PlayerManager: ObservableObject {
         dataStore.removeData(
             ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
             modifiedSince: Date(timeIntervalSince1970: 0),
-            completionHandler: {}
+            completionHandler: {
+                DebugLogger.shared.log("🧹 Website data cleared", emoji: "🧹", color: .gray)
+            }
         )
+        
+        DebugLogger.shared.log("✅ WebView cleanup complete", emoji: "✅", color: .green)
     }
     
     func releasePlayer(_ cameraId: String) {
@@ -72,16 +89,25 @@ class PlayerManager: ObservableObject {
         defer { lock.unlock() }
         
         if let webView = activePlayers.removeValue(forKey: cameraId) {
+            DebugLogger.shared.log("🗑️ Releasing player: \(cameraId)", emoji: "🗑️", color: .orange)
+            
             DispatchQueue.main.async {
                 self.cleanupWebView(webView)
             }
-            print("🗑️ Released: \(cameraId)")
+            
+            lastCleanupTime = Date()
         }
     }
     
     func clearAll() {
         lock.lock()
         defer { lock.unlock() }
+        
+        if activePlayers.isEmpty {
+            return
+        }
+        
+        DebugLogger.shared.log("🧹 Clearing ALL players (\(activePlayers.count))", emoji: "🧹", color: .red)
         
         let allPlayers = activePlayers
         activePlayers.removeAll()
@@ -90,7 +116,9 @@ class PlayerManager: ObservableObject {
             allPlayers.forEach { self.cleanupWebView($0.value) }
         }
         
-        print("🧹 Cleared all players")
+        lastCleanupTime = Date()
+        
+        DebugLogger.shared.log("✅ All players cleared", emoji: "✅", color: .green)
     }
     
     func getActiveCount() -> Int {
@@ -98,15 +126,39 @@ class PlayerManager: ObservableObject {
         defer { lock.unlock() }
         return activePlayers.count
     }
+    
+    func canStartNewPlayer() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        // Check if we're at max capacity
+        if activePlayers.count >= maxPlayers {
+            DebugLogger.shared.log("⚠️ Cannot start new player - at max capacity", emoji: "⚠️", color: .orange)
+            return false
+        }
+        
+        // Check if cleanup happened recently (wait at least 2 seconds)
+        if let lastCleanup = lastCleanupTime {
+            let timeSinceCleanup = Date().timeIntervalSince(lastCleanup)
+            if timeSinceCleanup < 2.0 {
+                DebugLogger.shared.log("⚠️ Cannot start new player - too soon after cleanup (\(String(format: "%.1f", timeSinceCleanup))s)", emoji: "⚠️", color: .orange)
+                return false
+            }
+        }
+        
+        return true
+    }
 }
 
-// MARK: - WebRTC Player View (CRASH-PROOF)
+// MARK: - WebRTC Player View (ULTRA SAFE)
 struct WebRTCPlayerView: UIViewRepresentable {
     let streamURL: String
     let cameraId: String
     let isFullscreen: Bool
     
     func makeUIView(context: Context) -> WKWebView {
+        DebugLogger.shared.log("📹 Creating WebView for: \(cameraId)", emoji: "📹", color: .blue)
+        
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
@@ -135,6 +187,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
     func updateUIView(_ uiView: WKWebView, context: Context) {}
     
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        DebugLogger.shared.log("🗑️ Dismantling WebView", emoji: "🗑️", color: .orange)
         coordinator.cleanup()
     }
     
@@ -145,7 +198,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
     class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         let cameraId: String
         private var retryCount = 0
-        private let maxRetries = 2 // Reduced retries
+        private let maxRetries = 2
         private var isActive = true
         
         init(cameraId: String) {
@@ -221,7 +274,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
                     async function start() {
                         if (!isActive || retryCount >= MAX_RETRIES) {
                             if (retryCount >= MAX_RETRIES) {
-                                log('Connection failed - max retries', true);
+                                log('Max retries - giving up', true);
                             }
                             return;
                         }
@@ -263,10 +316,10 @@ struct WebRTCPlayerView: UIViewRepresentable {
                                     
                                     retryCount++;
                                     if (isActive && retryCount < MAX_RETRIES) {
-                                        log('Retrying... (' + retryCount + '/' + MAX_RETRIES + ')');
+                                        log('Retry ' + retryCount + '/' + MAX_RETRIES);
                                         restartTimeout = setTimeout(start, 3000);
                                     } else if (retryCount >= MAX_RETRIES) {
-                                        log('Max retries reached', true);
+                                        log('Failed - max retries', true);
                                     }
                                 }
                             };
@@ -300,7 +353,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
                             log('Error: ' + err.message, true);
                             retryCount++;
                             if (isActive && retryCount < MAX_RETRIES) {
-                                log('Retrying... (' + retryCount + '/' + MAX_RETRIES + ')');
+                                log('Retry ' + retryCount + '/' + MAX_RETRIES);
                                 restartTimeout = setTimeout(start, 5000);
                             }
                         }
@@ -336,11 +389,11 @@ struct WebRTCPlayerView: UIViewRepresentable {
         }
         
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            print("✅ Loaded: \(cameraId)")
+            DebugLogger.shared.log("✅ WebView loaded: \(cameraId)", emoji: "✅", color: .green)
         }
         
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            print("❌ Navigation Error: \(error.localizedDescription)")
+            DebugLogger.shared.log("❌ Navigation error: \(error.localizedDescription)", emoji: "❌", color: .red)
             
             if retryCount < maxRetries {
                 retryCount += 1
@@ -349,7 +402,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
         
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             if message.name == "logging", let msg = message.body as? String {
-                print("🌐 [\(cameraId)]: \(msg)")
+                DebugLogger.shared.log("🌐 [\(cameraId)]: \(msg)", emoji: "🌐", color: .gray)
             }
         }
     }
