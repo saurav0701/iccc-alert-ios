@@ -1,4 +1,5 @@
 import SwiftUI
+import WebKit 
 
 // MARK: - Enhanced Fullscreen Player with Auto-Restart
 struct FullscreenPlayerEnhanced: View {
