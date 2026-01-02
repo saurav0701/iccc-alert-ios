@@ -33,7 +33,7 @@ struct AreaCamerasView: View {
         .navigationTitle(area)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
                 Menu {
                     Picker("Layout", selection: $gridMode) {
                         ForEach(GridViewMode.allCases) { mode in
