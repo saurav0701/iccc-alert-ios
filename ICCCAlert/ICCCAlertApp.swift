@@ -37,7 +37,7 @@ struct ICCCAlertApp: App {
             ICCCAlertApp.handleMemoryWarning()
         }
         
-        DebugLogger.shared.log("🚀 ICCCAlertApp initialized", emoji: "🚀", color: .blue)
+        print("🚀 ICCCAlertApp initialized")
     }
     
     var body: some Scene {
@@ -116,17 +116,17 @@ struct ICCCAlertApp: App {
         if kerr == KERN_SUCCESS {
             let usedMemoryMB = Double(info.resident_size) / 1024 / 1024
             
-            DebugLogger.shared.log("💾 Memory: \(String(format: "%.1f", usedMemoryMB)) MB", emoji: "💾", color: .gray)
+            print("💾 Memory: \(String(format: "%.1f", usedMemoryMB)) MB")
             
             // CRITICAL: Proactive cleanup at 180MB (before reaching 200MB threshold)
             if usedMemoryMB > 180 {
-                DebugLogger.shared.log("⚠️ Memory approaching threshold - proactive cleanup", emoji: "⚠️", color: .orange)
+                print("⚠️ Memory approaching threshold - proactive cleanup")
                 performProactiveCleanup()
             }
             
             // CRITICAL: Emergency cleanup at 220MB
             if usedMemoryMB > 220 {
-                DebugLogger.shared.log("🚨 CRITICAL MEMORY - Emergency cleanup", emoji: "🚨", color: .red)
+                print("🚨 CRITICAL MEMORY - Emergency cleanup")
                 ICCCAlertApp.handleMemoryWarning()
             }
         }
@@ -145,7 +145,7 @@ struct ICCCAlertApp: App {
         // Force autoreleasepool drain
         autoreleasepool {}
         
-        DebugLogger.shared.log("🧹 Proactive cleanup complete", emoji: "🧹", color: .blue)
+        print("🧹 Proactive cleanup complete")
     }
     
     // MARK: - WebSocket Connection
@@ -198,7 +198,7 @@ struct ICCCAlertApp: App {
             
             NotificationManager.shared.updateBadgeCount()
             
-            DebugLogger.shared.log("🧹 Background cleanup complete", emoji: "🧹", color: .orange)
+            print("🧹 Background cleanup complete")
             
         @unknown default:
             break

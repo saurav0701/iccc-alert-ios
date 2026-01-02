@@ -1,5 +1,5 @@
 import Foundation
-import SwiftUI
+import UIKit
 
 // MARK: - Memory Monitor (Singleton for tracking app memory usage)
 class MemoryMonitor: ObservableObject {
@@ -15,7 +15,7 @@ class MemoryMonitor: ObservableObject {
         startMonitoring()
         setupMemoryWarningObserver()
         
-        DebugLogger.shared.log("💾 MemoryMonitor initialized", emoji: "💾", color: .blue)
+        print("💾 MemoryMonitor initialized")
     }
     
     private func startMonitoring() {
@@ -34,7 +34,7 @@ class MemoryMonitor: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            DebugLogger.shared.log("⚠️ System memory warning received", emoji: "⚠️", color: .red)
+            print("⚠️ System memory warning received")
             self?.isMemoryWarning = true
             
             // Reset warning after 5 seconds
@@ -70,7 +70,7 @@ class MemoryMonitor: ObservableObject {
             
             // Trigger warning if above threshold
             if usedMemoryMB > self.memoryThresholdMB && !self.isMemoryWarning {
-                DebugLogger.shared.log("⚠️ Memory threshold exceeded: \(String(format: "%.1f", usedMemoryMB))MB", emoji: "⚠️", color: .orange)
+                print("⚠️ Memory threshold exceeded: \(String(format: "%.1f", usedMemoryMB))MB")
                 self.isMemoryWarning = true
             } else if usedMemoryMB <= self.memoryThresholdMB {
                 self.isMemoryWarning = false
@@ -84,25 +84,5 @@ class MemoryMonitor: ObservableObject {
     
     deinit {
         timer?.invalidate()
-    }
-}
-
-// MARK: - Debug Logger (for consistent logging)
-class DebugLogger {
-    static let shared = DebugLogger()
-    
-    enum LogColor: String {
-        case blue = "🔵"
-        case green = "🟢"
-        case orange = "🟠"
-        case red = "🔴"
-        case gray = "⚪️"
-    }
-    
-    private init() {}
-    
-    func log(_ message: String, emoji: String = "ℹ️", color: LogColor = .blue) {
-        let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
-        print("\(color.rawValue) [\(timestamp)] \(emoji) \(message)")
     }
 }
