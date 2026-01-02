@@ -2,23 +2,18 @@ import SwiftUI
 import WebKit
 import Combine
 
-// MARK: - Player Manager (ULTRA AGGRESSIVE CLEANUP)
+// MARK: - Player Manager (SIMPLIFIED & STABLE)
 class PlayerManager: ObservableObject {
     static let shared = PlayerManager()
     
     private var activePlayers: [String: WKWebView] = [:]
-    private var playerTimers: [String: Timer] = [:]
     private let lock = NSLock()
     private let maxPlayers = 1
-    private var lastCleanupTime: Date?
-    
-    // CRITICAL: Auto-cleanup after 4 minutes to prevent crashes
-    private let maxStreamDuration: TimeInterval = 4 * 60 // 4 minutes
     
     private init() {
         setupMemoryWarning()
         setupAppStateObservers()
-        DebugLogger.shared.log("📹 PlayerManager initialized (MAX 1 STREAM, 4 MIN LIMIT)", emoji: "📹", color: .blue)
+        DebugLogger.shared.log("📹 PlayerManager initialized", emoji: "📹", color: .blue)
     }
     
     private func setupMemoryWarning() {
@@ -27,39 +22,19 @@ class PlayerManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            DebugLogger.shared.log("⚠️ MEMORY WARNING - Emergency cleanup", emoji: "🆘", color: .red)
+            DebugLogger.shared.log("⚠️ MEMORY WARNING - cleanup", emoji: "🆘", color: .red)
             self?.clearAll()
         }
     }
     
     private func setupAppStateObservers() {
-        // Background - immediate cleanup
+        // Background - cleanup
         NotificationCenter.default.addObserver(
             forName: UIApplication.didEnterBackgroundNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            DebugLogger.shared.log("📱 App backgrounded - cleanup all", emoji: "📱", color: .orange)
-            self?.clearAll()
-        }
-        
-        // Foreground - ensure clean state
-        NotificationCenter.default.addObserver(
-            forName: UIApplication.willEnterForegroundNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            DebugLogger.shared.log("📱 App foregrounded - verify cleanup", emoji: "📱", color: .blue)
-            self?.clearAll() // Extra safety
-        }
-        
-        // Resign active - immediate cleanup
-        NotificationCenter.default.addObserver(
-            forName: UIApplication.willResignActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            DebugLogger.shared.log("📱 App resign active - cleanup", emoji: "📱", color: .orange)
+            DebugLogger.shared.log("📱 Backgrounded - cleanup", emoji: "📱", color: .orange)
             self?.clearAll()
         }
     }
@@ -68,98 +43,46 @@ class PlayerManager: ObservableObject {
         lock.lock()
         defer { lock.unlock() }
         
-        DebugLogger.shared.log("📹 Registering player: \(cameraId)", emoji: "📹", color: .blue)
+        DebugLogger.shared.log("📹 Registering: \(cameraId)", emoji: "📹", color: .blue)
         
-        // CRITICAL: Force cleanup of ALL existing players first
+        // Clear existing players first
         if !activePlayers.isEmpty {
-            DebugLogger.shared.log("⚠️ Forcing cleanup of existing players", emoji: "⚠️", color: .orange)
             let allKeys = Array(activePlayers.keys)
             for key in allKeys {
                 if let oldPlayer = activePlayers.removeValue(forKey: key) {
-                    playerTimers[key]?.invalidate()
-                    playerTimers.removeValue(forKey: key)
                     DispatchQueue.main.async {
                         self.destroyWebView(oldPlayer)
                     }
                 }
             }
-            
-            // Wait briefly for cleanup
-            Thread.sleep(forTimeInterval: 0.5)
         }
         
         activePlayers[cameraId] = webView
-        lastCleanupTime = Date()
-        
-        // CRITICAL: Set auto-cleanup timer (4 minutes)
-        let timer = Timer.scheduledTimer(withTimeInterval: maxStreamDuration, repeats: false) { [weak self] _ in
-            DebugLogger.shared.log("⏱️ AUTO-CLEANUP: 4 min limit reached", emoji: "⏱️", color: .red)
-            self?.releasePlayer(cameraId)
-        }
-        playerTimers[cameraId] = timer
-        
-        DebugLogger.shared.log("✅ Player registered with 4min timer: \(cameraId)", emoji: "✅", color: .green)
+        DebugLogger.shared.log("✅ Registered: \(cameraId)", emoji: "✅", color: .green)
     }
     
     private func destroyWebView(_ webView: WKWebView) {
         DebugLogger.shared.log("🧹 Destroying WebView", emoji: "🧹", color: .blue)
         
-        // CRITICAL: Complete destruction sequence
         webView.stopLoading()
         webView.navigationDelegate = nil
-        
-        // Stop all media
-        webView.evaluateJavaScript("document.querySelectorAll('video').forEach(v => { v.pause(); v.src = ''; v.load(); });") { _, _ in }
-        webView.evaluateJavaScript("if(window.cleanup) window.cleanup();") { _, _ in }
-        
-        // Clear all content
         webView.loadHTMLString("", baseURL: nil)
-        
-        // Remove ALL handlers
         webView.configuration.userContentController.removeAllScriptMessageHandlers()
-        
-        // Remove from view hierarchy
         webView.removeFromSuperview()
         
-        // Clear website data aggressively
-        let dataStore = WKWebsiteDataStore.nonPersistent()
-        let dataTypes: Set<String> = [
-            WKWebsiteDataTypeDiskCache,
-            WKWebsiteDataTypeMemoryCache,
-            WKWebsiteDataTypeOfflineWebApplicationCache,
-            WKWebsiteDataTypeCookies,
-            WKWebsiteDataTypeSessionStorage,
-            WKWebsiteDataTypeLocalStorage,
-            WKWebsiteDataTypeWebSQLDatabases,
-            WKWebsiteDataTypeIndexedDBDatabases
-        ]
-        
-        dataStore.removeData(
-            ofTypes: dataTypes,
-            modifiedSince: Date(timeIntervalSince1970: 0),
-            completionHandler: {
-                DebugLogger.shared.log("🧹 All website data cleared", emoji: "🧹", color: .gray)
-            }
-        )
-        
-        DebugLogger.shared.log("✅ WebView destroyed completely", emoji: "✅", color: .green)
+        DebugLogger.shared.log("✅ WebView destroyed", emoji: "✅", color: .green)
     }
     
     func releasePlayer(_ cameraId: String) {
         lock.lock()
         defer { lock.unlock() }
         
-        playerTimers[cameraId]?.invalidate()
-        playerTimers.removeValue(forKey: cameraId)
-        
         if let webView = activePlayers.removeValue(forKey: cameraId) {
-            DebugLogger.shared.log("🗑️ Releasing player: \(cameraId)", emoji: "🗑️", color: .orange)
+            DebugLogger.shared.log("🗑️ Releasing: \(cameraId)", emoji: "🗑️", color: .orange)
             
             DispatchQueue.main.async {
                 self.destroyWebView(webView)
             }
-            
-            lastCleanupTime = Date()
         }
     }
     
@@ -171,13 +94,7 @@ class PlayerManager: ObservableObject {
             return
         }
         
-        DebugLogger.shared.log("🧹 CLEARING ALL PLAYERS (\(activePlayers.count))", emoji: "🧹", color: .red)
-        
-        // Stop all timers
-        for (_, timer) in playerTimers {
-            timer.invalidate()
-        }
-        playerTimers.removeAll()
+        DebugLogger.shared.log("🧹 Clearing all players", emoji: "🧹", color: .red)
         
         let allPlayers = activePlayers
         activePlayers.removeAll()
@@ -185,10 +102,6 @@ class PlayerManager: ObservableObject {
         DispatchQueue.main.async {
             allPlayers.forEach { self.destroyWebView($0.value) }
         }
-        
-        lastCleanupTime = Date()
-        
-        DebugLogger.shared.log("✅ All players cleared", emoji: "✅", color: .green)
     }
     
     func getActiveCount() -> Int {
@@ -196,29 +109,9 @@ class PlayerManager: ObservableObject {
         defer { lock.unlock() }
         return activePlayers.count
     }
-    
-    func canStartNewPlayer() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        
-        if activePlayers.count >= maxPlayers {
-            DebugLogger.shared.log("⚠️ Cannot start - at max capacity", emoji: "⚠️", color: .orange)
-            return false
-        }
-        
-        if let lastCleanup = lastCleanupTime {
-            let timeSinceCleanup = Date().timeIntervalSince(lastCleanup)
-            if timeSinceCleanup < 2.0 {
-                DebugLogger.shared.log("⚠️ Cannot start - too soon (\(String(format: "%.1f", timeSinceCleanup))s)", emoji: "⚠️", color: .orange)
-                return false
-            }
-        }
-        
-        return true
-    }
 }
 
-// MARK: - WebRTC Player View (ULTRA SAFE WITH MEMORY OPTIMIZATION)
+// MARK: - WebRTC Player View (SIMPLIFIED)
 struct WebRTCPlayerView: UIViewRepresentable {
     let streamURL: String
     let cameraId: String
@@ -232,10 +125,6 @@ struct WebRTCPlayerView: UIViewRepresentable {
         config.mediaTypesRequiringUserActionForPlayback = []
         config.allowsPictureInPictureMediaPlayback = false
         config.websiteDataStore = .nonPersistent()
-        
-        // CRITICAL: Memory optimization
-        config.processPool = WKProcessPool()
-        config.suppressesIncrementalRendering = true
         
         let prefs = WKWebpagePreferences()
         prefs.allowsContentJavaScript = true
@@ -269,25 +158,10 @@ struct WebRTCPlayerView: UIViewRepresentable {
     
     class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         let cameraId: String
-        private var retryCount = 0
-        private let maxRetries = 2
         private var isActive = true
-        private var memoryTimer: Timer?
         
         init(cameraId: String) {
             self.cameraId = cameraId
-            super.init()
-            
-            // CRITICAL: Periodic memory cleanup every 30 seconds
-            memoryTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-                self?.periodicCleanup()
-            }
-        }
-        
-        private func periodicCleanup() {
-            DebugLogger.shared.log("🧹 Periodic cleanup", emoji: "🧹", color: .blue)
-            // Trigger garbage collection in JavaScript
-            // This helps prevent memory buildup
         }
         
         func loadPlayer(in webView: WKWebView, streamURL: String) {
@@ -324,36 +198,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
                     const status = document.getElementById('status');
                     const live = document.getElementById('live');
                     const streamUrl = '\(streamURL)';
-                    let pc = null, restartTimeout = null, isActive = true;
-                    let retryCount = 0;
-                    const MAX_RETRIES = 2;
-                    
-                    // CRITICAL: Global cleanup function
-                    window.cleanup = function() {
-                        isActive = false;
-                        if (restartTimeout) { 
-                            clearTimeout(restartTimeout); 
-                            restartTimeout = null; 
-                        }
-                        if (pc) { 
-                            try { 
-                                pc.close(); 
-                            } catch(e) {}
-                            pc = null; 
-                        }
-                        if (video.srcObject) {
-                            try { 
-                                video.srcObject.getTracks().forEach(t => {
-                                    try { t.stop(); } catch(e) {}
-                                }); 
-                                video.srcObject = null; 
-                            } catch(e) {}
-                        }
-                        video.pause();
-                        video.src = '';
-                        video.load();
-                        live.classList.remove('show');
-                    };
+                    let pc = null, isActive = true;
                     
                     function log(msg, isError = false) {
                         if (!isActive) return;
@@ -362,56 +207,44 @@ struct WebRTCPlayerView: UIViewRepresentable {
                         try { window.webkit?.messageHandlers?.logging?.postMessage(msg); } catch(e) {}
                     }
                     
-                    async function start() {
-                        if (!isActive || retryCount >= MAX_RETRIES) {
-                            if (retryCount >= MAX_RETRIES) {
-                                log('Max retries', true);
+                    function cleanup() {
+                        isActive = false;
+                        try {
+                            if (pc) { pc.close(); pc = null; }
+                            if (video.srcObject) {
+                                video.srcObject.getTracks().forEach(t => t.stop());
+                                video.srcObject = null;
                             }
-                            return;
-                        }
-                        
-                        if (pc) {
-                            try { pc.close(); } catch(e) {}
-                            pc = null;
-                        }
+                        } catch(e) {}
+                        live.classList.remove('show');
+                    }
+                    
+                    async function start() {
+                        if (!isActive) return;
                         
                         log('Connecting...');
                         
                         try {
                             pc = new RTCPeerConnection({
-                                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-                                bundlePolicy: 'max-bundle', 
-                                rtcpMuxPolicy: 'require'
+                                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
                             });
                             
                             pc.ontrack = (e) => { 
                                 if (isActive) { 
                                     log('Stream ready'); 
                                     video.srcObject = e.streams[0]; 
-                                    retryCount = 0;
                                 } 
                             };
                             
                             pc.oniceconnectionstatechange = () => {
                                 if (!isActive) return;
-                                
                                 const state = pc.iceConnectionState;
-                                
                                 if (state === 'connected' || state === 'completed') {
                                     log('Connected'); 
                                     live.classList.add('show');
-                                    retryCount = 0;
                                 } else if (state === 'failed' || state === 'disconnected') {
-                                    log('Connection ' + state); 
+                                    log('Disconnected'); 
                                     live.classList.remove('show');
-                                    
-                                    retryCount++;
-                                    if (isActive && retryCount < MAX_RETRIES) {
-                                        log('Retry ' + retryCount + '/' + MAX_RETRIES);
-                                        restartTimeout = setTimeout(start, 3000);
-                                    } else if (retryCount >= MAX_RETRIES) {
-                                        log('Failed - max retries', true);
-                                    }
                                 }
                             };
                             
@@ -421,19 +254,13 @@ struct WebRTCPlayerView: UIViewRepresentable {
                             const offer = await pc.createOffer();
                             await pc.setLocalDescription(offer);
                             
-                            const controller = new AbortController();
-                            const timeoutId = setTimeout(() => controller.abort(), 10000);
-                            
                             const res = await fetch(streamUrl, {
                                 method: 'POST', 
                                 headers: { 'Content-Type': 'application/sdp' }, 
-                                body: offer.sdp,
-                                signal: controller.signal
+                                body: offer.sdp
                             });
                             
-                            clearTimeout(timeoutId);
-                            
-                            if (!res.ok) throw new Error('Server: ' + res.status);
+                            if (!res.ok) throw new Error('Server error');
                             
                             const answer = await res.text();
                             if (isActive) {
@@ -442,11 +269,6 @@ struct WebRTCPlayerView: UIViewRepresentable {
                             
                         } catch (err) {
                             log('Error: ' + err.message, true);
-                            retryCount++;
-                            if (isActive && retryCount < MAX_RETRIES) {
-                                log('Retry ' + retryCount + '/' + MAX_RETRIES);
-                                restartTimeout = setTimeout(start, 5000);
-                            }
                         }
                     }
                     
@@ -457,12 +279,8 @@ struct WebRTCPlayerView: UIViewRepresentable {
                         } 
                     });
                     
-                    video.addEventListener('error', (e) => {
-                        log('Video error', true);
-                    });
-                    
-                    window.addEventListener('beforeunload', window.cleanup);
-                    window.addEventListener('pagehide', window.cleanup);
+                    window.addEventListener('beforeunload', cleanup);
+                    window.addEventListener('pagehide', cleanup);
                     
                     start();
                 })();
@@ -476,8 +294,6 @@ struct WebRTCPlayerView: UIViewRepresentable {
         
         func cleanup() {
             isActive = false
-            memoryTimer?.invalidate()
-            memoryTimer = nil
             PlayerManager.shared.releasePlayer(cameraId)
         }
         
@@ -486,11 +302,7 @@ struct WebRTCPlayerView: UIViewRepresentable {
         }
         
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            DebugLogger.shared.log("❌ Navigation error: \(error.localizedDescription)", emoji: "❌", color: .red)
-            
-            if retryCount < maxRetries {
-                retryCount += 1
-            }
+            DebugLogger.shared.log("❌ Error: \(error.localizedDescription)", emoji: "❌", color: .red)
         }
         
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -501,15 +313,12 @@ struct WebRTCPlayerView: UIViewRepresentable {
     }
 }
 
-// MARK: - Fullscreen Player (with 4-minute auto-close)
+// MARK: - Fullscreen Player (SIMPLE VERSION)
 struct FullscreenPlayerView: View {
     let camera: Camera
     @Environment(\.presentationMode) var presentationMode
     @State private var showControls = true
     @State private var orientation = UIDeviceOrientation.unknown
-    @State private var remainingTime: TimeInterval = 4 * 60 // 4 minutes
-    @State private var timer: Timer?
-    @State private var showTimeWarning = false
     
     var body: some View {
         GeometryReader { geometry in
@@ -528,18 +337,11 @@ struct FullscreenPlayerView: View {
                 if showControls {
                     controlsOverlay
                 }
-                
-                // Time warning overlay
-                if showTimeWarning {
-                    timeWarningOverlay
-                }
             }
             .onAppear {
                 setupOrientationObserver()
-                startTimer()
             }
             .onDisappear {
-                stopTimer()
                 PlayerManager.shared.releasePlayer(camera.id)
                 resetOrientation()
             }
@@ -552,7 +354,6 @@ struct FullscreenPlayerView: View {
         VStack {
             HStack {
                 Button(action: {
-                    stopTimer()
                     PlayerManager.shared.releasePlayer(camera.id)
                     presentationMode.wrappedValue.dismiss()
                 }) {
@@ -567,15 +368,6 @@ struct FullscreenPlayerView: View {
                 }
                 
                 Spacer()
-                
-                // Time remaining indicator
-                Text(formatTime(remainingTime))
-                    .font(.caption)
-                    .foregroundColor(remainingTime < 60 ? .red : .white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(Color.black.opacity(0.6))
-                    .cornerRadius(8)
                 
                 Button(action: toggleOrientation) {
                     Image(systemName: isLandscape ? "arrow.up.left.and.arrow.down.right" : "arrow.left.and.right")
@@ -608,34 +400,6 @@ struct FullscreenPlayerView: View {
         .transition(.opacity)
     }
     
-    private var timeWarningOverlay: some View {
-        VStack {
-            Spacer()
-            HStack {
-                Spacer()
-                VStack(spacing: 12) {
-                    Image(systemName: "clock.badge.exclamationmark")
-                        .font(.system(size: 40))
-                        .foregroundColor(.orange)
-                    
-                    Text("Stream will auto-close in \(Int(remainingTime))s")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                    
-                    Text("To prevent memory issues")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.8))
-                }
-                .padding(24)
-                .background(Color.black.opacity(0.9))
-                .cornerRadius(16)
-                Spacer()
-            }
-            Spacer()
-        }
-        .transition(.opacity)
-    }
-    
     private var isLandscape: Bool {
         orientation.isLandscape
     }
@@ -648,44 +412,6 @@ struct FullscreenPlayerView: View {
         ) { _ in
             orientation = UIDevice.current.orientation
         }
-    }
-    
-    private func startTimer() {
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            remainingTime -= 1
-            
-            // Show warning at 30 seconds
-            if remainingTime == 30 {
-                withAnimation {
-                    showTimeWarning = true
-                }
-                
-                DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-                    withAnimation {
-                        showTimeWarning = false
-                    }
-                }
-            }
-            
-            // Auto-close at 0
-            if remainingTime <= 0 {
-                DebugLogger.shared.log("⏱️ Auto-closing stream after 4 minutes", emoji: "⏱️", color: .orange)
-                stopTimer()
-                PlayerManager.shared.releasePlayer(camera.id)
-                presentationMode.wrappedValue.dismiss()
-            }
-        }
-    }
-    
-    private func stopTimer() {
-        timer?.invalidate()
-        timer = nil
-    }
-    
-    private func formatTime(_ seconds: TimeInterval) -> String {
-        let mins = Int(seconds) / 60
-        let secs = Int(seconds) % 60
-        return String(format: "%d:%02d", mins, secs)
     }
     
     private func toggleOrientation() {
