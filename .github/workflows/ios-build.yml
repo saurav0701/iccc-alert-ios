@@ -36,18 +36,27 @@ jobs:
         ruby generate_project.rb
         echo "✅ Xcode project generated"
     
+    - name: Verify Podfile
+      run: |
+        echo "🔍 Checking Podfile..."
+        if [ ! -f "Podfile" ]; then
+          echo "❌ Podfile not found"
+          exit 1
+        fi
+        
+        # Check for syntax issues
+        ruby -c Podfile
+        echo "✅ Podfile syntax valid"
+        
+        echo "📄 Podfile contents:"
+        cat Podfile
+    
     - name: Install Pods
       run: |
         echo "📦 Installing WebRTC via CocoaPods..."
         pod install --repo-update --verbose
         
-        if [ -d "Pods/GoogleWebRTC" ]; then
-          echo "✅ GoogleWebRTC installed"
-          find Pods/GoogleWebRTC -name "*.framework" | head -3
-        else
-          echo "❌ GoogleWebRTC not found"
-          exit 1
-        fi
+        echo "✅ Pod install complete"
     
     - name: Verify Setup
       run: |
@@ -57,12 +66,18 @@ jobs:
           echo "✅ Workspace created"
         else
           echo "❌ Workspace missing"
+          ls -la *.xc* || true
           exit 1
         fi
         
         if [ -d "Pods/GoogleWebRTC" ]; then
           echo "✅ WebRTC ready"
           du -sh Pods/GoogleWebRTC
+          find Pods/GoogleWebRTC -name "*.framework" | head -3
+        else
+          echo "❌ GoogleWebRTC not found"
+          ls -la Pods/ || true
+          exit 1
         fi
     
     - name: Build for iOS Device
