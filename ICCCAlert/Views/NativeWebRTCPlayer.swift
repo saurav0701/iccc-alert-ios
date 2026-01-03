@@ -1,7 +1,7 @@
 import Foundation
 import UIKit
 import WebRTC
-import SwiftUI  // ← CRITICAL: Add this import
+import SwiftUI
 import Combine
 
 // MARK: - Native WebRTC Player (MEMORY OPTIMIZED)
@@ -18,7 +18,7 @@ class NativeWebRTCPlayer: NSObject, ObservableObject {
     private var remoteVideoView: RTCMTLVideoView?
     
     private let streamURL: String
-    private let cameraId: String  // Keep as String to match Camera.id
+    private let cameraId: String
     
     private static let factory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
@@ -36,6 +36,7 @@ class NativeWebRTCPlayer: NSObject, ObservableObject {
         super.init()
         
         DebugLogger.shared.log("🎬 NativeWebRTCPlayer created: \(cameraId)", emoji: "🎬", color: .blue)
+        DebugLogger.shared.log("📍 Stream URL: \(streamURL)", emoji: "📍", color: .blue)
     }
     
     // MARK: - Public Methods
@@ -92,12 +93,12 @@ class NativeWebRTCPlayer: NSObject, ObservableObject {
             optionalConstraints: ["DtlsSrtpKeyAgreement": "true"]
         )
         
-        // Create peer connection - Not optional in newer WebRTC versions
+        // Create peer connection
         let pc = Self.factory.peerConnection(with: config, constraints: constraints, delegate: self)
         
         self.peerConnection = pc
         
-        // ✅ FIXED: Correct API usage for addTransceiver
+        // Add transceivers for receive-only
         let videoTransceiverInit = RTCRtpTransceiverInit()
         videoTransceiverInit.direction = .recvOnly
         pc.addTransceiver(of: .video, init: videoTransceiverInit)
@@ -126,26 +127,32 @@ class NativeWebRTCPlayer: NSObject, ObservableObject {
             
             if let error = error {
                 DebugLogger.shared.log("❌ Create offer failed: \(error.localizedDescription)", emoji: "❌", color: .red)
-                self.errorMessage = "Failed to create offer"
-                self.isLoading = false
+                DispatchQueue.main.async {
+                    self.errorMessage = "Failed to create offer"
+                    self.isLoading = false
+                }
                 return
             }
             
             guard let sdp = sdp else {
                 DebugLogger.shared.log("❌ No SDP in offer", emoji: "❌", color: .red)
-                self.errorMessage = "No SDP in offer"
-                self.isLoading = false
+                DispatchQueue.main.async {
+                    self.errorMessage = "No SDP in offer"
+                    self.isLoading = false
+                }
                 return
             }
             
-            DebugLogger.shared.log("✅ Offer created", emoji: "✅", color: .green)
+            DebugLogger.shared.log("✅ Offer created (\(sdp.sdp.count) bytes)", emoji: "✅", color: .green)
             
             // Set local description
             self.peerConnection?.setLocalDescription(sdp) { error in
                 if let error = error {
                     DebugLogger.shared.log("❌ Set local description failed: \(error.localizedDescription)", emoji: "❌", color: .red)
-                    self.errorMessage = "Failed to set local description"
-                    self.isLoading = false
+                    DispatchQueue.main.async {
+                        self.errorMessage = "Failed to set local description"
+                        self.isLoading = false
+                    }
                     return
                 }
                 
@@ -159,43 +166,87 @@ class NativeWebRTCPlayer: NSObject, ObservableObject {
     
     private func sendOfferToServer(sdp: String) {
         guard let url = URL(string: streamURL) else {
-            DebugLogger.shared.log("❌ Invalid stream URL", emoji: "❌", color: .red)
-            errorMessage = "Invalid stream URL"
-            isLoading = false
+            DebugLogger.shared.log("❌ Invalid stream URL: \(streamURL)", emoji: "❌", color: .red)
+            DispatchQueue.main.async {
+                self.errorMessage = "Invalid stream URL"
+                self.isLoading = false
+            }
             return
         }
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/sdp", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/sdp", forHTTPHeaderField: "Accept")  // ← ADDED
         request.httpBody = sdp.data(using: .utf8)
-        request.timeoutInterval = 10
+        request.timeoutInterval = 15  // Increased timeout
         
-        DebugLogger.shared.log("📤 Sending offer to server...", emoji: "📤", color: .blue)
+        DebugLogger.shared.log("📤 Sending WHEP offer to: \(streamURL)", emoji: "📤", color: .blue)
+        DebugLogger.shared.log("📤 SDP size: \(sdp.count) bytes", emoji: "📤", color: .blue)
+        
+        let startTime = Date()
         
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self = self else { return }
             
+            let elapsed = Date().timeIntervalSince(startTime)
+            DebugLogger.shared.log("⏱️ Request took \(String(format: "%.2f", elapsed))s", emoji: "⏱️", color: .blue)
+            
+            // Check for network errors
             if let error = error {
-                DebugLogger.shared.log("❌ Server request failed: \(error.localizedDescription)", emoji: "❌", color: .red)
+                let nsError = error as NSError
+                DebugLogger.shared.log("❌ Network error: \(error.localizedDescription)", emoji: "❌", color: .red)
+                DebugLogger.shared.log("❌ Error domain: \(nsError.domain), code: \(nsError.code)", emoji: "❌", color: .red)
+                
                 DispatchQueue.main.async {
-                    self.errorMessage = "Server connection failed"
+                    self.errorMessage = "Connection failed: \(error.localizedDescription)"
                     self.isLoading = false
                 }
                 return
             }
             
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                DebugLogger.shared.log("❌ Server returned error", emoji: "❌", color: .red)
+            // Check HTTP response
+            guard let httpResponse = response as? HTTPURLResponse else {
+                DebugLogger.shared.log("❌ No HTTP response", emoji: "❌", color: .red)
                 DispatchQueue.main.async {
-                    self.errorMessage = "Server error"
+                    self.errorMessage = "No server response"
                     self.isLoading = false
                 }
                 return
             }
             
-            guard let data = data, let answerSDP = String(data: data, encoding: .utf8) else {
-                DebugLogger.shared.log("❌ No answer from server", emoji: "❌", color: .red)
+            DebugLogger.shared.log("📥 HTTP Status: \(httpResponse.statusCode)", emoji: "📥", color: .blue)
+            DebugLogger.shared.log("📥 Headers: \(httpResponse.allHeaderFields)", emoji: "📥", color: .gray)
+            
+            // Log response body for debugging
+            if let data = data {
+                DebugLogger.shared.log("📥 Response size: \(data.count) bytes", emoji: "📥", color: .blue)
+                if let bodyString = String(data: data, encoding: .utf8) {
+                    DebugLogger.shared.log("📄 Response body: \(bodyString.prefix(500))...", emoji: "📄", color: .gray)
+                }
+            }
+            
+            // Accept both 200 and 201 status codes
+            guard httpResponse.statusCode == 200 || httpResponse.statusCode == 201 else {
+                let errorMsg: String
+                if let data = data, let body = String(data: data, encoding: .utf8) {
+                    errorMsg = "Server error (\(httpResponse.statusCode)): \(body)"
+                } else {
+                    errorMsg = "Server error: \(httpResponse.statusCode)"
+                }
+                
+                DebugLogger.shared.log("❌ \(errorMsg)", emoji: "❌", color: .red)
+                
+                DispatchQueue.main.async {
+                    self.errorMessage = errorMsg
+                    self.isLoading = false
+                }
+                return
+            }
+            
+            // Get SDP answer
+            guard let data = data, let answerSDP = String(data: data, encoding: .utf8), !answerSDP.isEmpty else {
+                DebugLogger.shared.log("❌ No SDP answer from server", emoji: "❌", color: .red)
                 DispatchQueue.main.async {
                     self.errorMessage = "No answer from server"
                     self.isLoading = false
@@ -203,7 +254,7 @@ class NativeWebRTCPlayer: NSObject, ObservableObject {
                 return
             }
             
-            DebugLogger.shared.log("✅ Received answer from server", emoji: "✅", color: .green)
+            DebugLogger.shared.log("✅ Received SDP answer (\(answerSDP.count) bytes)", emoji: "✅", color: .green)
             
             // Set remote description
             let answer = RTCSessionDescription(type: .answer, sdp: answerSDP)
@@ -212,15 +263,15 @@ class NativeWebRTCPlayer: NSObject, ObservableObject {
                 if let error = error {
                     DebugLogger.shared.log("❌ Set remote description failed: \(error.localizedDescription)", emoji: "❌", color: .red)
                     DispatchQueue.main.async {
-                        self.errorMessage = "Failed to set remote description"
+                        self.errorMessage = "Failed to process server response"
                         self.isLoading = false
                     }
                     return
                 }
                 
-                DebugLogger.shared.log("✅ Remote description set - waiting for stream", emoji: "✅", color: .green)
+                DebugLogger.shared.log("✅ Remote description set - waiting for ICE", emoji: "✅", color: .green)
                 DispatchQueue.main.async {
-                    self.isLoading = false
+                    self.isLoading = false  // Will show "Connecting..." until ICE completes
                 }
             }
             
@@ -305,20 +356,23 @@ extension NativeWebRTCPlayer: RTCPeerConnectionDelegate {
             case .connected, .completed:
                 self.isConnected = true
                 self.isLoading = false
-                DebugLogger.shared.log("✅ Connected!", emoji: "✅", color: .green)
+                DebugLogger.shared.log("✅ ICE Connected!", emoji: "✅", color: .green)
                 
             case .disconnected:
                 self.isConnected = false
-                DebugLogger.shared.log("⚠️ Disconnected", emoji: "⚠️", color: .orange)
+                DebugLogger.shared.log("⚠️ ICE Disconnected", emoji: "⚠️", color: .orange)
                 
             case .failed:
                 self.isConnected = false
-                self.errorMessage = "Connection failed"
-                DebugLogger.shared.log("❌ Connection failed", emoji: "❌", color: .red)
+                self.errorMessage = "Connection failed - check network"
+                DebugLogger.shared.log("❌ ICE Connection failed", emoji: "❌", color: .red)
                 
             case .closed:
                 self.isConnected = false
-                DebugLogger.shared.log("🔒 Connection closed", emoji: "🔒", color: .gray)
+                DebugLogger.shared.log("🔒 ICE Connection closed", emoji: "🔒", color: .gray)
+                
+            case .checking:
+                DebugLogger.shared.log("🔍 ICE Checking...", emoji: "🔍", color: .blue)
                 
             default:
                 break
@@ -331,16 +385,15 @@ extension NativeWebRTCPlayer: RTCPeerConnectionDelegate {
     }
     
     func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
-        // We're using Trickle ICE, but server handles this automatically
-        // No need to send candidates manually for this simple setup
+        DebugLogger.shared.log("🧊 ICE candidate: \(candidate.sdp)", emoji: "🧊", color: .gray)
     }
     
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {
-        // Ignored for now
+        DebugLogger.shared.log("🗑️ ICE candidates removed: \(candidates.count)", emoji: "🗑️", color: .gray)
     }
     
     func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {
-        // Not using data channels
+        DebugLogger.shared.log("📡 Data channel opened", emoji: "📡", color: .blue)
     }
 }
 
@@ -348,7 +401,7 @@ extension NativeWebRTCPlayer: RTCPeerConnectionDelegate {
 struct NativeWebRTCPlayerView: UIViewRepresentable {
     @StateObject private var player: NativeWebRTCPlayer
     
-    init(cameraId: String, streamURL: String) {  // Keep as String
+    init(cameraId: String, streamURL: String) {
         _player = StateObject(wrappedValue: NativeWebRTCPlayer(cameraId: cameraId, streamURL: streamURL))
     }
     
