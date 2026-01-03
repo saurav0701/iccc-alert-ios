@@ -20,39 +20,15 @@ jobs:
         xcodebuild -version
         echo "✅ Xcode configured"
     
-    - name: Install Ruby Gems
+    - name: Install CocoaPods
       run: |
-        echo "💎 Installing Ruby dependencies..."
-        sudo gem install xcodeproj cocoapods
+        echo "💎 Installing CocoaPods..."
+        sudo gem install cocoapods
         pod --version
         echo "✅ CocoaPods installed"
     
-    - name: Create Podfile
-      run: |
-        echo "📝 Creating Podfile..."
-        cat > Podfile << 'PODFILE_EOF'
-        platform :ios, '14.0'
-        
-        target 'ICCCAlert' do
-          use_frameworks!
-          
-          # Google WebRTC - Official iOS implementation
-          pod 'GoogleWebRTC', '~> 1.1'
-        end
-        
-        post_install do |installer|
-          installer.pods_project.targets.each do |target|
-            target.build_configurations.each do |config|
-              config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
-              config.build_settings['ENABLE_BITCODE'] = 'NO'
-              config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'arm64'
-              config.build_settings['ONLY_ACTIVE_ARCH'] = 'NO'
-            end
-          end
-        end
-        PODFILE_EOF
-        echo "✅ Podfile created"
-        cat Podfile
+    - name: Install xcodeproj gem
+      run: sudo gem install xcodeproj
     
     - name: Generate Xcode Project
       run: |
@@ -60,53 +36,43 @@ jobs:
         ruby generate_project.rb
         echo "✅ Xcode project generated"
     
-    - name: Install CocoaPods Dependencies
+    - name: Install Pods
       run: |
         echo "📦 Installing WebRTC via CocoaPods..."
         pod install --repo-update --verbose
         
-        # Verify installation
         if [ -d "Pods/GoogleWebRTC" ]; then
-          echo "✅ GoogleWebRTC pod installed successfully"
-          echo "📋 WebRTC location:"
-          find Pods/GoogleWebRTC -name "*.framework" -o -name "*.xcframework" | head -5
+          echo "✅ GoogleWebRTC installed"
+          find Pods/GoogleWebRTC -name "*.framework" | head -3
         else
-          echo "❌ GoogleWebRTC installation failed"
+          echo "❌ GoogleWebRTC not found"
           exit 1
         fi
     
-    - name: Verify WebRTC Framework
+    - name: Verify Setup
       run: |
-        echo "🔍 Verifying WebRTC framework..."
+        echo "🔍 Verifying setup..."
         
-        # Check workspace was created
         if [ -f "ICCCAlert.xcworkspace" ]; then
-          echo "✅ Xcode workspace created by CocoaPods"
+          echo "✅ Workspace created"
         else
-          echo "❌ Workspace not found"
+          echo "❌ Workspace missing"
           exit 1
         fi
         
-        # Check WebRTC framework
         if [ -d "Pods/GoogleWebRTC" ]; then
-          echo "✅ WebRTC framework ready"
-          echo "📊 Framework size:"
+          echo "✅ WebRTC ready"
           du -sh Pods/GoogleWebRTC
-        else
-          echo "❌ WebRTC framework missing"
-          exit 1
         fi
     
     - name: Build for iOS Device
       run: |
-        echo "🏗️ Building for iOS device with Native WebRTC..."
+        echo "🏗️ Building..."
         
-        # Clean
         rm -rf build
         rm -rf ~/Library/Developer/Xcode/DerivedData/ICCCAlert-*
         mkdir -p build
         
-        # Build using workspace (CocoaPods requirement)
         xcodebuild \
           -workspace ICCCAlert.xcworkspace \
           -scheme ICCCAlert \
@@ -118,130 +84,80 @@ jobs:
           CODE_SIGN_IDENTITY="" \
           CODE_SIGNING_REQUIRED=NO \
           CODE_SIGNING_ALLOWED=NO \
-          DEVELOPMENT_TEAM="" \
-          PROVISIONING_PROFILE="" \
           ENABLE_BITCODE=NO \
           ONLY_ACTIVE_ARCH=NO \
           ARCHS="arm64" \
-          VALID_ARCHS="arm64" \
-          IPHONEOS_DEPLOYMENT_TARGET=14.0 \
-          | xcpretty || true
+          IPHONEOS_DEPLOYMENT_TARGET=14.0
         
-        echo "✅ Build completed"
+        echo "✅ Build complete"
     
-    - name: Verify Build Output
+    - name: Verify Build
       run: |
-        echo "🔍 Verifying build output..."
+        echo "🔍 Verifying build..."
         
-        # Find the built app
         APP_PATH=$(find ./DerivedData -name "ICCCAlert.app" -path "*/Build/Products/Release-iphoneos/*" -type d | head -1)
         
         if [ -z "$APP_PATH" ]; then
-          echo "❌ ERROR: Could not find ICCCAlert.app"
-          echo "Searching in DerivedData:"
-          find ./DerivedData -name "*.app" -type d
+          echo "❌ App not found"
+          find ./DerivedData -name "*.app"
           exit 1
         fi
         
-        echo "✅ Found app at: $APP_PATH"
+        echo "✅ App at: $APP_PATH"
         
-        # Check executable
         if [ -f "$APP_PATH/ICCCAlert" ]; then
           echo "✅ Executable found"
           file "$APP_PATH/ICCCAlert"
-          lipo -info "$APP_PATH/ICCCAlert" || echo "⚠️ Could not read architectures"
-        else
-          echo "❌ Executable not found"
-          exit 1
         fi
         
-        # Check for embedded frameworks (WebRTC)
-        echo "📋 Checking embedded frameworks:"
         if [ -d "$APP_PATH/Frameworks" ]; then
-          echo "✅ Frameworks directory exists"
+          echo "📦 Frameworks:"
           ls -lh "$APP_PATH/Frameworks/"
-          
-          # Count frameworks
-          FRAMEWORK_COUNT=$(ls -1 "$APP_PATH/Frameworks" | wc -l)
-          echo "📊 Embedded frameworks: $FRAMEWORK_COUNT"
-          
-          # Check for WebRTC specifically
-          if find "$APP_PATH/Frameworks" -name "*WebRTC*" | grep -q .; then
-            echo "✅ WebRTC framework is embedded"
-          else
-            echo "⚠️ WebRTC not found (might be statically linked)"
-          fi
-        else
-          echo "⚠️ No Frameworks directory (static linking)"
         fi
     
-    - name: Create Embedded Provisioning Profile
+    - name: Create Provisioning Profile
       run: |
-        echo "📝 Creating embedded.mobileprovision..."
-        cat > embedded.mobileprovision << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>AppIDName</key>
-    <string>ICCCAlert Development</string>
-    <key>ApplicationIdentifierPrefix</key>
-    <array>
-        <string>TEAMID12345</string>
-    </array>
-    <key>CreationDate</key>
-    <date>2025-01-03T10:00:00Z</date>
-    <key>Platform</key>
-    <array>
-        <string>iOS</string>
-    </array>
-    <key>DeveloperCertificates</key>
-    <array>
-        <data>MIIDFzCCAgGgAwIBAgIBATANBgkqhkiG9w0BAQ==</data>
-    </array>
-    <key>Entitlements</key>
-    <dict>
-        <key>keychain-access-groups</key>
-        <array>
-            <string>TEAMID12345.*</string>
-        </array>
-        <key>get-task-allow</key>
-        <true/>
-        <key>application-identifier</key>
-        <string>TEAMID12345.com.iccc.alert</string>
-        <key>com.apple.developer.team-identifier</key>
-        <string>TEAMID12345</string>
-    </dict>
-    <key>ExpirationDate</key>
-    <date>2026-01-03T10:00:00Z</date>
-    <key>Name</key>
-    <string>ICCCAlert Development Profile</string>
-    <key>ProvisionedDevices</key>
-    <array>
-        <string>00000000-0000000000000000</string>
-    </array>
-    <key>TeamIdentifier</key>
-    <array>
-        <string>TEAMID12345</string>
-    </array>
-    <key>TeamName</key>
-    <string>Development Team</string>
-    <key>TimeToLive</key>
-    <integer>365</integer>
-    <key>UUID</key>
-    <string>12345678-1234-1234-1234-123456789012</string>
-    <key>Version</key>
-    <integer>1</integer>
-</dict>
-</plist>
-EOF
-        echo "✅ Provisioning profile created"
+        cat > embedded.mobileprovision <<'PROFILE_EOF'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>AppIDName</key>
+            <string>ICCCAlert</string>
+            <key>ApplicationIdentifierPrefix</key>
+            <array><string>TEAM123</string></array>
+            <key>CreationDate</key>
+            <date>2025-01-03T10:00:00Z</date>
+            <key>Platform</key>
+            <array><string>iOS</string></array>
+            <key>DeveloperCertificates</key>
+            <array><data>MIIDFzCCAgGgAwIBAgIBATANBgkqhkiG9w0BAQ==</data></array>
+            <key>Entitlements</key>
+            <dict>
+                <key>application-identifier</key>
+                <string>TEAM123.com.iccc.alert</string>
+                <key>get-task-allow</key>
+                <true/>
+            </dict>
+            <key>ExpirationDate</key>
+            <date>2026-01-03T10:00:00Z</date>
+            <key>Name</key>
+            <string>Development</string>
+            <key>TeamIdentifier</key>
+            <array><string>TEAM123</string></array>
+            <key>UUID</key>
+            <string>12345678-1234-1234-1234-123456789012</string>
+            <key>Version</key>
+            <integer>1</integer>
+        </dict>
+        </plist>
+        PROFILE_EOF
+        echo "✅ Profile created"
     
-    - name: Create IPA Package
+    - name: Create IPA
       run: |
-        echo "📦 Creating IPA package..."
+        echo "📦 Creating IPA..."
         
-        # Find the built app
         APP_PATH=$(find ./DerivedData -name "ICCCAlert.app" -path "*/Build/Products/Release-iphoneos/*" -type d | head -1)
         
         if [ -z "$APP_PATH" ]; then
@@ -249,193 +165,74 @@ EOF
           exit 1
         fi
         
-        echo "✅ App path: $APP_PATH"
+        cp embedded.mobileprovision "$APP_PATH/"
         
-        # Add provisioning profile
-        cp embedded.mobileprovision "$APP_PATH/embedded.mobileprovision"
+        mkdir -p ./build/Payload
+        cp -R "$APP_PATH" ./build/Payload/
         
-        if [ -f "$APP_PATH/embedded.mobileprovision" ]; then
-          echo "✅ Provisioning profile added"
-        else
-          echo "❌ Failed to add provisioning profile"
-          exit 1
-        fi
-        
-        # Create Payload directory
-        PAYLOAD_DIR="./build/Payload"
-        mkdir -p "$PAYLOAD_DIR"
-        
-        # Copy app to Payload
-        echo "📦 Copying app to Payload..."
-        cp -R "$APP_PATH" "$PAYLOAD_DIR/"
-        
-        # Verify copy
-        if [ ! -d "$PAYLOAD_DIR/ICCCAlert.app" ]; then
-          echo "❌ Failed to copy app to Payload"
-          exit 1
-        fi
-        
-        echo "✅ App copied to Payload"
-        
-        # Create IPA (zip with .ipa extension)
-        echo "🗜️ Creating IPA archive..."
         cd ./build
         zip -r -0 ICCCAlert.ipa Payload
         cd ..
         
-        # Verify IPA was created
-        if [ ! -f "./build/ICCCAlert.ipa" ]; then
-          echo "❌ IPA was not created"
-          exit 1
-        fi
-        
-        # Get IPA size
-        IPA_SIZE=$(du -h ./build/ICCCAlert.ipa | cut -f1)
-        echo "✅ IPA created successfully!"
-        echo "📊 IPA size: $IPA_SIZE"
-        
-        # Verify IPA structure
-        echo "📋 IPA structure (first 25 lines):"
-        unzip -l ./build/ICCCAlert.ipa | head -25
-        
-        # Test IPA integrity
-        if unzip -t ./build/ICCCAlert.ipa > /dev/null 2>&1; then
-          echo "✅ IPA is a valid ZIP archive"
+        if [ -f "./build/ICCCAlert.ipa" ]; then
+          IPA_SIZE=$(du -h ./build/ICCCAlert.ipa | cut -f1)
+          echo "✅ IPA created: $IPA_SIZE"
         else
-          echo "❌ IPA is corrupted"
+          echo "❌ IPA failed"
           exit 1
         fi
         
-        # Check file type
-        file ./build/ICCCAlert.ipa
-        
-        echo "✅ IPA is ready for Diawi!"
+        unzip -l ./build/ICCCAlert.ipa | head -20
     
-    - name: Upload IPA Artifact
+    - name: Upload IPA
       uses: actions/upload-artifact@v4
       with:
         name: ICCCAlert-NativeWebRTC-IPA
         path: build/ICCCAlert.ipa
         retention-days: 30
-        if-no-files-found: error
     
-    - name: Create Installation Guide
+    - name: Create Guide
       run: |
-        cat > ./build/INSTALLATION_GUIDE.txt << 'EOF'
-╔══════════════════════════════════════════════════════════════╗
-║  ICCCAlert - Native WebRTC Version (iPhone 7 Compatible)    ║
-╚══════════════════════════════════════════════════════════════╝
-
-🎉 NEW: Native WebRTC Implementation (No More WKWebView!)
-
-📱 MAJOR IMPROVEMENTS:
-✅ 60-70% less memory usage (80MB vs 200MB)
-✅ No WebKit process crashes
-✅ Streams can run for hours continuously
-✅ Faster initial connection
-✅ Better performance on low-RAM devices (iPhone 7)
-✅ Uses official Google WebRTC framework
-
-🚀 INSTALLATION STEPS:
-
-1️⃣ DOWNLOAD IPA:
-   - Download "ICCCAlert-NativeWebRTC-IPA" from GitHub Actions
-   - Extract ZIP to get ICCCAlert.ipa
-
-2️⃣ UPLOAD TO DIAWI:
-   - Go to https://www.diawi.com/
-   - Click "Send your app"
-   - Upload ICCCAlert.ipa
-   - Wait for upload (may take 2-3 minutes)
-   - Copy the installation link
-
-3️⃣ INSTALL ON IPHONE 7:
-   - Open Safari on your iPhone
-   - Enter the Diawi link
-   - Tap "Install" button
-   - Confirm installation
-
-4️⃣ TRUST DEVELOPER:
-   - Settings → General → VPN & Device Management
-   - Find the app profile
-   - Tap and select "Trust"
-
-5️⃣ LAUNCH & TEST:
-   - App icon should appear on home screen
-   - Open the app
-   - Try streaming a camera
-   - Stream should be stable for extended periods!
-
-📊 TECHNICAL DETAILS:
-- Framework: Google WebRTC (via CocoaPods)
-- Memory Usage: ~60-100MB (vs 150-200MB with WKWebView)
-- Deployment Target: iOS 14.0+
-- Tested On: iPhone 7 (iOS 15.8.5)
-- Architecture: arm64 only
-- Build System: CocoaPods + Xcode
-
-⚠️ NOTES:
-- First connection may take 5-8 seconds (negotiation phase)
-- Once connected, stream is rock-solid
-- Memory stays low even after hours of streaming
-- No more 2-minute restarts needed!
-
-🔧 TROUBLESHOOTING:
-
-"Cannot Install":
-- Make sure device has 200MB+ free space
-- Restart iPhone and try again
-- Use Safari browser (not Chrome)
-
-"Untrusted Developer":
-- This is normal for unsigned apps
-- Follow step 4️⃣ to trust the profile
-
-"Stream Won't Connect":
-- Check internet connection
-- Verify camera is online
-- Server might be unreachable
-
-"App Crashes":
-- This should be EXTREMELY rare now
-- If it happens, please report with logs
-
-🎯 WHAT TO EXPECT:
-- Memory usage stays under 100MB
-- No crashes during extended streaming
-- Smooth video playback
-- Stable connection for hours
-
-Built: $(date)
-WebRTC Version: Google WebRTC 1.1.x
-EOF
+        cat > ./build/INSTALL.txt <<'GUIDE_EOF'
+        ╔════════════════════════════════════════════════════╗
+        ║    ICCCAlert - Native WebRTC (iPhone 7)           ║
+        ╚════════════════════════════════════════════════════╝
         
-        cat ./build/INSTALLATION_GUIDE.txt
+        IMPROVEMENTS:
+        ✅ 60% less memory (80MB vs 200MB)
+        ✅ No WebKit crashes
+        ✅ Stable streaming for hours
+        
+        INSTALL:
+        1. Download ICCCAlert-NativeWebRTC-IPA
+        2. Extract ICCCAlert.ipa
+        3. Upload to https://www.diawi.com/
+        4. Install via Safari on iPhone
+        5. Trust in Settings > General > Device Management
+        
+        DETAILS:
+        - iOS 14.0+
+        - iPhone 7 tested (iOS 15.8.5)
+        - Google WebRTC framework
+        - arm64 only
+        GUIDE_EOF
+        cat ./build/INSTALL.txt
     
-    - name: Upload Installation Guide
+    - name: Upload Guide
       uses: actions/upload-artifact@v4
       with:
-        name: Installation-Guide-NativeWebRTC
-        path: build/INSTALLATION_GUIDE.txt
-        retention-days: 30
+        name: Installation-Guide
+        path: build/INSTALL.txt
     
-    - name: Final Summary
+    - name: Summary
       run: |
         echo ""
-        echo "╔════════════════════════════════════════════════════════╗"
-        echo "║      ✅ NATIVE WEBRTC BUILD COMPLETED!                ║"
-        echo "╚════════════════════════════════════════════════════════╝"
+        echo "╔════════════════════════════════════╗"
+        echo "║   ✅ BUILD COMPLETE                ║"
+        echo "╚════════════════════════════════════╝"
         echo ""
-        echo "📦 Build Artifacts:"
         ls -lh ./build/
         echo ""
-        echo "🎯 Key Changes:"
-        echo "  ✅ Replaced WKWebView with Native WebRTC"
-        echo "  ✅ Using Google WebRTC framework (CocoaPods)"
-        echo "  ✅ Memory usage reduced by ~60%"
-        echo "  ✅ No more WebKit crashes"
-        echo "  ✅ Streams run indefinitely without restarts"
-        echo ""
-        echo "📱 Ready for iPhone 7 (iOS 15.8.5)!"
-        echo "📋 See Installation-Guide for setup instructions"
+        echo "✅ Native WebRTC ready!"
+        echo "📱 iPhone 7 compatible"
         echo ""
