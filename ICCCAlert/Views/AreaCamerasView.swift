@@ -47,7 +47,7 @@ struct AreaCamerasView: View {
         )
         .fullScreenCover(item: $selectedCamera) { camera in
             // REVERTED: Use old player that works
-            FullscreenPlayerEnhanced(camera: camera)
+            FullscreenPlayerNative(camera: camera)
                 .onDisappear {
                     canOpenStream = false
                     

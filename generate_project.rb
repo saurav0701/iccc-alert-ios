@@ -86,6 +86,10 @@ target.build_configurations.each do |config|
   config.build_settings['ASSETCATALOG_COMPILER_APPICON_NAME'] = 'AppIcon'
   config.build_settings['LD_RUNPATH_SEARCH_PATHS'] = '$(inherited) @executable_path/Frameworks'
   
+  # ✅ NEW: WebRTC framework settings
+  config.build_settings['FRAMEWORK_SEARCH_PATHS'] = '$(inherited) $(PROJECT_DIR)/Frameworks'
+  config.build_settings['OTHER_LDFLAGS'] = '$(inherited) -framework WebRTC'
+  
   # No code signing for CI builds
   config.build_settings['CODE_SIGN_IDENTITY'] = ''
   config.build_settings['CODE_SIGNING_REQUIRED'] = 'NO'
@@ -101,3 +105,4 @@ puts "   - Total Swift files: #{seen_filenames.count}"
 puts "   - Target: #{project_name}"
 puts "   - Bundle ID: com.iccc.alert"
 puts "   - Deployment Target: iOS 14.0"
+puts "   - WebRTC: Configured (framework will be downloaded by CI)"
