@@ -1,0 +1,34 @@
+# Podfile for ICCCAlert
+platform :ios, '14.0'
+
+target 'ICCCAlert' do
+  use_frameworks!
+  
+  # Google WebRTC - Official iOS implementation
+  pod 'GoogleWebRTC', '~> 1.1'
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
+      config.build_settings['ENABLE_BITCODE'] = 'NO'
+      config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'arm64'
+    end
+  end
+end
+```
+
+### 2. **.gitignore** (Add these lines)
+```
+# CocoaPods
+Pods/
+*.xcworkspace
+!default.xcworkspace
+Podfile.lock
+
+# Xcode
+*.xcuserstate
+project.xcworkspace/
+xcuserdata/
+DerivedData/
