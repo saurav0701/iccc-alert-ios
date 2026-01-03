@@ -86,12 +86,14 @@ class NativeWebRTCService: NSObject, ObservableObject {
         
         self.peerConnection = pc
         
-        // Add transceivers for receiving only
-        let videoTransceiver = pc.addTransceiver(of: .video)
-        videoTransceiver?.direction = .recvOnly
+        // Add transceivers for receiving only (FIXED: Use init with direction)
+        let videoInit = RTCRtpTransceiverInit()
+        videoInit.direction = .recvOnly
+        pc.addTransceiver(of: .video, init: videoInit)
         
-        let audioTransceiver = pc.addTransceiver(of: .audio)
-        audioTransceiver?.direction = .recvOnly
+        let audioInit = RTCRtpTransceiverInit()
+        audioInit.direction = .recvOnly
+        pc.addTransceiver(of: .audio, init: audioInit)
         
         // Create and send offer
         pc.offer(for: constraints) { [weak self] sdp, error in
