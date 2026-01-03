@@ -18,7 +18,7 @@ class NativeWebRTCPlayer: NSObject, ObservableObject {
     private var remoteVideoView: RTCMTLVideoView?
     
     private let streamURL: String
-    private let cameraId: Int  // ← Changed from String to Int to match usage
+    private let cameraId: String  // Keep as String to match Camera.id
     
     private static let factory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
@@ -30,7 +30,7 @@ class NativeWebRTCPlayer: NSObject, ObservableObject {
     private var isActive = false
     
     // MARK: - Initialization
-    init(cameraId: Int, streamURL: String) {  // ← Changed from String to Int
+    init(cameraId: String, streamURL: String) {
         self.cameraId = cameraId
         self.streamURL = streamURL
         super.init()
@@ -92,13 +92,8 @@ class NativeWebRTCPlayer: NSObject, ObservableObject {
             optionalConstraints: ["DtlsSrtpKeyAgreement": "true"]
         )
         
-        // Create peer connection
-        guard let pc = Self.factory.peerConnection(with: config, constraints: constraints, delegate: self) else {
-            DebugLogger.shared.log("❌ Failed to create peer connection", emoji: "❌", color: .red)
-            errorMessage = "Failed to create peer connection"
-            isLoading = false
-            return
-        }
+        // Create peer connection - Not optional in newer WebRTC versions
+        let pc = Self.factory.peerConnection(with: config, constraints: constraints, delegate: self)
         
         self.peerConnection = pc
         
@@ -353,7 +348,7 @@ extension NativeWebRTCPlayer: RTCPeerConnectionDelegate {
 struct NativeWebRTCPlayerView: UIViewRepresentable {
     @StateObject private var player: NativeWebRTCPlayer
     
-    init(cameraId: Int, streamURL: String) {  // ← Changed from String to Int
+    init(cameraId: String, streamURL: String) {  // Keep as String
         _player = StateObject(wrappedValue: NativeWebRTCPlayer(cameraId: cameraId, streamURL: streamURL))
     }
     
