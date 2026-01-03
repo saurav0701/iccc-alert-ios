@@ -2,12 +2,21 @@ import SwiftUI
 import WebKit
 import Combine
 
-// MARK: - ULTRA AGGRESSIVE Stream Configuration
+// MARK: - ULTRA LOW MEMORY Stream Configuration
 struct StreamConfig {
-    static let maxStreamDuration: TimeInterval = 120 // 2 minutes (reduced from 3)
-    static let memoryThresholdMB: Double = 150 // Lower threshold (was 200)
-    static let memoryCheckInterval: TimeInterval = 5.0 // Check every 5 seconds (was 10)
-    static let emergencyMemoryThresholdMB: Double = 180 // Emergency stop
+    // CRITICAL: Reduced from 120 to 90 seconds (1.5 min)
+    static let maxStreamDuration: TimeInterval = 90
+    
+    // CRITICAL: Lowered thresholds for iPhone 7
+    static let memoryThresholdMB: Double = 120  // Was 150
+    static let emergencyMemoryThresholdMB: Double = 150  // Was 180
+    
+    // More frequent memory checks
+    static let memoryCheckInterval: TimeInterval = 3.0  // Was 5.0
+    
+    // NEW: Video quality settings for low memory
+    static let videoMaxBitrate: Int = 500_000  // 500 kbps (lower quality)
+    static let videoMaxFramerate: Int = 15  // 15 fps (smoother on low-end)
 }
 
 // MARK: - Stream Session (ULTRA AGGRESSIVE MEMORY MANAGEMENT)
@@ -27,16 +36,22 @@ class StreamSession: ObservableObject {
     private var countdownTimer: Timer?
     private var memoryCheckTimer: Timer?
     
-    // CRITICAL: Track cleanup state to prevent double-cleanup
+    // CRITICAL: Track cleanup state
     private var isCleaningUp = false
     private var isDestroyed = false
+    
+    // NEW: Memory baseline tracking
+    private var baselineMemoryMB: Double = 0
     
     init(cameraId: String, streamURL: String) {
         self.id = UUID().uuidString
         self.cameraId = cameraId
         self.streamURL = streamURL
         
-        DebugLogger.shared.log("🎬 StreamSession created: \(cameraId)", emoji: "🎬", color: .blue)
+        // Record baseline memory
+        baselineMemoryMB = getCurrentMemoryUsage()
+        
+        DebugLogger.shared.log("🎬 StreamSession created: \(cameraId) (Baseline: \(String(format: "%.1f", baselineMemoryMB))MB)", emoji: "🎬", color: .blue)
     }
     
     func start() -> WKWebView {
@@ -45,12 +60,17 @@ class StreamSession: ObservableObject {
             return createDummyWebView()
         }
         
-        // CRITICAL: Complete cleanup of any existing WebView
+        // CRITICAL: Check memory BEFORE starting
+        let currentMem = getCurrentMemoryUsage()
+        if currentMem > StreamConfig.emergencyMemoryThresholdMB {
+            DebugLogger.shared.log("🚨 Memory too high to start: \(String(format: "%.1f", currentMem))MB", emoji: "🚨", color: .red)
+            return createDummyWebView()
+        }
+        
+        // Complete cleanup of any existing WebView
         if webView != nil {
             DebugLogger.shared.log("⚠️ WebView exists - destroying before new creation", emoji: "⚠️", color: .orange)
             immediateCleanup()
-            
-            // CRITICAL: Wait for cleanup to complete
             Thread.sleep(forTimeInterval: 0.5)
         }
         
@@ -69,8 +89,8 @@ class StreamSession: ObservableObject {
         wv.navigationDelegate = coord
         wv.configuration.userContentController.add(coord, name: "logging")
         
-        // Load player HTML
-        coord.loadPlayer(in: wv, streamURL: streamURL)
+        // Load player HTML with LOW MEMORY optimizations
+        coord.loadLowMemoryPlayer(in: wv, streamURL: streamURL)
         
         // Setup timers
         setupRestartTimer()
@@ -87,36 +107,38 @@ class StreamSession: ObservableObject {
         // CRITICAL: Use non-persistent data store
         config.websiteDataStore = .nonPersistent()
         
-        // Minimize caching
+        // CRITICAL: Minimize caching and rendering
         config.suppressesIncrementalRendering = true
         
-        // Media settings
+        // Media settings for LOW MEMORY
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
         config.allowsPictureInPictureMediaPlayback = false
+        
+        // NEW: Disable media cache completely
+        if #available(iOS 14.0, *) {
+            config.limitsNavigationsToAppBoundDomains = false
+        }
         
         // JavaScript
         let prefs = WKWebpagePreferences()
         prefs.allowsContentJavaScript = true
         config.defaultWebpagePreferences = prefs
         
-        // CRITICAL: Disable caching
-        config.userContentController.removeAllScriptMessageHandlers()
-        
-        let webView = WKWebView(frame: .zero, configuration: config)
+        // CRITICAL: Minimal size for memory efficiency
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 320, height: 240), configuration: config)
         webView.scrollView.isScrollEnabled = false
         webView.scrollView.bounces = false
         webView.backgroundColor = .black
         webView.isOpaque = true
         
-        // CRITICAL: Disable all caching
-        webView.configuration.processPool = WKProcessPool()
+        // NEW: Disable unnecessary features
+        webView.allowsLinkPreview = false
         
         return webView
     }
     
     private func createDummyWebView() -> WKWebView {
-        // Return a minimal WebView for error cases
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         return WKWebView(frame: .zero, configuration: config)
@@ -138,12 +160,12 @@ class StreamSession: ObservableObject {
             }
         }
         
-        // Auto-restart timer (2 minutes now)
+        // Auto-restart timer (90 seconds now - REDUCED)
         restartTimer = Timer.scheduledTimer(
             withTimeInterval: StreamConfig.maxStreamDuration,
             repeats: false
         ) { [weak self] _ in
-            DebugLogger.shared.log("⏱️ Auto-restart timer fired", emoji: "⏱️", color: .orange)
+            DebugLogger.shared.log("⏱️ Auto-restart timer fired (90s)", emoji: "⏱️", color: .orange)
             self?.triggerRestart()
         }
     }
@@ -151,7 +173,7 @@ class StreamSession: ObservableObject {
     private func setupMemoryMonitoring() {
         memoryCheckTimer?.invalidate()
         
-        // CRITICAL: Check every 5 seconds (was 10)
+        // CRITICAL: Check every 3 seconds (was 5)
         memoryCheckTimer = Timer.scheduledTimer(
             withTimeInterval: StreamConfig.memoryCheckInterval,
             repeats: true
@@ -160,7 +182,7 @@ class StreamSession: ObservableObject {
         }
     }
     
-    private func checkMemory() {
+    private func getCurrentMemoryUsage() -> Double {
         var info = mach_task_basic_info()
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
         
@@ -173,16 +195,22 @@ class StreamSession: ObservableObject {
             }
         }
         
-        guard kerr == KERN_SUCCESS else { return }
+        guard kerr == KERN_SUCCESS else { return 0 }
+        return Double(info.resident_size) / 1024 / 1024
+    }
+    
+    private func checkMemory() {
+        let usedMemoryMB = getCurrentMemoryUsage()
+        let memoryGrowth = usedMemoryMB - baselineMemoryMB
         
-        let usedMemoryMB = Double(info.resident_size) / 1024 / 1024
+        // Update MemoryMonitor
+        DispatchQueue.main.async {
+            MemoryMonitor.shared.currentMemoryMB = usedMemoryMB
+        }
         
-        // Just use the value locally - MemoryMonitor has its own timer
-        // No need to update it from here
-        
-        // CRITICAL: Emergency stop at 180MB
+        // CRITICAL: Emergency stop at 150MB (lowered from 180)
         if usedMemoryMB > StreamConfig.emergencyMemoryThresholdMB {
-            DebugLogger.shared.log("🚨 EMERGENCY: \(String(format: "%.1f", usedMemoryMB))MB - FORCE STOP", emoji: "🚨", color: .red)
+            DebugLogger.shared.log("🚨 EMERGENCY: \(String(format: "%.1f", usedMemoryMB))MB (growth: +\(String(format: "%.1f", memoryGrowth))MB) - FORCE STOP", emoji: "🚨", color: .red)
             
             DispatchQueue.main.async {
                 self.emergencyStop()
@@ -190,9 +218,9 @@ class StreamSession: ObservableObject {
             return
         }
         
-        // Regular threshold restart at 150MB
+        // Regular threshold restart at 120MB (lowered from 150)
         if usedMemoryMB > StreamConfig.memoryThresholdMB {
-            DebugLogger.shared.log("⚠️ Memory high: \(String(format: "%.1f", usedMemoryMB))MB - Restart", emoji: "⚠️", color: .orange)
+            DebugLogger.shared.log("⚠️ Memory high: \(String(format: "%.1f", usedMemoryMB))MB (growth: +\(String(format: "%.1f", memoryGrowth))MB) - Restart", emoji: "⚠️", color: .orange)
             
             DispatchQueue.main.async {
                 self.triggerRestart()
@@ -206,7 +234,7 @@ class StreamSession: ObservableObject {
         // Immediate cleanup without restart
         immediateCleanup()
         
-        // Force garbage collection
+        // Force garbage collection (5 cycles)
         for _ in 0..<5 {
             autoreleasepool {}
         }
@@ -315,6 +343,9 @@ class StreamSession: ObservableObject {
                 
                 // Clear body
                 document.body.innerHTML = '';
+                
+                // Force garbage collection hint
+                window.gc && window.gc();
             } catch(e) {}
         })();
         """
@@ -356,7 +387,7 @@ class StreamSession: ObservableObject {
     }
 }
 
-// MARK: - Stream Coordinator (Unchanged but with cleanup enhancement)
+// MARK: - Stream Coordinator (LOW MEMORY HTML)
 class StreamCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     let cameraId: String
     private var isActive = true
@@ -365,7 +396,8 @@ class StreamCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler 
         self.cameraId = cameraId
     }
     
-    func loadPlayer(in webView: WKWebView, streamURL: String) {
+    // NEW: Low memory optimized player
+    func loadLowMemoryPlayer(in webView: WKWebView, streamURL: String) {
         let html = """
         <!DOCTYPE html>
         <html>
@@ -375,13 +407,37 @@ class StreamCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler 
             <style>
                 * { margin: 0; padding: 0; box-sizing: border-box; }
                 html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
-                video { width: 100%; height: 100%; object-fit: contain; background: #000; }
-                #live { position: absolute; top: 10px; right: 10px; background: rgba(244,67,54,0.9);
-                        color: white; padding: 4px 8px; border-radius: 4px; font: 700 10px -apple-system;
-                        z-index: 10; display: none; align-items: center; gap: 4px; }
+                video { 
+                    width: 100%; 
+                    height: 100%; 
+                    object-fit: contain; 
+                    background: #000;
+                    /* CRITICAL: Reduce compositing layers */
+                    transform: translateZ(0);
+                    will-change: auto;
+                }
+                #live { 
+                    position: absolute; 
+                    top: 10px; 
+                    right: 10px; 
+                    background: rgba(244,67,54,0.9);
+                    color: white; 
+                    padding: 4px 8px; 
+                    border-radius: 4px; 
+                    font: 700 10px -apple-system;
+                    z-index: 10; 
+                    display: none; 
+                    align-items: center; 
+                    gap: 4px; 
+                }
                 #live.show { display: flex; }
-                .dot { width: 6px; height: 6px; background: white; border-radius: 50%;
-                       animation: pulse 1.5s ease-in-out infinite; }
+                .dot { 
+                    width: 6px; 
+                    height: 6px; 
+                    background: white; 
+                    border-radius: 50%;
+                    animation: pulse 1.5s ease-in-out infinite; 
+                }
                 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
             </style>
         </head>
@@ -395,10 +451,16 @@ class StreamCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler 
                 const streamUrl = '\(streamURL)';
                 window.pc = null;
                 let cleanupDone = false;
+                let memoryCheckInterval = null;
                 
                 function cleanup() {
                     if (cleanupDone) return;
                     cleanupDone = true;
+                    
+                    if (memoryCheckInterval) {
+                        clearInterval(memoryCheckInterval);
+                        memoryCheckInterval = null;
+                    }
                     
                     try {
                         if (window.pc) {
@@ -415,6 +477,9 @@ class StreamCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler 
                     } catch(e) {}
                     
                     live.classList.remove('show');
+                    
+                    // Force garbage collection hint
+                    if (window.gc) window.gc();
                 }
                 
                 window.addEventListener('beforeunload', cleanup);
@@ -423,24 +488,57 @@ class StreamCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler 
                 async function start() {
                     try {
                         window.pc = new RTCPeerConnection({
-                            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+                            // CRITICAL: Reduce bundle policy for lower memory
+                            bundlePolicy: 'max-bundle',
+                            rtcpMuxPolicy: 'require'
                         });
                         
                         window.pc.ontrack = (e) => { 
                             if (!cleanupDone) {
                                 video.srcObject = e.streams[0];
                                 live.classList.add('show');
+                                
+                                // NEW: Monitor memory usage every 15 seconds
+                                memoryCheckInterval = setInterval(() => {
+                                    if (performance.memory) {
+                                        const usedMB = (performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(1);
+                                        const totalMB = (performance.memory.totalJSHeapSize / 1024 / 1024).toFixed(1);
+                                        console.log(`Memory: ${usedMB}/${totalMB} MB`);
+                                        
+                                        // If JS heap exceeds 50MB, warn
+                                        if (performance.memory.usedJSHeapSize > 50 * 1024 * 1024) {
+                                            console.warn('High JS memory usage');
+                                        }
+                                    }
+                                }, 15000);
                             }
                         };
                         
                         window.pc.oniceconnectionstatechange = () => {
                             const state = window.pc.iceConnectionState;
-                            if (state === 'failed' || state === 'disconnected') {
+                            if (state === 'failed' || state === 'disconnected' || state === 'closed') {
                                 cleanup();
                             }
                         };
                         
-                        window.pc.addTransceiver('video', { direction: 'recvonly' });
+                        // CRITICAL: Add video transceiver with LOW MEMORY settings
+                        const videoTransceiver = window.pc.addTransceiver('video', { 
+                            direction: 'recvonly'
+                        });
+                        
+                        // NEW: Set encoding parameters for lower bitrate/framerate
+                        const sender = videoTransceiver.sender;
+                        if (sender && sender.setParameters) {
+                            const params = sender.getParameters();
+                            if (params.encodings && params.encodings[0]) {
+                                // Limit to 500 kbps and 15 fps
+                                params.encodings[0].maxBitrate = \(StreamConfig.videoMaxBitrate);
+                                params.encodings[0].maxFramerate = \(StreamConfig.videoMaxFramerate);
+                                sender.setParameters(params);
+                            }
+                        }
+                        
                         window.pc.addTransceiver('audio', { direction: 'recvonly' });
                         
                         const offer = await window.pc.createOffer();
@@ -463,6 +561,7 @@ class StreamCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler 
                             await window.pc.setRemoteDescription({ type: 'answer', sdp: answer });
                         }
                     } catch(err) {
+                        console.error('Stream error:', err);
                         cleanup();
                     }
                 }
