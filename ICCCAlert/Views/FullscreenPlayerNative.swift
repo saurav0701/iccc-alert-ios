@@ -13,8 +13,7 @@ struct FullscreenPlayerNative: View {
     
     init(camera: Camera) {
         self.camera = camera
-        
-        // Initialize WebRTC service
+
         let streamURL = camera.webrtcStreamURL ?? ""
         _webRTCService = StateObject(wrappedValue: NativeWebRTCService(
             streamURL: streamURL,
