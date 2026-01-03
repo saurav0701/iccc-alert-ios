@@ -46,11 +46,12 @@ struct AreaCamerasView: View {
             }
         )
         .fullScreenCover(item: $selectedCamera) { camera in
-            FullscreenPlayerNative(camera: camera)
+            // REVERTED: Use old player that works
+            FullscreenPlayerEnhanced(camera: camera)
                 .onDisappear {
                     canOpenStream = false
                     
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
                         self.canOpenStream = true
                         DebugLogger.shared.log("✅ Ready for next stream", emoji: "✅", color: .green)
                     }
@@ -138,12 +139,12 @@ struct AreaCamerasView: View {
                     .font(.system(size: 14))
                 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Tap thumbnail to load preview")
+                    Text("Streams auto-refresh every 2 minutes")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .fontWeight(.medium)
                     
-                    Text("Wait for preview before playing stream (5 second interval)")
+                    Text("This prevents memory buildup on low-RAM devices")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
@@ -182,23 +183,20 @@ struct AreaCamerasView: View {
         }
         
         if !canOpenStream {
-            streamBlockMessage = "Please wait a moment before opening another stream. This prevents crashes on low memory devices."
+            streamBlockMessage = "Please wait before opening another stream."
             showStreamBlockedAlert = true
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
             return
         }
         
         if thumbnailCache.isLoading(for: camera.id) {
-            streamBlockMessage = "Thumbnail capture in progress. Wait a few seconds before playing stream."
+            streamBlockMessage = "Thumbnail capture in progress. Wait a few seconds."
             showStreamBlockedAlert = true
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
             return
         }
         
         if !thumbnailCache.loadingCameras.isEmpty {
-            let loadingCameraIds = thumbnailCache.loadingCameras.joined(separator: ", ")
-            DebugLogger.shared.log("⚠️ Thumbnail capture active: \(loadingCameraIds)", emoji: "⚠️", color: .orange)
-            
             streamBlockMessage = "Another camera thumbnail is loading. Please wait."
             showStreamBlockedAlert = true
             UINotificationFeedbackGenerator().notificationOccurred(.warning)

@@ -19,7 +19,6 @@ views_group = main_group.new_group('Views')
 services_group = main_group.new_group('Services')
 viewmodels_group = main_group.new_group('ViewModels')
 utils_group = main_group.new_group('Utils')
-frameworks_group = project.main_group.new_group('Frameworks')
 
 puts "📁 Adding Swift files..."
 
@@ -35,12 +34,13 @@ swift_files.each do |file|
   relative_path = file.sub("#{project_name}/", "")
   group_name = File.dirname(relative_path)
   
-  # Check for duplicates
+  # Check for duplicates - prefer ViewModels over Models for ViewModels
   if seen_filenames[filename]
     puts "⚠️  Duplicate file detected: #{filename}"
     puts "   Already added: #{seen_filenames[filename]}"
     puts "   Skipping: #{file}"
     
+    # Skip if it's in Models and we already have it in ViewModels
     if group_name == 'Models' && seen_filenames[filename].include?('ViewModels')
       puts "   → Keeping ViewModels version"
       next
@@ -86,21 +86,11 @@ target.build_configurations.each do |config|
   config.build_settings['ASSETCATALOG_COMPILER_APPICON_NAME'] = 'AppIcon'
   config.build_settings['LD_RUNPATH_SEARCH_PATHS'] = '$(inherited) @executable_path/Frameworks'
   
-  # Framework search paths (will be populated when framework is added)
-  config.build_settings['FRAMEWORK_SEARCH_PATHS'] = '$(inherited) $(PROJECT_DIR)/Frameworks'
-  
-  # Enable modules for framework support
-  config.build_settings['CLANG_ENABLE_MODULES'] = 'YES'
-  config.build_settings['SWIFT_INCLUDE_PATHS'] = '$(inherited)'
-  
   # No code signing for CI builds
   config.build_settings['CODE_SIGN_IDENTITY'] = ''
   config.build_settings['CODE_SIGNING_REQUIRED'] = 'NO'
   config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
   config.build_settings['ENABLE_BITCODE'] = 'NO'
-  
-  # Embed frameworks
-  config.build_settings['ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES'] = 'YES'
 end
 
 # Save project
@@ -111,6 +101,3 @@ puts "   - Total Swift files: #{seen_filenames.count}"
 puts "   - Target: #{project_name}"
 puts "   - Bundle ID: com.iccc.alert"
 puts "   - Deployment Target: iOS 14.0"
-puts "   - Framework support: Enabled"
-puts ""
-puts "🔧 Ready for WebRTC framework integration"
