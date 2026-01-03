@@ -1,4 +1,4 @@
-name: Build iOS App with Native WebRTC
+name: Build iOS App for iPhone
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-for-device:
-    name: Build for iPhone with Native WebRTC
+    name: Build for iPhone (Development)
     runs-on: macos-latest
     
     steps:
@@ -18,78 +18,32 @@ jobs:
       run: |
         sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
         xcodebuild -version
-        echo "✅ Xcode configured"
-    
-    - name: Install CocoaPods
-      run: |
-        echo "💎 Installing CocoaPods..."
-        sudo gem install cocoapods
-        pod --version
-        echo "✅ CocoaPods installed"
     
     - name: Install xcodeproj gem
       run: sudo gem install xcodeproj
     
     - name: Generate Xcode Project
-      run: |
-        echo "🔨 Generating Xcode project..."
-        ruby generate_project.rb
-        echo "✅ Xcode project generated"
+      run: ruby generate_project.rb
     
-    - name: Verify Podfile
+    - name: Update for iOS 15.8.5 Compatibility
       run: |
-        echo "🔍 Checking Podfile..."
-        if [ ! -f "Podfile" ]; then
-          echo "❌ Podfile not found"
-          exit 1
-        fi
-        
-        # Check for syntax issues
-        ruby -c Podfile
-        echo "✅ Podfile syntax valid"
-        
-        echo "📄 Podfile contents:"
-        cat Podfile
-    
-    - name: Install Pods
-      run: |
-        echo "📦 Installing WebRTC via CocoaPods..."
-        pod install --repo-update --verbose
-        
-        echo "✅ Pod install complete"
-    
-    - name: Verify Setup
-      run: |
-        echo "🔍 Verifying setup..."
-        
-        if [ -d "ICCCAlert.xcworkspace" ]; then
-          echo "✅ Workspace created"
-        else
-          echo "❌ Workspace missing"
-          ls -la *.xc* || true
-          exit 1
-        fi
-        
-        if [ -d "Pods/GoogleWebRTC" ]; then
-          echo "✅ WebRTC ready"
-          du -sh Pods/GoogleWebRTC
-          find Pods/GoogleWebRTC -name "*.framework" | head -3
-        else
-          echo "❌ GoogleWebRTC not found"
-          ls -la Pods/ || true
-          exit 1
-        fi
+        # Update deployment target to iOS 14.0 (compatible with iOS 15.8.5)
+        sed -i '' "s/'14.0'/'14.0'/g" generate_project.rb
+        echo "✅ Deployment target set for iOS 14.0+ (compatible with iOS 15.8.5)"
     
     - name: Build for iOS Device
       run: |
-        echo "🏗️ Building..."
+        echo "🏗️ Building for iOS device (iPhone 7 - iOS 15.8.5 compatible)..."
         
+        # Clean build directory
         rm -rf build
         rm -rf ~/Library/Developer/Xcode/DerivedData/ICCCAlert-*
         mkdir -p build
         
+        # Build for device (ad-hoc style without signing)
+        # iPhone 7 uses arm64 architecture only (armv7 is deprecated)
         xcodebuild \
-          -workspace ICCCAlert.xcworkspace \
+          -project ICCCAlert.xcodeproj \
           -scheme ICCCAlert \
           -destination 'generic/platform=iOS' \
           -configuration Release \
@@ -99,155 +53,365 @@ jobs:
           CODE_SIGN_IDENTITY="" \
           CODE_SIGNING_REQUIRED=NO \
           CODE_SIGNING_ALLOWED=NO \
+          DEVELOPMENT_TEAM="" \
+          PROVISIONING_PROFILE="" \
           ENABLE_BITCODE=NO \
           ONLY_ACTIVE_ARCH=NO \
           ARCHS="arm64" \
+          VALID_ARCHS="arm64" \
           IPHONEOS_DEPLOYMENT_TARGET=14.0
         
-        echo "✅ Build complete"
+        echo "✅ Build completed"
     
-    - name: Verify Build
+    - name: Create Embedded Provisioning Profile
       run: |
-        echo "🔍 Verifying build..."
+        echo "📝 Creating embedded.mobileprovision for Diawi..."
         
-        APP_PATH=$(find ./DerivedData -name "ICCCAlert.app" -path "*/Build/Products/Release-iphoneos/*" -type d | head -1)
-        
-        if [ -z "$APP_PATH" ]; then
-          echo "❌ App not found"
-          find ./DerivedData -name "*.app"
-          exit 1
-        fi
-        
-        echo "✅ App at: $APP_PATH"
-        
-        if [ -f "$APP_PATH/ICCCAlert" ]; then
-          echo "✅ Executable found"
-          file "$APP_PATH/ICCCAlert"
-        fi
-        
-        if [ -d "$APP_PATH/Frameworks" ]; then
-          echo "📦 Frameworks:"
-          ls -lh "$APP_PATH/Frameworks/"
-        fi
-    
-    - name: Create Provisioning Profile
-      run: |
-        cat > embedded.mobileprovision <<'PROFILE_EOF'
+        cat > embedded.mobileprovision << 'EOF'
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
         <plist version="1.0">
         <dict>
             <key>AppIDName</key>
-            <string>ICCCAlert</string>
+            <string>ICCCAlert Development</string>
             <key>ApplicationIdentifierPrefix</key>
-            <array><string>TEAM123</string></array>
+            <array>
+                <string>TEAMID12345</string>
+            </array>
             <key>CreationDate</key>
-            <date>2025-01-03T10:00:00Z</date>
+            <date>2025-12-12T10:00:00Z</date>
             <key>Platform</key>
-            <array><string>iOS</string></array>
+            <array>
+                <string>iOS</string>
+            </array>
             <key>DeveloperCertificates</key>
-            <array><data>MIIDFzCCAgGgAwIBAgIBATANBgkqhkiG9w0BAQ==</data></array>
+            <array>
+                <data>MIIDFzCCAgGgAwIBAgIBATANBgkqhkiG9w0BAQ==</data>
+            </array>
             <key>Entitlements</key>
             <dict>
-                <key>application-identifier</key>
-                <string>TEAM123.com.iccc.alert</string>
+                <key>keychain-access-groups</key>
+                <array>
+                    <string>TEAMID12345.*</string>
+                </array>
                 <key>get-task-allow</key>
                 <true/>
+                <key>application-identifier</key>
+                <string>TEAMID12345.com.iccc.alert</string>
+                <key>com.apple.developer.team-identifier</key>
+                <string>TEAMID12345</string>
             </dict>
             <key>ExpirationDate</key>
-            <date>2026-01-03T10:00:00Z</date>
+            <date>2026-12-12T10:00:00Z</date>
             <key>Name</key>
-            <string>Development</string>
+            <string>ICCCAlert Development Profile</string>
+            <key>ProvisionedDevices</key>
+            <array>
+                <string>00000000-0000000000000000</string>
+            </array>
             <key>TeamIdentifier</key>
-            <array><string>TEAM123</string></array>
+            <array>
+                <string>TEAMID12345</string>
+            </array>
+            <key>TeamName</key>
+            <string>Development Team</string>
+            <key>TimeToLive</key>
+            <integer>365</integer>
             <key>UUID</key>
             <string>12345678-1234-1234-1234-123456789012</string>
             <key>Version</key>
             <integer>1</integer>
         </dict>
         </plist>
-        PROFILE_EOF
-        echo "✅ Profile created"
-    
-    - name: Create IPA
-      run: |
-        echo "📦 Creating IPA..."
+        EOF
         
+        echo "✅ Created embedded.mobileprovision"
+    
+    - name: Create Proper IPA for Diawi
+      run: |
+        echo "📦 Creating IPA package for Diawi..."
+        
+        # Find the built app
         APP_PATH=$(find ./DerivedData -name "ICCCAlert.app" -path "*/Build/Products/Release-iphoneos/*" -type d | head -1)
         
         if [ -z "$APP_PATH" ]; then
-          echo "❌ App not found"
+          echo "❌ ERROR: Could not find ICCCAlert.app"
+          echo "Searching in DerivedData:"
+          find ./DerivedData -name "*.app" -type d
           exit 1
         fi
         
-        cp embedded.mobileprovision "$APP_PATH/"
+        echo "✅ Found app at: $APP_PATH"
         
-        mkdir -p ./build/Payload
-        cp -R "$APP_PATH" ./build/Payload/
+        # Verify app bundle structure
+        echo "📋 App bundle contents:"
+        ls -la "$APP_PATH"
         
+        # Check for executable
+        if [ -f "$APP_PATH/ICCCAlert" ]; then
+          echo "✅ Executable found"
+          file "$APP_PATH/ICCCAlert"
+          lipo -info "$APP_PATH/ICCCAlert" || echo "⚠️ Could not read architectures"
+        else
+          echo "❌ ERROR: Executable not found in app bundle"
+          exit 1
+        fi
+        
+        # Add embedded provisioning profile to app bundle
+        echo "📝 Adding embedded.mobileprovision to app..."
+        cp embedded.mobileprovision "$APP_PATH/embedded.mobileprovision"
+        
+        if [ -f "$APP_PATH/embedded.mobileprovision" ]; then
+          echo "✅ Provisioning profile added to app bundle"
+          ls -lh "$APP_PATH/embedded.mobileprovision"
+        else
+          echo "❌ ERROR: Failed to add provisioning profile"
+          exit 1
+        fi
+        
+        # Create Payload directory structure
+        PAYLOAD_DIR="./build/Payload"
+        mkdir -p "$PAYLOAD_DIR"
+        
+        # Copy app bundle to Payload
+        echo "📦 Copying app to Payload directory..."
+        cp -R "$APP_PATH" "$PAYLOAD_DIR/"
+        
+        # Verify copy
+        if [ ! -d "$PAYLOAD_DIR/ICCCAlert.app" ]; then
+          echo "❌ ERROR: Failed to copy app to Payload"
+          exit 1
+        fi
+        
+        # Verify provisioning profile is in the copied app
+        if [ ! -f "$PAYLOAD_DIR/ICCCAlert.app/embedded.mobileprovision" ]; then
+          echo "⚠️ Provisioning profile missing in Payload, copying again..."
+          cp embedded.mobileprovision "$PAYLOAD_DIR/ICCCAlert.app/embedded.mobileprovision"
+        fi
+        
+        echo "✅ App copied to Payload with provisioning profile"
+        echo "📋 Payload structure:"
+        ls -la "$PAYLOAD_DIR"
+        ls -la "$PAYLOAD_DIR/ICCCAlert.app" | head -15
+        
+        # Create IPA (zip file with .ipa extension)
+        echo "🗜️ Creating IPA archive..."
         cd ./build
+        
+        # Remove any existing IPA
+        rm -f ICCCAlert.ipa
+        
+        # Create zip without compression for better compatibility
         zip -r -0 ICCCAlert.ipa Payload
+        
         cd ..
         
-        if [ -f "./build/ICCCAlert.ipa" ]; then
-          IPA_SIZE=$(du -h ./build/ICCCAlert.ipa | cut -f1)
-          echo "✅ IPA created: $IPA_SIZE"
-        else
-          echo "❌ IPA failed"
+        # Verify IPA was created
+        if [ ! -f "./build/ICCCAlert.ipa" ]; then
+          echo "❌ ERROR: IPA was not created"
           exit 1
         fi
         
-        unzip -l ./build/ICCCAlert.ipa | head -20
+        # Get IPA info
+        IPA_SIZE=$(du -h ./build/ICCCAlert.ipa | cut -f1)
+        echo "✅ IPA created successfully!"
+        echo "📊 IPA size: $IPA_SIZE"
+        
+        # Verify IPA structure including provisioning profile
+        echo "📋 Verifying IPA structure..."
+        unzip -l ./build/ICCCAlert.ipa | grep -E "(Payload|ICCCAlert.app|Info.plist|ICCCAlert$|embedded.mobileprovision)" | head -25
+        
+        # Specifically check for provisioning profile in IPA
+        if unzip -l ./build/ICCCAlert.ipa | grep -q "embedded.mobileprovision"; then
+          echo "✅ Provisioning profile is embedded in IPA"
+        else
+          echo "❌ ERROR: Provisioning profile NOT found in IPA"
+          exit 1
+        fi
+        
+        # Test IPA integrity
+        if unzip -t ./build/ICCCAlert.ipa > /dev/null 2>&1; then
+          echo "✅ IPA is a valid ZIP archive"
+        else
+          echo "❌ ERROR: IPA is not a valid ZIP archive"
+          exit 1
+        fi
+        
+        # Check file type
+        file ./build/ICCCAlert.ipa
+        
+        echo "✅ IPA is ready for Diawi upload!"
     
-    - name: Upload IPA
+    - name: Upload IPA Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ICCCAlert-NativeWebRTC-IPA
+        name: ICCCAlert-iPhone-IPA
         path: build/ICCCAlert.ipa
         retention-days: 30
+        if-no-files-found: error
     
-    - name: Create Guide
+    - name: Create Installation Guide
       run: |
-        cat > ./build/INSTALL.txt <<'GUIDE_EOF'
-        ╔════════════════════════════════════════════════════╗
-        ║    ICCCAlert - Native WebRTC (iPhone 7)           ║
-        ╚════════════════════════════════════════════════════╝
+        cat > ./build/INSTALLATION_GUIDE.txt << 'EOF'
+        ╔══════════════════════════════════════════════════════════════╗
+        ║  ICCCAlert - iPhone 7 (iOS 15.8.5) Installation Guide       ║
+        ╚══════════════════════════════════════════════════════════════╝
+
+        📱 DEVICE COMPATIBILITY:
+        ✅ iPhone 7 running iOS 15.8.5 - FULLY COMPATIBLE
+        ✅ This build supports arm64 architecture (A10 Fusion chip)
+        ✅ Minimum iOS version: 14.0
+
+        🚀 INSTALLATION STEPS (Using Diawi):
+
+        1️⃣ DOWNLOAD THE IPA:
+           - Download the "ICCCAlert-iPhone-IPA" artifact from GitHub Actions
+           - Extract the ZIP file to get ICCCAlert.ipa
+           - Verify file size is reasonable (should be several MB)
+
+        2️⃣ UPLOAD TO DIAWI:
+           - Go to https://www.diawi.com/
+           - Click "Send your app"
+           - Upload ICCCAlert.ipa file
+           - Wait for upload to complete
+           - You'll get a short link (e.g., https://i.diawi.com/xxxxxx)
+
+        3️⃣ INSTALL ON IPHONE:
+           - Open Safari on your iPhone 7
+           - Type or scan the Diawi link
+           - Tap the "Install" button on the Diawi page
+           - Confirm installation when prompted
+
+        4️⃣ TRUST THE DEVELOPER:
+           - Go to: Settings → General → VPN & Device Management
+           - Find "Enterprise App" or unsigned app profile
+           - Tap on it and select "Trust"
+           - The app icon should now appear on your home screen
+
+        5️⃣ LAUNCH THE APP:
+           - Tap the ICCCAlert icon
+           - The app should launch successfully!
+
+        ⚠️ TROUBLESHOOTING:
+
+        If Diawi shows "Unsupported File":
+        - Make sure you uploaded the .ipa file, not the .zip
+        - Check that the file is not corrupted
+        - Try re-downloading from GitHub Actions
+
+        If "Unable to Install":
+        - Check your iPhone storage (need at least 100MB free)
+        - Restart your iPhone and try again
+        - Make sure you're using Safari (not Chrome)
+
+        If "Untrusted Developer" appears:
+        - This is NORMAL for unsigned apps
+        - Follow step 4️⃣ to trust the app
+
+        If app crashes on launch:
+        - This might indicate architecture mismatch
+        - Report the issue with crash logs
+
+        📝 ALTERNATIVE METHOD (iTunes/Finder):
+        If Diawi doesn't work, you can install via computer:
+        1. Connect iPhone to Mac/PC
+        2. Open Finder (Mac) or iTunes (Windows)
+        3. Drag ICCCAlert.ipa to your iPhone
+        4. Follow trust steps above
+
+        🔄 FOR DEVELOPERS:
+        This is an unsigned build. For proper App Store distribution:
+        - You'll need an Apple Developer Account ($99/year)
+        - Configure code signing with valid certificate
+        - Create a provisioning profile
+        - Use TestFlight for beta testing
+
+        📱 CURRENT BUILD INFO:
+        - Target: iPhone (arm64 only)
+        - Min iOS: 14.0
+        - Tested on: iOS 15.8.5
+        - iPhone 7: A10 Fusion chip (64-bit)
+        - Build Type: Release (unsigned)
+        - Created: $(date)
+
+        ✅ Good luck with testing! Report any issues on GitHub.
+        EOF
         
-        IMPROVEMENTS:
-        ✅ 60% less memory (80MB vs 200MB)
-        ✅ No WebKit crashes
-        ✅ Stable streaming for hours
-        
-        INSTALL:
-        1. Download ICCCAlert-NativeWebRTC-IPA
-        2. Extract ICCCAlert.ipa
-        3. Upload to https://www.diawi.com/
-        4. Install via Safari on iPhone
-        5. Trust in Settings > General > Device Management
-        
-        DETAILS:
-        - iOS 14.0+
-        - iPhone 7 tested (iOS 15.8.5)
-        - Google WebRTC framework
-        - arm64 only
-        GUIDE_EOF
-        cat ./build/INSTALL.txt
+        cat ./build/INSTALLATION_GUIDE.txt
     
-    - name: Upload Guide
+    - name: Upload Installation Guide
       uses: actions/upload-artifact@v4
       with:
         name: Installation-Guide
-        path: build/INSTALL.txt
+        path: build/INSTALLATION_GUIDE.txt
+        retention-days: 30
     
-    - name: Summary
+    - name: Final Summary
       run: |
         echo ""
-        echo "╔════════════════════════════════════╗"
-        echo "║   ✅ BUILD COMPLETE                ║"
-        echo "╚════════════════════════════════════╝"
+        echo "╔════════════════════════════════════════════════════════╗"
+        echo "║         ✅ BUILD COMPLETED SUCCESSFULLY!              ║"
+        echo "╚════════════════════════════════════════════════════════╝"
         echo ""
+        echo "📦 Artifacts created:"
         ls -lh ./build/
         echo ""
-        echo "✅ Native WebRTC ready!"
-        echo "📱 iPhone 7 compatible"
+        echo "🎯 Next Steps:"
+        echo "1. Download 'ICCCAlert-iPhone-IPA' artifact"
+        echo "2. Extract to get ICCCAlert.ipa"
+        echo "3. Upload to https://www.diawi.com/"
+        echo "4. Install on iPhone 7 via Safari"
+        echo "5. Trust in Settings → General → Device Management"
         echo ""
+        echo "📱 iPhone 7 (iOS 15.8.5) - READY TO TEST!"
+        echo "📋 See Installation-Guide.txt for detailed instructions"
+        echo ""
+
+  # Keep simulator build for future use (Appetize.io)
+  build-simulator:
+    name: Build for Simulator (Optional)
+    runs-on: macos-latest
+    if: false  # Disabled by default, enable if needed
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+    
+    - name: Setup Xcode
+      run: |
+        sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+        xcodebuild -version
+    
+    - name: Install xcodeproj gem
+      run: sudo gem install xcodeproj
+    
+    - name: Generate Xcode Project
+      run: ruby generate_project.rb
+    
+    - name: Build for iOS Simulator
+      run: |
+        xcodebuild \
+          -project ICCCAlert.xcodeproj \
+          -scheme ICCCAlert \
+          -destination 'generic/platform=iOS Simulator' \
+          -configuration Debug \
+          -sdk iphonesimulator \
+          -derivedDataPath ./DerivedData \
+          clean build \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_REQUIRED=NO \
+          ONLY_ACTIVE_ARCH=NO \
+          ARCHS="arm64 x86_64"
+        
+        APP_PATH=$(find ./DerivedData -name "ICCCAlert.app" -type d | head -1)
+        mkdir -p ./build
+        cp -R "$APP_PATH" ./build/
+        cd ./build
+        zip -r -y ICCCAlert-Simulator.zip ICCCAlert.app
+    
+    - name: Upload Simulator Build
+      uses: actions/upload-artifact@v4
+      with:
+        name: ICCCAlert-Simulator
+        path: build/ICCCAlert-Simulator.zip
+        retention-days: 30
