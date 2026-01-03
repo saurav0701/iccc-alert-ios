@@ -17,18 +17,3 @@ post_install do |installer|
     end
   end
 end
-```
-
-### 2. **.gitignore** (Add these lines)
-```
-# CocoaPods
-Pods/
-*.xcworkspace
-!default.xcworkspace
-Podfile.lock
-
-# Xcode
-*.xcuserstate
-project.xcworkspace/
-xcuserdata/
-DerivedData/
