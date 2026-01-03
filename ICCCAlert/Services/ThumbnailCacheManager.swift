@@ -2,8 +2,9 @@ import Foundation
 import UIKit
 import WebKit
 import Combine
+import SwiftUI
 
-// MARK: - Thumbnail Cache Manager (ULTRA SAFE - CRASH PREVENTION)
+// MARK: - Thumbnail Cache Manager (ULTRA AGGRESSIVE - CRASH PREVENTION)
 class ThumbnailCacheManager: ObservableObject {
     static let shared = ThumbnailCacheManager()
     
@@ -20,22 +21,19 @@ class ThumbnailCacheManager: ObservableObject {
     private var globalCaptureLock = false
     private let lock = NSLock()
     
-    // AGGRESSIVE: Rate limiting (10 seconds between captures)
+    // AGGRESSIVE: Rate limiting (prevent rapid crashes)
     private var lastCaptureTime: TimeInterval = 0
-    private let minimumCaptureInterval: TimeInterval = 10.0  // Increased from 5
+    private let minimumCaptureInterval: TimeInterval = 5.0  // Increased to 5 seconds
     
     // CRITICAL: Track active WebView (ONLY ONE ALLOWED)
     private var activeWebView: WKWebView?
     private var captureTimeout: DispatchWorkItem?
     
-    // Cache duration: 6 hours (increased from 3)
-    private let cacheDuration: TimeInterval = 6 * 60 * 60
+    // Cache duration: 3 hours
+    private let cacheDuration: TimeInterval = 3 * 60 * 60
     
     // CRITICAL: Crash prevention timer
     private var emergencyTimer: Timer?
-    
-    // NEW: Memory baseline tracking
-    private var baselineMemoryMB: Double = 0
     
     private init() {
         let paths = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)
@@ -43,12 +41,8 @@ class ThumbnailCacheManager: ObservableObject {
         
         try? fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
         
-        // CRITICAL: Very limited cache
-        cache.countLimit = 15  // Reduced from 20
-        cache.totalCostLimit = 5 * 1024 * 1024 // 5MB only (reduced from 8MB)
-        
-        // Record baseline memory
-        baselineMemoryMB = getCurrentMemoryUsage()
+        cache.countLimit = 20  // Further reduced for safety
+        cache.totalCostLimit = 8 * 1024 * 1024 // 8MB only
         
         loadCachedThumbnails()
         loadTimestamps()
@@ -56,24 +50,7 @@ class ThumbnailCacheManager: ObservableObject {
         setupMemoryWarning()
         setupEmergencyTimer()
         
-        DebugLogger.shared.log("🖼️ ThumbnailCache: ULTRA LOW MEMORY MODE (baseline: \(String(format: "%.1f", baselineMemoryMB))MB)", emoji: "🖼️", color: .blue)
-    }
-    
-    private func getCurrentMemoryUsage() -> Double {
-        var info = mach_task_basic_info()
-        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
-        
-        let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
-                task_info(mach_task_self_,
-                         task_flavor_t(MACH_TASK_BASIC_INFO),
-                         $0,
-                         &count)
-            }
-        }
-        
-        guard kerr == KERN_SUCCESS else { return 0 }
-        return Double(info.resident_size) / 1024 / 1024
+        DebugLogger.shared.log("🖼️ ThumbnailCache: ULTRA LOW MEMORY MODE", emoji: "🖼️", color: .blue)
     }
     
     private func setupMemoryWarning() {
@@ -89,7 +66,7 @@ class ThumbnailCacheManager: ObservableObject {
     
     // NEW: Emergency safety timer (destroys stale captures)
     private func setupEmergencyTimer() {
-        emergencyTimer = Timer.scheduledTimer(withTimeInterval: 12.0, repeats: true) { [weak self] _ in
+        emergencyTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { [weak self] _ in
             self?.checkForStalledCaptures()
         }
     }
@@ -97,11 +74,11 @@ class ThumbnailCacheManager: ObservableObject {
     private func checkForStalledCaptures() {
         lock.lock()
         
-        // If capture is locked for >12 seconds, force cleanup
+        // If capture is locked for >15 seconds, force cleanup
         if globalCaptureLock {
             let now = Date().timeIntervalSince1970
-            if (now - lastCaptureTime) > 12 {
-                DebugLogger.shared.log("🚨 STALLED CAPTURE DETECTED (>12s) - FORCE CLEANUP", emoji: "🚨", color: .red)
+            if (now - lastCaptureTime) > 15 {
+                DebugLogger.shared.log("🚨 STALLED CAPTURE DETECTED - FORCE CLEANUP", emoji: "🚨", color: .red)
                 
                 if let webView = activeWebView {
                     destroyWebViewImmediately(webView)
@@ -114,14 +91,6 @@ class ThumbnailCacheManager: ObservableObject {
                 lock.unlock()
                 return
             }
-        }
-        
-        // NEW: Check memory growth from baseline
-        let currentMem = getCurrentMemoryUsage()
-        let growth = currentMem - baselineMemoryMB
-        
-        if growth > 80 {  // If memory grew by >80MB, warn
-            DebugLogger.shared.log("⚠️ Memory growth: +\(String(format: "%.1f", growth))MB from baseline", emoji: "⚠️", color: .orange)
         }
         
         lock.unlock()
@@ -149,10 +118,8 @@ class ThumbnailCacheManager: ObservableObject {
         cache.removeAllObjects()
         thumbnails.removeAll()
         
-        // Force memory release (5 cycles)
-        for _ in 0..<5 {
-            autoreleasepool {}
-        }
+        // Force memory release
+        autoreleasepool {}
         
         DebugLogger.shared.log("🧹 Emergency cleanup complete", emoji: "🧹", color: .orange)
     }
@@ -194,25 +161,7 @@ class ThumbnailCacheManager: ObservableObject {
     func manualLoad(for camera: Camera, completion: @escaping (Bool) -> Void) {
         lock.lock()
         
-        // CRITICAL: Check memory BEFORE starting
-        let currentMem = getCurrentMemoryUsage()
-        let memoryGrowth = currentMem - baselineMemoryMB
-        
-        // NEW: Block thumbnail capture if memory is already high
-        if currentMem > 100 || memoryGrowth > 60 {
-            lock.unlock()
-            
-            DebugLogger.shared.log("🚫 Memory too high for thumbnail: \(String(format: "%.1f", currentMem))MB (growth: +\(String(format: "%.1f", memoryGrowth))MB)", emoji: "🚫", color: .red)
-            
-            DispatchQueue.main.async {
-                UINotificationFeedbackGenerator().notificationOccurred(.error)
-            }
-            
-            completion(false)
-            return
-        }
-        
-        // CRITICAL: Rate limiting check (10 seconds)
+        // CRITICAL: Rate limiting check
         let now = Date().timeIntervalSince1970
         let timeSinceLastCapture = now - lastCaptureTime
         
@@ -253,12 +202,12 @@ class ThumbnailCacheManager: ObservableObject {
         
         lock.unlock()
         
-        DebugLogger.shared.log("🔄 Starting capture: \(camera.displayName) (Mem: \(String(format: "%.1f", currentMem))MB)", emoji: "🔄", color: .blue)
+        DebugLogger.shared.log("🔄 Starting capture: \(camera.displayName)", emoji: "🔄", color: .blue)
         
         startCapture(for: camera, completion: completion)
     }
     
-    // MARK: - Core Capture Logic (4 SECOND TIMEOUT - ULTRA AGGRESSIVE)
+    // MARK: - Core Capture Logic (5 SECOND TIMEOUT - ULTRA AGGRESSIVE)
     
     private func startCapture(for camera: Camera, completion: @escaping (Bool) -> Void) {
         guard let streamURL = camera.webrtcStreamURL else {
@@ -308,8 +257,8 @@ class ThumbnailCacheManager: ObservableObject {
         
         config.userContentController.add(handler, name: "captureComplete")
         
-        // Create WebView with MINIMAL frame (even smaller)
-        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 160, height: 120), configuration: config)
+        // Create WebView with MINIMAL frame
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 200, height: 150), configuration: config)
         webView.scrollView.isScrollEnabled = false
         webView.backgroundColor = .black
         webView.isOpaque = true
@@ -323,17 +272,17 @@ class ThumbnailCacheManager: ObservableObject {
         // Add off-screen
         if let window = UIApplication.shared.windows.first {
             window.addSubview(webView)
-            webView.frame = CGRect(x: -3000, y: -3000, width: 160, height: 120)
+            webView.frame = CGRect(x: -3000, y: -3000, width: 200, height: 150)
         }
         
         let html = generateCaptureHTML(streamURL: streamURL)
         webView.loadHTMLString(html, baseURL: nil)
         
-        // CRITICAL: 4 second timeout (reduced from 5) with IMMEDIATE cleanup
+        // CRITICAL: 5 second timeout (reduced from 7) with IMMEDIATE cleanup
         let timeoutWork = DispatchWorkItem { [weak self, weak webView] in
             guard let self = self else { return }
             
-            DebugLogger.shared.log("⏱️ TIMEOUT (4s) - Force destroy", emoji: "⏱️", color: .orange)
+            DebugLogger.shared.log("⏱️ TIMEOUT - Force destroy", emoji: "⏱️", color: .orange)
             
             if let webView = webView {
                 self.destroyWebViewImmediately(webView)
@@ -355,7 +304,7 @@ class ThumbnailCacheManager: ObservableObject {
         captureTimeout = timeoutWork
         lock.unlock()
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0, execute: timeoutWork)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0, execute: timeoutWork)
     }
     
     private func generateCaptureHTML(streamURL: String) -> String {
@@ -366,7 +315,7 @@ class ThumbnailCacheManager: ObservableObject {
             <meta charset="utf-8">
             <style>
                 * { margin: 0; padding: 0; }
-                body { width: 160px; height: 120px; background: #000; }
+                body { width: 200px; height: 150px; background: #000; }
                 video { width: 100%; height: 100%; object-fit: cover; }
                 canvas { display: none; }
             </style>
@@ -405,9 +354,7 @@ class ThumbnailCacheManager: ObservableObject {
                 async function start() {
                     try {
                         pc = new RTCPeerConnection({ 
-                            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-                            bundlePolicy: 'max-bundle',
-                            rtcpMuxPolicy: 'require'
+                            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
                         });
                         
                         pc.ontrack = (e) => { 
@@ -422,7 +369,7 @@ class ThumbnailCacheManager: ObservableObject {
                         await pc.setLocalDescription(offer);
                         
                         const controller = new AbortController();
-                        setTimeout(() => controller.abort(), 3500);
+                        setTimeout(() => controller.abort(), 4000);
                         
                         const res = await fetch('\(streamURL)', {
                             method: 'POST',
@@ -447,10 +394,10 @@ class ThumbnailCacheManager: ObservableObject {
                     
                     setTimeout(() => {
                         try {
-                            canvas.width = 160;
-                            canvas.height = 120;
-                            ctx.drawImage(video, 0, 0, 160, 120);
-                            const imageData = canvas.toDataURL('image/jpeg', 0.35);
+                            canvas.width = 200;
+                            canvas.height = 150;
+                            ctx.drawImage(video, 0, 0, 200, 150);
+                            const imageData = canvas.toDataURL('image/jpeg', 0.4);
                             
                             cleanup();
                             
@@ -463,7 +410,7 @@ class ThumbnailCacheManager: ObservableObject {
                         } catch(err) {
                             fail();
                         }
-                    }, 150);
+                    }, 200);
                 });
                 
                 video.addEventListener('error', () => fail());
@@ -499,10 +446,8 @@ class ThumbnailCacheManager: ObservableObject {
             completionHandler: {}
         )
         
-        // Force release (3 cycles)
-        for _ in 0..<3 {
-            autoreleasepool {}
-        }
+        // Force release
+        autoreleasepool {}
         
         DebugLogger.shared.log("🧹 WebView destroyed", emoji: "🧹", color: .gray)
     }
@@ -525,8 +470,7 @@ class ThumbnailCacheManager: ObservableObject {
             return
         }
         
-        // Resize to smaller size (160x120 instead of 200x150)
-        let resizedImage = resizeImage(image, targetWidth: 160)
+        let resizedImage = resizeImage(image, targetWidth: 200)
         
         DispatchQueue.main.async {
             self.thumbnails[cameraId] = resizedImage
@@ -555,8 +499,8 @@ class ThumbnailCacheManager: ObservableObject {
         
         lock.unlock()
         
-        // Add 2 second cooldown before allowing next capture (increased from 1)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+        // Add 1 second cooldown before allowing next capture
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             self.lock.lock()
             self.globalCaptureLock = false
             self.lock.unlock()
@@ -595,8 +539,7 @@ class ThumbnailCacheManager: ObservableObject {
     
     private func saveThumbnail(_ image: UIImage, for cameraId: String) {
         DispatchQueue.global(qos: .background).async {
-            // Lower compression quality (0.4 instead of 0.5)
-            guard let data = image.jpegData(compressionQuality: 0.4) else { return }
+            guard let data = image.jpegData(compressionQuality: 0.5) else { return }
             let fileURL = self.cacheDirectory.appendingPathComponent("\(cameraId).jpg")
             try? data.write(to: fileURL)
         }
