@@ -62,7 +62,7 @@ jobs:
       run: |
         echo "🔍 Verifying setup..."
         
-        if [ -f "ICCCAlert.xcworkspace" ]; then
+        if [ -d "ICCCAlert.xcworkspace" ]; then
           echo "✅ Workspace created"
         else
           echo "❌ Workspace missing"
