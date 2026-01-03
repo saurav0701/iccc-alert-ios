@@ -3,7 +3,7 @@ import SwiftUI
 struct AreaCamerasView: View {
     let area: String
     @StateObject private var cameraManager = CameraManager.shared
-    // REMOVED: thumbnailCache - no longer needed
+    @StateObject private var thumbnailCache = ThumbnailCacheManager.shared
     @State private var searchText = ""
     @State private var showOnlineOnly = true
     @State private var gridMode: GridViewMode = .grid2x2
@@ -11,7 +11,6 @@ struct AreaCamerasView: View {
     @State private var showStreamBlockedAlert = false
     @State private var streamBlockMessage = ""
     @State private var canOpenStream = true
-    @State private var currentMemory: Double = 0
     @Environment(\.scenePhase) var scenePhase
     
     var cameras: [Camera] {
@@ -28,9 +27,6 @@ struct AreaCamerasView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            // Memory indicator
-            memoryIndicator
-            
             statsBar
             filterBar
             
@@ -50,30 +46,12 @@ struct AreaCamerasView: View {
             }
         )
         .fullScreenCover(item: $selectedCamera) { camera in
+            // REVERTED: Use old player that works
             FullscreenPlayerEnhanced(camera: camera)
                 .onDisappear {
                     canOpenStream = false
                     
-                    DebugLogger.shared.log("🧹 Stream closed - cleanup", emoji: "🧹", color: .orange)
-                    
-                    // Aggressive cleanup after stream
-                    PlayerManager.shared.clearAll()
-                    URLCache.shared.removeAllCachedResponses()
-                    
-                    for _ in 0..<5 {
-                        autoreleasepool {}
-                    }
-                    
-                    // Check memory after cleanup
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                        self.checkMemory()
-                        
-                        let memAfterCleanup = self.currentMemory
-                        DebugLogger.shared.log("📊 Memory after cleanup: \(String(format: "%.1f", memAfterCleanup))MB", emoji: "📊", color: .blue)
-                    }
-                    
-                    // Longer cooldown (5 seconds)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
                         self.canOpenStream = true
                         DebugLogger.shared.log("✅ Ready for next stream", emoji: "✅", color: .green)
                     }
@@ -88,15 +66,6 @@ struct AreaCamerasView: View {
         }
         .onAppear {
             DebugLogger.shared.log("📹 AreaCamerasView appeared: \(area)", emoji: "📹", color: .blue)
-            checkMemory()
-            
-            let initialMem = currentMemory
-            DebugLogger.shared.log("📊 Initial memory: \(String(format: "%.1f", initialMem))MB", emoji: "📊", color: .blue)
-            
-            // Start memory monitoring (every 3 seconds)
-            Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in
-                checkMemory()
-            }
         }
         .onDisappear {
             DebugLogger.shared.log("🚪 AreaCamerasView disappeared", emoji: "🚪", color: .orange)
@@ -109,105 +78,6 @@ struct AreaCamerasView: View {
         }
         .onChange(of: gridMode) { _ in
             PlayerManager.shared.clearAll()
-        }
-    }
-    
-    private var memoryIndicator: some View {
-        HStack {
-            Image(systemName: "memorychip")
-                .font(.system(size: 14))
-                .foregroundColor(memoryColor)
-            
-            Text("\(Int(currentMemory)) MB")
-                .font(.caption)
-                .fontWeight(.bold)
-                .foregroundColor(memoryColor)
-            
-            if currentMemory > 80 {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 12))
-                    .foregroundColor(.red)
-            }
-            
-            Spacer()
-            
-            if currentMemory > 80 {
-                Button("Clear Cache") {
-                    performMemoryCleanup()
-                }
-                .font(.caption)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(Color.orange)
-                .foregroundColor(.white)
-                .cornerRadius(6)
-            }
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .background(memoryColor.opacity(0.1))
-    }
-    
-    private var memoryColor: Color {
-        if currentMemory > 100 { return .red }
-        if currentMemory > 80 { return .orange }
-        if currentMemory > 60 { return .yellow }
-        return .green
-    }
-    
-    private func checkMemory() {
-        var info = mach_task_basic_info()
-        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
-        
-        let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
-                task_info(mach_task_self_,
-                         task_flavor_t(MACH_TASK_BASIC_INFO),
-                         $0,
-                         &count)
-            }
-        }
-        
-        if kerr == KERN_SUCCESS {
-            let newMemory = Double(info.resident_size) / 1024 / 1024
-            
-            DispatchQueue.main.async {
-                self.currentMemory = newMemory
-            }
-            
-            // Auto cleanup if too high
-            if newMemory > 100 {
-                DebugLogger.shared.log("🚨 AUTO CLEANUP at \(String(format: "%.1f", newMemory))MB", emoji: "🚨", color: .red)
-                performMemoryCleanup()
-            }
-        }
-    }
-    
-    private func performMemoryCleanup() {
-        DebugLogger.shared.log("🧹 Manual memory cleanup", emoji: "🧹", color: .orange)
-        
-        let beforeMem = currentMemory
-        
-        // Stop all players
-        PlayerManager.shared.clearAll()
-        
-        // Clear event images
-        EventImageLoader.shared.clearCache()
-        
-        // Clear URL cache
-        URLCache.shared.removeAllCachedResponses()
-        
-        // Force GC (10 cycles)
-        for _ in 0..<10 {
-            autoreleasepool {}
-        }
-        
-        // Recheck after cleanup
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-            checkMemory()
-            let afterMem = self.currentMemory
-            let saved = beforeMem - afterMem
-            DebugLogger.shared.log("📊 Cleanup freed: \(String(format: "%.1f", saved))MB (\(String(format: "%.1f", beforeMem))MB → \(String(format: "%.1f", afterMem))MB)", emoji: "📊", color: .green)
         }
     }
     
@@ -269,12 +139,12 @@ struct AreaCamerasView: View {
                     .font(.system(size: 14))
                 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("🎥 NO thumbnails - Tap camera icon to stream")
+                    Text("Streams auto-refresh every 2 minutes")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .fontWeight(.medium)
                     
-                    Text("Streams auto-refresh every 90s • Max 1 stream at a time")
+                    Text("This prevents memory buildup on low-RAM devices")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
@@ -312,26 +182,24 @@ struct AreaCamerasView: View {
             return
         }
         
-        // CRITICAL: Check memory BEFORE opening stream
-        checkMemory()
-        
-        DebugLogger.shared.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", emoji: "📹", color: .blue)
-        DebugLogger.shared.log("🎬 User tapped: \(camera.displayName)", emoji: "🎬", color: .blue)
-        DebugLogger.shared.log("📊 Current memory: \(String(format: "%.1f", currentMemory))MB", emoji: "📊", color: .blue)
-        
-        if currentMemory > 90 {
-            streamBlockMessage = "Memory too high (\(Int(currentMemory))MB). Tap 'Clear Cache' first."
+        if !canOpenStream {
+            streamBlockMessage = "Please wait before opening another stream."
             showStreamBlockedAlert = true
-            UINotificationFeedbackGenerator().notificationOccurred(.error)
-            DebugLogger.shared.log("🚫 BLOCKED: Memory too high", emoji: "🚫", color: .red)
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
             return
         }
         
-        if !canOpenStream {
-            streamBlockMessage = "Please wait 5 seconds before opening another stream."
+        if thumbnailCache.isLoading(for: camera.id) {
+            streamBlockMessage = "Thumbnail capture in progress. Wait a few seconds."
             showStreamBlockedAlert = true
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
-            DebugLogger.shared.log("🚫 BLOCKED: Cooldown active", emoji: "🚫", color: .orange)
+            return
+        }
+        
+        if !thumbnailCache.loadingCameras.isEmpty {
+            streamBlockMessage = "Another camera thumbnail is loading. Please wait."
+            showStreamBlockedAlert = true
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
             return
         }
         
@@ -339,18 +207,19 @@ struct AreaCamerasView: View {
             streamBlockMessage = "Another stream is already playing. Close it first."
             showStreamBlockedAlert = true
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
-            DebugLogger.shared.log("🚫 BLOCKED: Stream already active", emoji: "🚫", color: .orange)
             return
         }
         
-        DebugLogger.shared.log("✅ Opening stream...", emoji: "✅", color: .green)
-        DebugLogger.shared.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", emoji: "📹", color: .blue)
+        DebugLogger.shared.log("▶️ Opening player for: \(camera.displayName)", emoji: "▶️", color: .green)
         
         canOpenStream = false
         
-        // Small delay to ensure UI is ready
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             self.selectedCamera = camera
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                self.canOpenStream = true
+            }
         }
     }
     
