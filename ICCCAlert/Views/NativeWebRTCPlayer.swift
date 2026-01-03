@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import WebRTC
+import SwiftUI  // ← CRITICAL: Add this import
 import Combine
 
 // MARK: - Native WebRTC Player (MEMORY OPTIMIZED)
@@ -17,7 +18,7 @@ class NativeWebRTCPlayer: NSObject, ObservableObject {
     private var remoteVideoView: RTCMTLVideoView?
     
     private let streamURL: String
-    private let cameraId: String
+    private let cameraId: Int  // ← Changed from String to Int to match usage
     
     private static let factory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
@@ -29,7 +30,7 @@ class NativeWebRTCPlayer: NSObject, ObservableObject {
     private var isActive = false
     
     // MARK: - Initialization
-    init(cameraId: String, streamURL: String) {
+    init(cameraId: Int, streamURL: String) {  // ← Changed from String to Int
         self.cameraId = cameraId
         self.streamURL = streamURL
         super.init()
@@ -101,14 +102,14 @@ class NativeWebRTCPlayer: NSObject, ObservableObject {
         
         self.peerConnection = pc
         
-        // Add transceivers for receive-only
-        pc.addTransceiver(of: .video, init: { transceiver in
-            transceiver.direction = .recvOnly
-        })
+        // ✅ FIXED: Correct API usage for addTransceiver
+        let videoTransceiverInit = RTCRtpTransceiverInit()
+        videoTransceiverInit.direction = .recvOnly
+        pc.addTransceiver(of: .video, init: videoTransceiverInit)
         
-        pc.addTransceiver(of: .audio, init: { transceiver in
-            transceiver.direction = .recvOnly
-        })
+        let audioTransceiverInit = RTCRtpTransceiverInit()
+        audioTransceiverInit.direction = .recvOnly
+        pc.addTransceiver(of: .audio, init: audioTransceiverInit)
         
         DebugLogger.shared.log("✅ Peer connection created", emoji: "✅", color: .green)
         
@@ -237,8 +238,8 @@ class NativeWebRTCPlayer: NSObject, ObservableObject {
         DebugLogger.shared.log("🧹 Cleaning up native WebRTC", emoji: "🧹", color: .gray)
         
         // Remove video track from view
-        if let track = videoTrack {
-            track.remove(remoteVideoView!)
+        if let track = videoTrack, let view = remoteVideoView {
+            track.remove(view)
         }
         
         // Close peer connection
@@ -352,7 +353,7 @@ extension NativeWebRTCPlayer: RTCPeerConnectionDelegate {
 struct NativeWebRTCPlayerView: UIViewRepresentable {
     @StateObject private var player: NativeWebRTCPlayer
     
-    init(cameraId: String, streamURL: String) {
+    init(cameraId: Int, streamURL: String) {  // ← Changed from String to Int
         _player = StateObject(wrappedValue: NativeWebRTCPlayer(cameraId: cameraId, streamURL: streamURL))
     }
     

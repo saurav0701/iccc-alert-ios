@@ -22,14 +22,14 @@ struct FullscreenPlayerNative: View {
     
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Color.black.edgesIgnoringSafeArea(.all)  // ← Use this instead
             
-            // Video view
+            // Video view - FIXED: Remove .ignoresSafeArea() from custom view
             NativeWebRTCPlayerView(
                 cameraId: camera.id,
                 streamURL: camera.webrtcStreamURL ?? ""
             )
-            .ignoresSafeArea()
+            .edgesIgnoringSafeArea(.all)  // ← Use edgesIgnoringSafeArea on UIViewRepresentable
             .onTapGesture {
                 withAnimation { showControls.toggle() }
             }

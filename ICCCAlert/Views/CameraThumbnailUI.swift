@@ -328,7 +328,7 @@ struct CameraGridCardFixed: View {
         }
     }
     
-    private var dotSize: CGFloat {
+    private var dotSize: CGFloat {  
         switch mode {
         case .list: return 6
         case .grid2x2: return 5
