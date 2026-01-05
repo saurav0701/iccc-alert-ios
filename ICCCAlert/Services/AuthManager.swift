@@ -7,7 +7,7 @@ class AuthManager: ObservableObject {
     @Published var isAuthenticated = false
     @Published var currentUser: User?
     
-    private let baseURL = "http://192.168.29.69:8890"
+    private let baseURL = "http://103.208.173.227:8890"
     
     var token: String? {
         return UserDefaults.standard.string(forKey: "auth_token")

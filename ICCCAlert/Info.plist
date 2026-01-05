@@ -94,7 +94,7 @@
         <key>NSExceptionDomains</key>
         <dict>
             <!-- Your WebSocket server -->
-            <key>192.168.29.69</key>
+            <key>103.208.173.227</key>
             <dict>
                 <key>NSExceptionAllowsInsecureHTTPLoads</key>
                 <true/>

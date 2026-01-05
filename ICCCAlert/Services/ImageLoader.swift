@@ -27,8 +27,8 @@ class ImageLoader: ObservableObject {
         isLoading = true
         error = nil
         
-        let baseURL = "http://192.168.29.69:8890" // CCL
-        // let baseURL = "http://192.168.29.69:8890" // BCCL
+        let baseURL = "http://103.208.173.227:8890" // CCL
+        // let baseURL = "http://103.208.173.227:8890" // BCCL
         let imageURL = "\(baseURL)/images/\(area)/\(eventId).jpg"
         
         guard let url = URL(string: imageURL) else {

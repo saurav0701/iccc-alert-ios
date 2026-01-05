@@ -34,5 +34,5 @@ iOS companion app for the ICCC Alert system (Integrated Command & Control Centre
 ## 🌐 Backend
 
 Connects to:
-- WebSocket: `ws://192.168.29.69:2222/ws`
-- Auth API: `http://192.168.29.69:8890/auth`
+- WebSocket: `ws://103.208.173.227:2222/ws`
+- Auth API: `http://103.208.173.227:8890/auth`
