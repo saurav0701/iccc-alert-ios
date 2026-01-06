@@ -6,13 +6,9 @@ struct FullscreenPlayerEnhanced: View {
     @Environment(\.presentationMode) var presentationMode
     
     @StateObject private var session: StreamSession
-    @StateObject private var memoryMonitor = MemoryMonitor.shared
     
     @State private var showControls = true
     @State private var isRestarting = false
-    @State private var showCrashWarning = false
-    @State private var showEmergencyStop = false
-    @State private var emergencyMessage = ""
     
     init(camera: Camera) {
         self.camera = camera
@@ -26,9 +22,7 @@ struct FullscreenPlayerEnhanced: View {
         ZStack {
             Color.black.ignoresSafeArea()
             
-            if showEmergencyStop {
-                emergencyStopView
-            } else if isRestarting {
+            if isRestarting {
                 restartingView
             } else {
                 WebRTCPlayerEnhanced(session: session)
@@ -38,12 +32,8 @@ struct FullscreenPlayerEnhanced: View {
                     }
             }
             
-            if showControls && !showEmergencyStop {
+            if showControls {
                 controlsOverlay
-            }
-            
-            if (memoryMonitor.isMemoryWarning || showCrashWarning) && !showEmergencyStop {
-                memoryWarningOverlay
             }
         }
         .navigationBarHidden(true)
@@ -53,82 +43,11 @@ struct FullscreenPlayerEnhanced: View {
                 performRestart()
             }
         }
-        .onChange(of: memoryMonitor.currentMemoryMB) { memoryMB in
-            handleMemoryChange(memoryMB)
-        }
-        .onChange(of: session.isActive) { active in
-            // ✅ Start/stop memory monitoring based on streaming state
-            if active {
-                MemoryMonitor.shared.startMonitoring()
-            } else {
-                MemoryMonitor.shared.stopMonitoring()
-            }
-            
-            // If session becomes inactive without restart, it's an emergency stop
-            if !active && !session.needsRestart && !isRestarting {
-                showEmergencyStopScreen()
-            }
-        }
         .onAppear {
             DebugLogger.shared.log("📹 Player appeared: \(camera.displayName)", emoji: "📹", color: .blue)
-            
-            // ✅ Start memory monitoring when player appears
-            MemoryMonitor.shared.startMonitoring()
         }
         .onDisappear {
             handleDisappear()
-        }
-    }
-    
-    private func handleMemoryChange(_ memoryMB: Double) {
-        // ✅ FIXED: More conservative thresholds for low-RAM devices
-        // Critical threshold (200MB for streaming) - show urgent warning
-        if memoryMB > 200 {
-            DebugLogger.shared.log("🚨 CRITICAL MEMORY: \(String(format: "%.1f", memoryMB))MB", emoji: "🚨", color: .red)
-            showCrashWarning = true
-            
-            // Emergency restart after 2 seconds
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                if self.memoryMonitor.currentMemoryMB > 200 {
-                    self.showEmergencyStopScreen()
-                }
-            }
-        }
-        // Warning threshold (170MB) - show warning, trigger restart
-        else if memoryMB > 170 {
-            DebugLogger.shared.log("⚠️ High memory: \(String(format: "%.1f", memoryMB))MB - Restart", emoji: "⚠️", color: .orange)
-            showCrashWarning = true
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                if self.memoryMonitor.currentMemoryMB > 170 {
-                    self.performRestart()
-                    self.showCrashWarning = false
-                }
-            }
-        }
-        else {
-            showCrashWarning = false
-        }
-    }
-    
-    private func showEmergencyStopScreen() {
-        DebugLogger.shared.log("🚨 EMERGENCY STOP TRIGGERED", emoji: "🚨", color: .red)
-        
-        emergencyMessage = "Memory usage reached critical levels (\(Int(memoryMonitor.currentMemoryMB))MB). Stream stopped to prevent crash."
-        showEmergencyStop = true
-        
-        // Force cleanup
-        session.stop()
-        
-        // Aggressive memory cleanup
-        for _ in 0..<5 {
-            autoreleasepool {}
-        }
-        URLCache.shared.removeAllCachedResponses()
-        
-        // Auto-dismiss after 3 seconds
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-            self.presentationMode.wrappedValue.dismiss()
         }
     }
     
@@ -200,20 +119,6 @@ struct FullscreenPlayerEnhanced: View {
                         Text(camera.area)
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.8))
-                        
-                        // Memory indicator with color coding
-                        let memMB = Int(memoryMonitor.currentMemoryMB)
-                        let memColor: Color = {
-                            if memMB > 200 { return .red }
-                            else if memMB > 170 { return .orange }
-                            else if memMB > 140 { return .yellow }
-                            else { return .white.opacity(0.6) }
-                        }()
-                        
-                        Text("\(memMB)MB")
-                            .font(.caption2)
-                            .foregroundColor(memColor)
-                            .fontWeight(memMB > 170 ? .bold : .regular)
                     }
                 }
                 .padding()
@@ -235,78 +140,6 @@ struct FullscreenPlayerEnhanced: View {
             Text("Refreshing stream...")
                 .font(.headline)
                 .foregroundColor(.white)
-            
-            Text("Memory: \(Int(memoryMonitor.currentMemoryMB))MB")
-                .font(.caption)
-                .foregroundColor(.white.opacity(0.7))
-            
-            Text("This prevents crashes on low memory devices")
-                .font(.caption)
-                .foregroundColor(.white.opacity(0.7))
-        }
-    }
-    
-    private var emergencyStopView: some View {
-        VStack(spacing: 20) {
-            ZStack {
-                Circle()
-                    .fill(Color.red.opacity(0.2))
-                    .frame(width: 100, height: 100)
-                
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 50))
-                    .foregroundColor(.red)
-            }
-            
-            Text("Emergency Stop")
-                .font(.title2)
-                .fontWeight(.bold)
-                .foregroundColor(.white)
-            
-            Text(emergencyMessage)
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.8))
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
-            
-            Text("Returning to camera list...")
-                .font(.caption)
-                .foregroundColor(.white.opacity(0.6))
-        }
-    }
-    
-    private var memoryWarningOverlay: some View {
-        VStack {
-            Spacer()
-            HStack {
-                Spacer()
-                VStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 24))
-                        .foregroundColor(.orange)
-                    
-                    Text("High Memory")
-                        .font(.caption)
-                        .foregroundColor(.white)
-                        .fontWeight(.semibold)
-                    
-                    Text("\(Int(memoryMonitor.currentMemoryMB)) MB")
-                        .font(.caption2)
-                        .foregroundColor(.white.opacity(0.8))
-                    
-                    if showCrashWarning {
-                        Text("Auto-refreshing...")
-                            .font(.caption2)
-                            .foregroundColor(.white.opacity(0.9))
-                    }
-                }
-                .padding()
-                .background(Color.orange.opacity(0.9))
-                .cornerRadius(12)
-                .padding()
-                Spacer()
-            }
-            Spacer()
         }
     }
     
@@ -322,21 +155,9 @@ struct FullscreenPlayerEnhanced: View {
         
         // Wait 3 seconds for complete cleanup
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-            // Force aggressive memory cleanup
-            for _ in 0..<5 {
-                autoreleasepool {}
-            }
-            
-            URLCache.shared.removeAllCachedResponses()
-            
-            // Check memory before restart
-            let currentMem = self.memoryMonitor.currentMemoryMB
-            DebugLogger.shared.log("📊 Pre-restart memory: \(String(format: "%.1f", currentMem))MB", emoji: "📊", color: .blue)
-            
-            if currentMem > 190 {
-                // Too high to restart safely
-                self.showEmergencyStopScreen()
-                return
+            // Force cleanup
+            autoreleasepool {
+                URLCache.shared.removeAllCachedResponses()
             }
             
             // Start new session
@@ -350,18 +171,13 @@ struct FullscreenPlayerEnhanced: View {
     private func handleDisappear() {
         DebugLogger.shared.log("🚪 Player disappeared - cleanup", emoji: "🚪", color: .orange)
         
-        // ✅ Stop memory monitoring when player disappears
-        MemoryMonitor.shared.stopMonitoring()
-        
         session.stop()
         
-        // Aggressive cleanup on dismiss
+        // Cleanup on dismiss
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            for _ in 0..<5 {
-                autoreleasepool {}
+            autoreleasepool {
+                URLCache.shared.removeAllCachedResponses()
             }
-            
-            URLCache.shared.removeAllCachedResponses()
             
             DebugLogger.shared.log("✅ Player fully cleaned up", emoji: "✅", color: .green)
         }

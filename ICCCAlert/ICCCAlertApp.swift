@@ -113,11 +113,8 @@ struct ICCCAlertApp: App {
             print("📱 App moved to background")
             saveAppState()
             
-            // ✅ FIXED: Only basic cleanup for background
+            // Clean up streams
             PlayerManager.shared.clearAll()
-            
-            // Stop memory monitoring (handled by MemoryMonitor itself now)
-            MemoryMonitor.shared.stopMonitoring()
             
             NotificationManager.shared.updateBadgeCount()
             
@@ -126,27 +123,6 @@ struct ICCCAlertApp: App {
         @unknown default:
             break
         }
-    }
-    
-    // MARK: - Logout Handler
-    
-    private func handleLogout() {
-        print("🔐 Handling logout - full cleanup")
-        
-        // Stop memory monitoring
-        MemoryMonitor.shared.stopMonitoring()
-        
-        // Stop all streams
-        PlayerManager.shared.clearAll()
-        
-        // Clear all caches
-        EventImageLoader.shared.clearCache()
-        URLCache.shared.removeAllCachedResponses()
-        
-        // Disconnect WebSocket
-        WebSocketService.shared.disconnect()
-        
-        print("✅ Logout cleanup complete")
     }
     
     // MARK: - App Termination Handler
@@ -161,26 +137,6 @@ struct ICCCAlertApp: App {
         WebSocketService.shared.disconnect()
         
         print("✅ Termination cleanup complete")
-    }
-    
-    // MARK: - Memory Warning Handler (ONLY FOR CRITICAL WARNINGS)
-    
-    private static func handleMemoryWarning() {
-        print("⚠️ SYSTEM MEMORY WARNING - Emergency cleanup")
-        
-        // 1. Stop all active streams IMMEDIATELY
-        PlayerManager.shared.clearAll()
-        
-        // 2. Clear image cache
-        EventImageLoader.shared.clearCache()
-        
-        // 3. Clear URL cache
-        URLCache.shared.removeAllCachedResponses()
-        
-        // 4. Force autoreleasepool drain
-        autoreleasepool {}
-        
-        print("🧹 Emergency cleanup complete")
     }
     
     // MARK: - State Persistence
@@ -215,3 +171,5 @@ struct ICCCAlertApp: App {
         }
     }
 }
+
+//
