@@ -116,9 +116,8 @@ struct ICCCAlertApp: App {
             // ✅ FIXED: Only basic cleanup for background
             PlayerManager.shared.clearAll()
             
-            // Stop memory monitoring
-            memoryMonitorTimer?.invalidate()
-            memoryMonitorTimer = nil
+            // Stop memory monitoring (handled by MemoryMonitor itself now)
+            MemoryMonitor.shared.stopMonitoring()
             
             NotificationManager.shared.updateBadgeCount()
             
@@ -135,8 +134,7 @@ struct ICCCAlertApp: App {
         print("🔐 Handling logout - full cleanup")
         
         // Stop memory monitoring
-        memoryMonitorTimer?.invalidate()
-        memoryMonitorTimer = nil
+        MemoryMonitor.shared.stopMonitoring()
         
         // Stop all streams
         PlayerManager.shared.clearAll()
