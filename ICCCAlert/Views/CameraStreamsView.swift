@@ -8,6 +8,7 @@ struct CameraStreamsView: View {
     @State private var searchText = ""
     @State private var showOnlineOnly = false
     @State private var selectedArea: String? = nil
+    @State private var selectedCamera: Camera? = nil
     
     var filteredAreas: [String] {
         var areas = cameraManager.availableAreas
@@ -53,6 +54,9 @@ struct CameraStreamsView: View {
             }
         }
         .navigationViewStyle(StackNavigationViewStyle())
+        .fullScreenCover(item: $selectedCamera) { camera in
+            HLSPlayerView(camera: camera)
+        }
         .onAppear {
             DebugLogger.shared.log("📹 CameraStreamsView appeared", emoji: "📹", color: .blue)
         }
@@ -134,7 +138,10 @@ struct CameraStreamsView: View {
         List {
             ForEach(filteredAreas, id: \.self) { area in
                 NavigationLink(
-                    destination: AreaCamerasView(area: area)
+                    destination: AreaCamerasView(
+                        area: area,
+                        selectedCamera: $selectedCamera
+                    )
                 ) {
                     AreaRow(
                         area: area,

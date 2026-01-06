@@ -15,7 +15,7 @@ struct ICCCAlertApp: App {
         NotificationManager.shared.requestAuthorization()
         NotificationManager.shared.setupNotificationCategories()
         
-        // Register for app termination
+        // ✅ Register for app termination
         NotificationCenter.default.addObserver(
             forName: UIApplication.willTerminateNotification,
             object: nil,
@@ -24,7 +24,14 @@ struct ICCCAlertApp: App {
             ICCCAlertApp.handleAppTermination()
         }
         
-        print("🚀 ICCCAlertApp initialized")
+        // ✅ Register for memory warnings
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            ICCCAlertApp.handleMemoryWarning()
+        }
     }
     
     var body: some Scene {
@@ -35,7 +42,7 @@ struct ICCCAlertApp: App {
                     .environmentObject(webSocketService)
                     .environmentObject(subscriptionManager)
                     .onAppear {
-                        print("🚀 ContentView appeared - User authenticated")
+                        print("🚀 ContentView appeared - User is authenticated")
                         connectWebSocket()
                     }
             } else {
@@ -67,6 +74,8 @@ struct ICCCAlertApp: App {
                             }
                         } else {
                             print("🔐 USER LOGGED OUT")
+                            // Clean up all resources
+                            PlayerManager.shared.clearAll()
                         }
                     }
             }
@@ -76,23 +85,19 @@ struct ICCCAlertApp: App {
         }
     }
     
-    // MARK: - WebSocket Connection
-    
     private func connectWebSocket() {
         guard authManager.isAuthenticated else {
-            print("⚠️ Not authenticated, skipping WebSocket")
+            print("⚠️ Not authenticated, skipping WebSocket connection")
             return
         }
         
         if !webSocketService.isConnected {
-            print("🔌 Starting WebSocket...")
+            print("🔌 Starting WebSocket connection...")
             webSocketService.connect()
         } else {
             print("ℹ️ WebSocket already connected")
         }
     }
-    
-    // MARK: - Scene Phase Changes
     
     private func handleScenePhaseChange(_ phase: ScenePhase) {
         switch phase {
@@ -106,40 +111,50 @@ struct ICCCAlertApp: App {
             
         case .inactive:
             print("📱 App became inactive")
-            // Stop all active streams immediately
+            // Pause all video players
             PlayerManager.shared.clearAll()
             
         case .background:
             print("📱 App moved to background")
             saveAppState()
             
-            // Clean up streams
+            // ✅ CRITICAL: Clean up all video players
             PlayerManager.shared.clearAll()
             
             NotificationManager.shared.updateBadgeCount()
-            
-            print("🧹 Background cleanup complete")
             
         @unknown default:
             break
         }
     }
     
-    // MARK: - App Termination Handler
-    
+    // ✅ Handle app termination
     private static func handleAppTermination() {
-        print("🛑 App terminating - cleanup")
+        print("🛑 App will terminate - cleaning up resources")
         
+        // Clean up video players
         PlayerManager.shared.clearAll()
         
+        // Save state
         SubscriptionManager.shared.forceSave()
         ChannelSyncState.shared.forceSave()
         WebSocketService.shared.disconnect()
         
-        print("✅ Termination cleanup complete")
+        print("✅ Resources cleaned up")
     }
     
-    // MARK: - State Persistence
+    // ✅ Handle memory warnings
+    private static func handleMemoryWarning() {
+        print("⚠️ MEMORY WARNING - Aggressive cleanup")
+        
+        // Clear all video players immediately
+        PlayerManager.shared.clearAll()
+        
+        // Clear image caches
+        EventImageLoader.shared.clearCache()
+        
+        print("🧹 Memory cleanup complete")
+    }
     
     private func saveAppState() {
         print("💾 Saving app state...")
@@ -171,5 +186,3 @@ struct ICCCAlertApp: App {
         }
     }
 }
-
-//

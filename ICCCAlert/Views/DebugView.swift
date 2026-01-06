@@ -1,12 +1,12 @@
 import SwiftUI
 
-// MARK: - Enhanced Debug Logger
+// MARK: - Enhanced Debug Logger with Camera Status
 class DebugLogger: ObservableObject {
     static let shared = DebugLogger()
     
     @Published var logs: [LogEntry] = []
-    @Published var cameraStatus: [String: CameraStreamStatus] = [:]
-    private let maxLogs = 500
+    @Published var cameraStatus: [String: CameraStreamStatus] = [:] // Camera ID -> Status
+    private let maxLogs = 200
     
     struct LogEntry: Identifiable {
         let id = UUID()
@@ -17,7 +17,7 @@ class DebugLogger: ObservableObject {
     }
     
     struct CameraStreamStatus: Identifiable {
-        let id: String
+        let id: String // Camera ID
         var status: String
         var lastUpdate: Date
         var error: String?
@@ -49,8 +49,6 @@ class DebugLogger: ObservableObject {
             if self.logs.count > self.maxLogs {
                 self.logs.removeFirst(self.logs.count - self.maxLogs)
             }
-            
-            print("\(emoji) \(message)")
         }
     }
     
@@ -100,13 +98,12 @@ class DebugLogger: ObservableObject {
     }
 }
 
-// MARK: - Debug View (NO THUMBNAIL TAB)
+// MARK: - Enhanced Debug View
 struct DebugView: View {
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @StateObject private var webSocketService = WebSocketService.shared
     @StateObject private var cameraManager = CameraManager.shared
     @StateObject private var logger = DebugLogger.shared
-    @StateObject private var memoryMonitor = MemoryMonitor.shared
     @State private var refreshTrigger = UUID()
     @State private var autoRefreshTimer: Timer?
     @State private var selectedTab = 0
@@ -114,7 +111,7 @@ struct DebugView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
-                // Tab Selector (removed Thumbnails tab)
+                // Tab Selector
                 Picker("", selection: $selectedTab) {
                     Text("Overview").tag(0)
                     Text("Cameras").tag(1)
@@ -170,32 +167,10 @@ struct DebugView: View {
                 }
             }
             
-            // Memory Usage
-            Section(header: Text("Memory Usage")) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Current Memory")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Text(String(format: "%.1f MB", memoryMonitor.currentMemoryMB))
-                            .font(.title2)
-                            .fontWeight(.bold)
-                            .foregroundColor(memoryMonitor.isMemoryWarning ? .red : .green)
-                    }
-                    
-                    Spacer()
-                    
-                    if memoryMonitor.isMemoryWarning {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.red)
-                            .font(.title2)
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-            
             // Camera Statistics
             Section(header: Text("Camera Stream Status")) {
+                let stats = logger.getCamerasByStatus()
+                
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Total Cameras")
@@ -219,6 +194,78 @@ struct DebugView: View {
                     }
                 }
                 .padding(.vertical, 4)
+                
+                Divider()
+                
+                VStack(spacing: 8) {
+                    HStack {
+                        HStack(spacing: 4) {
+                            Text("✅")
+                            Text("Working")
+                                .font(.caption)
+                        }
+                        Spacer()
+                        Text("\(stats.working)")
+                            .fontWeight(.bold)
+                            .foregroundColor(.green)
+                    }
+                    
+                    HStack {
+                        HStack(spacing: 4) {
+                            Text("🚫")
+                            Text("Codec Issue")
+                                .font(.caption)
+                        }
+                        Spacer()
+                        Text("\(stats.codec)")
+                            .fontWeight(.bold)
+                            .foregroundColor(.red)
+                    }
+                    
+                    HStack {
+                        HStack(spacing: 4) {
+                            Text("❌")
+                            Text("Other Errors")
+                                .font(.caption)
+                        }
+                        Spacer()
+                        Text("\(stats.error)")
+                            .fontWeight(.bold)
+                            .foregroundColor(.orange)
+                    }
+                    
+                    HStack {
+                        HStack(spacing: 4) {
+                            Text("📹")
+                            Text("Other")
+                                .font(.caption)
+                        }
+                        Spacer()
+                        Text("\(stats.other)")
+                            .fontWeight(.bold)
+                    }
+                }
+                
+                if stats.codec > 0 {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Divider()
+                        HStack(alignment: .top, spacing: 8) {
+                            Text("⚠️")
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("H.265/HEVC Codec Issue")
+                                    .font(.caption)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.orange)
+                                Text("\(stats.codec) cameras use H.265 codec which is not well supported on iOS 15.8. These streams need to be re-encoded to H.264 on the backend.")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .padding(8)
+                        .background(Color.orange.opacity(0.1))
+                        .cornerRadius(8)
+                    }
+                }
             }
             
             // Subscriptions
@@ -355,7 +402,7 @@ struct DebugView: View {
     }
     
     private func startAutoRefresh() {
-        autoRefreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+        autoRefreshTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in
             refreshTrigger = UUID()
         }
     }
@@ -367,7 +414,7 @@ struct DebugView: View {
     
     private func formatTime(_ date: Date) -> String {
         let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss.SSS"
+        formatter.dateFormat = "HH:mm:ss"
         return formatter.string(from: date)
     }
 }
