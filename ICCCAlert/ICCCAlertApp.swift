@@ -8,14 +8,9 @@ struct ICCCAlertApp: App {
     
     @Environment(\.scenePhase) var scenePhase
     
-    // ✅ FIXED: Only monitor memory when streaming is active
-    @State private var memoryMonitorTimer: Timer?
-    @State private var isStreamingActive = false
-    
     init() {
         setupAppearance()
         _ = BackgroundWebSocketManager.shared
-        _ = MemoryMonitor.shared
         
         NotificationManager.shared.requestAuthorization()
         NotificationManager.shared.setupNotificationCategories()
@@ -27,32 +22,6 @@ struct ICCCAlertApp: App {
             queue: .main
         ) { _ in
             ICCCAlertApp.handleAppTermination()
-        }
-        
-        // ✅ FIXED: Only handle critical memory warnings (removed continuous monitoring)
-        NotificationCenter.default.addObserver(
-            forName: UIApplication.didReceiveMemoryWarningNotification,
-            object: nil,
-            queue: .main
-        ) { _ in
-            ICCCAlertApp.handleMemoryWarning()
-        }
-        
-        // ✅ NEW: Monitor streaming state
-        NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("StreamingStarted"),
-            object: nil,
-            queue: .main
-        ) { _ in
-            ICCCAlertApp.streamingStateChanged(true)
-        }
-        
-        NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("StreamingStopped"),
-            object: nil,
-            queue: .main
-        ) { _ in
-            ICCCAlertApp.streamingStateChanged(false)
         }
         
         print("🚀 ICCCAlertApp initialized")
@@ -68,7 +37,6 @@ struct ICCCAlertApp: App {
                     .onAppear {
                         print("🚀 ContentView appeared - User authenticated")
                         connectWebSocket()
-                        // ✅ REMOVED: startProactiveMemoryMonitoring() - only run when streaming
                     }
             } else {
                 LoginView()
@@ -99,23 +67,12 @@ struct ICCCAlertApp: App {
                             }
                         } else {
                             print("🔐 USER LOGGED OUT")
-                            handleLogout()
                         }
                     }
             }
         }
         .onChange(of: scenePhase) { newPhase in
             handleScenePhaseChange(newPhase)
-        }
-    }
-    
-    // MARK: - Stream State Monitoring
-    
-    private static func streamingStateChanged(_ isActive: Bool) {
-        if isActive {
-            print("📹 Streaming started - begin aggressive monitoring")
-        } else {
-            print("📹 Streaming stopped - normal monitoring")
         }
     }
     

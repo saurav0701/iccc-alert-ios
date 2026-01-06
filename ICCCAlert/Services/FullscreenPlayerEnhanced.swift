@@ -57,8 +57,12 @@ struct FullscreenPlayerEnhanced: View {
             handleMemoryChange(memoryMB)
         }
         .onChange(of: session.isActive) { active in
-            // ✅ NEW: Notify memory monitor of streaming state
-            MemoryMonitor.shared.setStreamingActive(active)
+            // ✅ Start/stop memory monitoring based on streaming state
+            if active {
+                MemoryMonitor.shared.startMonitoring()
+            } else {
+                MemoryMonitor.shared.stopMonitoring()
+            }
             
             // If session becomes inactive without restart, it's an emergency stop
             if !active && !session.needsRestart && !isRestarting {
@@ -68,9 +72,8 @@ struct FullscreenPlayerEnhanced: View {
         .onAppear {
             DebugLogger.shared.log("📹 Player appeared: \(camera.displayName)", emoji: "📹", color: .blue)
             
-            // ✅ NEW: Notify that streaming started
-            NotificationCenter.default.post(name: NSNotification.Name("StreamingStarted"), object: nil)
-            MemoryMonitor.shared.setStreamingActive(true)
+            // ✅ Start memory monitoring when player appears
+            MemoryMonitor.shared.startMonitoring()
         }
         .onDisappear {
             handleDisappear()
@@ -347,9 +350,8 @@ struct FullscreenPlayerEnhanced: View {
     private func handleDisappear() {
         DebugLogger.shared.log("🚪 Player disappeared - cleanup", emoji: "🚪", color: .orange)
         
-        // ✅ NEW: Notify that streaming stopped
-        NotificationCenter.default.post(name: NSNotification.Name("StreamingStopped"), object: nil)
-        MemoryMonitor.shared.setStreamingActive(false)
+        // ✅ Stop memory monitoring when player disappears
+        MemoryMonitor.shared.stopMonitoring()
         
         session.stop()
         
