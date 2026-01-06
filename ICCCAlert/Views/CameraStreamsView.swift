@@ -55,7 +55,7 @@ struct CameraStreamsView: View {
         }
         .navigationViewStyle(StackNavigationViewStyle())
         .fullScreenCover(item: $selectedCamera) { camera in
-            HLSPlayerView(camera: camera)
+            FullscreenPlayerView(camera: camera)
         }
         .onAppear {
             DebugLogger.shared.log("📹 CameraStreamsView appeared", emoji: "📹", color: .blue)
