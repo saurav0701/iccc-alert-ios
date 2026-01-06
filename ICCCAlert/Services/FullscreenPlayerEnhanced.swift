@@ -57,6 +57,9 @@ struct FullscreenPlayerEnhanced: View {
             handleMemoryChange(memoryMB)
         }
         .onChange(of: session.isActive) { active in
+            // ✅ NEW: Notify memory monitor of streaming state
+            MemoryMonitor.shared.setStreamingActive(active)
+            
             // If session becomes inactive without restart, it's an emergency stop
             if !active && !session.needsRestart && !isRestarting {
                 showEmergencyStopScreen()
@@ -64,6 +67,10 @@ struct FullscreenPlayerEnhanced: View {
         }
         .onAppear {
             DebugLogger.shared.log("📹 Player appeared: \(camera.displayName)", emoji: "📹", color: .blue)
+            
+            // ✅ NEW: Notify that streaming started
+            NotificationCenter.default.post(name: NSNotification.Name("StreamingStarted"), object: nil)
+            MemoryMonitor.shared.setStreamingActive(true)
         }
         .onDisappear {
             handleDisappear()
@@ -71,25 +78,26 @@ struct FullscreenPlayerEnhanced: View {
     }
     
     private func handleMemoryChange(_ memoryMB: Double) {
-        // Critical threshold (180MB) - show urgent warning
-        if memoryMB > 180 {
+        // ✅ FIXED: More conservative thresholds for low-RAM devices
+        // Critical threshold (200MB for streaming) - show urgent warning
+        if memoryMB > 200 {
             DebugLogger.shared.log("🚨 CRITICAL MEMORY: \(String(format: "%.1f", memoryMB))MB", emoji: "🚨", color: .red)
             showCrashWarning = true
             
-            // Emergency restart after 1 second
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                if self.memoryMonitor.currentMemoryMB > 180 {
+            // Emergency restart after 2 seconds
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                if self.memoryMonitor.currentMemoryMB > 200 {
                     self.showEmergencyStopScreen()
                 }
             }
         }
-        // Warning threshold (150MB) - show warning, trigger restart
-        else if memoryMB > 150 {
+        // Warning threshold (170MB) - show warning, trigger restart
+        else if memoryMB > 170 {
             DebugLogger.shared.log("⚠️ High memory: \(String(format: "%.1f", memoryMB))MB - Restart", emoji: "⚠️", color: .orange)
             showCrashWarning = true
             
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                if self.memoryMonitor.currentMemoryMB > 150 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                if self.memoryMonitor.currentMemoryMB > 170 {
                     self.performRestart()
                     self.showCrashWarning = false
                 }
@@ -146,7 +154,7 @@ struct FullscreenPlayerEnhanced: View {
                 
                 Spacer()
                 
-                // Countdown timer (now shows 2 min)
+                // Countdown timer (shows 2 min)
                 if session.secondsRemaining > 0 {
                     VStack(spacing: 2) {
                         Text(formatTime(session.secondsRemaining))
@@ -193,16 +201,16 @@ struct FullscreenPlayerEnhanced: View {
                         // Memory indicator with color coding
                         let memMB = Int(memoryMonitor.currentMemoryMB)
                         let memColor: Color = {
-                            if memMB > 180 { return .red }
-                            else if memMB > 150 { return .orange }
-                            else if memMB > 120 { return .yellow }
+                            if memMB > 200 { return .red }
+                            else if memMB > 170 { return .orange }
+                            else if memMB > 140 { return .yellow }
                             else { return .white.opacity(0.6) }
                         }()
                         
                         Text("\(memMB)MB")
                             .font(.caption2)
                             .foregroundColor(memColor)
-                            .fontWeight(memMB > 150 ? .bold : .regular)
+                            .fontWeight(memMB > 170 ? .bold : .regular)
                     }
                 }
                 .padding()
@@ -309,7 +317,7 @@ struct FullscreenPlayerEnhanced: View {
         // Stop current session
         session.stop()
         
-        // CRITICAL: Wait 3 seconds for complete cleanup (increased from 2)
+        // Wait 3 seconds for complete cleanup
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
             // Force aggressive memory cleanup
             for _ in 0..<5 {
@@ -322,7 +330,7 @@ struct FullscreenPlayerEnhanced: View {
             let currentMem = self.memoryMonitor.currentMemoryMB
             DebugLogger.shared.log("📊 Pre-restart memory: \(String(format: "%.1f", currentMem))MB", emoji: "📊", color: .blue)
             
-            if currentMem > 170 {
+            if currentMem > 190 {
                 // Too high to restart safely
                 self.showEmergencyStopScreen()
                 return
@@ -339,9 +347,13 @@ struct FullscreenPlayerEnhanced: View {
     private func handleDisappear() {
         DebugLogger.shared.log("🚪 Player disappeared - cleanup", emoji: "🚪", color: .orange)
         
+        // ✅ NEW: Notify that streaming stopped
+        NotificationCenter.default.post(name: NSNotification.Name("StreamingStopped"), object: nil)
+        MemoryMonitor.shared.setStreamingActive(false)
+        
         session.stop()
         
-        // CRITICAL: Aggressive cleanup on dismiss
+        // Aggressive cleanup on dismiss
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             for _ in 0..<5 {
                 autoreleasepool {}

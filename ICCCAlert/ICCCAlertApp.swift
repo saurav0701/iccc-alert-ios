@@ -8,8 +8,9 @@ struct ICCCAlertApp: App {
     
     @Environment(\.scenePhase) var scenePhase
     
-    // Memory monitoring
+    // ✅ FIXED: Only monitor memory when streaming is active
     @State private var memoryMonitorTimer: Timer?
+    @State private var isStreamingActive = false
     
     init() {
         setupAppearance()
@@ -28,13 +29,30 @@ struct ICCCAlertApp: App {
             ICCCAlertApp.handleAppTermination()
         }
         
-        // Register for memory warnings
+        // ✅ FIXED: Only handle critical memory warnings (removed continuous monitoring)
         NotificationCenter.default.addObserver(
             forName: UIApplication.didReceiveMemoryWarningNotification,
             object: nil,
             queue: .main
         ) { _ in
             ICCCAlertApp.handleMemoryWarning()
+        }
+        
+        // ✅ NEW: Monitor streaming state
+        NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("StreamingStarted"),
+            object: nil,
+            queue: .main
+        ) { _ in
+            ICCCAlertApp.streamingStateChanged(true)
+        }
+        
+        NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("StreamingStopped"),
+            object: nil,
+            queue: .main
+        ) { _ in
+            ICCCAlertApp.streamingStateChanged(false)
         }
         
         print("🚀 ICCCAlertApp initialized")
@@ -50,7 +68,7 @@ struct ICCCAlertApp: App {
                     .onAppear {
                         print("🚀 ContentView appeared - User authenticated")
                         connectWebSocket()
-                        startProactiveMemoryMonitoring()
+                        // ✅ REMOVED: startProactiveMemoryMonitoring() - only run when streaming
                     }
             } else {
                 LoginView()
@@ -91,61 +109,14 @@ struct ICCCAlertApp: App {
         }
     }
     
-    // MARK: - Proactive Memory Monitoring
+    // MARK: - Stream State Monitoring
     
-    private func startProactiveMemoryMonitoring() {
-        // Monitor memory every 15 seconds
-        memoryMonitorTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { _ in
-            checkAndCleanMemory()
+    private static func streamingStateChanged(_ isActive: Bool) {
+        if isActive {
+            print("📹 Streaming started - begin aggressive monitoring")
+        } else {
+            print("📹 Streaming stopped - normal monitoring")
         }
-    }
-    
-    private func checkAndCleanMemory() {
-        var info = mach_task_basic_info()
-        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
-        
-        let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
-                task_info(mach_task_self_,
-                         task_flavor_t(MACH_TASK_BASIC_INFO),
-                         $0,
-                         &count)
-            }
-        }
-        
-        if kerr == KERN_SUCCESS {
-            let usedMemoryMB = Double(info.resident_size) / 1024 / 1024
-            
-            print("💾 Memory: \(String(format: "%.1f", usedMemoryMB)) MB")
-            
-            // Update MemoryMonitor
-            MemoryMonitor.shared.currentMemoryMB = usedMemoryMB
-            
-            // Proactive cleanup at 180MB
-            if usedMemoryMB > 180 {
-                print("⚠️ Memory approaching threshold - proactive cleanup")
-                performProactiveCleanup()
-            }
-            
-            // Emergency cleanup at 220MB
-            if usedMemoryMB > 220 {
-                print("🚨 CRITICAL MEMORY - Emergency cleanup")
-                ICCCAlertApp.handleMemoryWarning()
-            }
-        }
-    }
-    
-    private func performProactiveCleanup() {
-        // Clear image caches
-        EventImageLoader.shared.clearCache()
-        
-        // Clear URL cache
-        URLCache.shared.removeAllCachedResponses()
-        
-        // Force autoreleasepool drain
-        autoreleasepool {}
-        
-        print("🧹 Proactive cleanup complete")
     }
     
     // MARK: - WebSocket Connection
@@ -175,7 +146,6 @@ struct ICCCAlertApp: App {
                 webSocketService.connect()
             }
             NotificationManager.shared.updateBadgeCount()
-            startProactiveMemoryMonitoring()
             
         case .inactive:
             print("📱 App became inactive")
@@ -186,10 +156,8 @@ struct ICCCAlertApp: App {
             print("📱 App moved to background")
             saveAppState()
             
-            // Aggressive cleanup for background
+            // ✅ FIXED: Only basic cleanup for background
             PlayerManager.shared.clearAll()
-            EventImageLoader.shared.clearCache()
-            URLCache.shared.removeAllCachedResponses()
             
             // Stop memory monitoring
             memoryMonitorTimer?.invalidate()
@@ -240,24 +208,22 @@ struct ICCCAlertApp: App {
         print("✅ Termination cleanup complete")
     }
     
-    // MARK: - Memory Warning Handler
+    // MARK: - Memory Warning Handler (ONLY FOR CRITICAL WARNINGS)
     
     private static func handleMemoryWarning() {
-        print("⚠️ MEMORY WARNING - EMERGENCY CLEANUP")
+        print("⚠️ SYSTEM MEMORY WARNING - Emergency cleanup")
         
         // 1. Stop all active streams IMMEDIATELY
         PlayerManager.shared.clearAll()
         
-        // 2. Clear ALL caches
+        // 2. Clear image cache
         EventImageLoader.shared.clearCache()
         
         // 3. Clear URL cache
         URLCache.shared.removeAllCachedResponses()
         
-        // 4. Force multiple autoreleasepool drains
-        for _ in 0..<3 {
-            autoreleasepool {}
-        }
+        // 4. Force autoreleasepool drain
+        autoreleasepool {}
         
         print("🧹 Emergency cleanup complete")
     }
