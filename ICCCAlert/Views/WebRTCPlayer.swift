@@ -240,25 +240,6 @@ struct WebRTCPlayerView: UIViewRepresentable {
     }
 }
 
-// MARK: - Camera Extension
-extension Camera {
-    var webrtcStreamURL: String? {
-        let servers: [Int: String] = [
-            5: "http://103.208.173.131:8889", 6: "http://103.208.173.147:8889",
-            7: "http://103.208.173.163:8889", 8: "http://a5va.bccliccc.in:8889",
-            9: "http://a5va.bccliccc.in:8889", 10: "http://a6va.bccliccc.in:8889",
-            11: "http://103.208.173.195:8889", 12: "http://a9va.bccliccc.in:8889",
-            13: "http://a10va.bccliccc.in:8889", 14: "http://103.210.88.195:8889",
-            15: "http://103.210.88.211:8889", 16: "http://103.208.173.179:8889",
-            22: "http://103.208.173.211:8889"
-        ]
-        
-        guard let server = servers[groupId] else { return nil }
-        let path = ip.isEmpty ? id : ip
-        return "\(server)/\(path)/whep"
-    }
-}
-
 // MARK: - Camera Thumbnail
 struct CameraThumbnail: View {
     let camera: Camera
