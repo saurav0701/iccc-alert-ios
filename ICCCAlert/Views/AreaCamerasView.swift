@@ -3,7 +3,6 @@ import SwiftUI
 struct AreaCamerasView: View {
     let area: String
     @StateObject private var cameraManager = CameraManager.shared
-    @StateObject private var thumbnailCache = ThumbnailCacheManager.shared
     @State private var searchText = ""
     @State private var showOnlineOnly = true
     @State private var gridMode: GridViewMode = .grid2x2
@@ -46,7 +45,6 @@ struct AreaCamerasView: View {
             }
         )
         .fullScreenCover(item: $selectedCamera) { camera in
-            // REVERTED: Use old player that works
             FullscreenPlayerEnhanced(camera: camera)
                 .onDisappear {
                     canOpenStream = false
@@ -165,7 +163,7 @@ struct AreaCamerasView: View {
         ScrollView {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: gridMode.columns), spacing: 12) {
                 ForEach(cameras, id: \.id) { camera in
-                    CameraGridCardFixed(camera: camera, mode: gridMode)
+                    CameraGridCardSimple(camera: camera, mode: gridMode)
                         .onTapGesture {
                             handleCameraTap(camera)
                         }
@@ -184,20 +182,6 @@ struct AreaCamerasView: View {
         
         if !canOpenStream {
             streamBlockMessage = "Please wait before opening another stream."
-            showStreamBlockedAlert = true
-            UINotificationFeedbackGenerator().notificationOccurred(.warning)
-            return
-        }
-        
-        if thumbnailCache.isLoading(for: camera.id) {
-            streamBlockMessage = "Thumbnail capture in progress. Wait a few seconds."
-            showStreamBlockedAlert = true
-            UINotificationFeedbackGenerator().notificationOccurred(.warning)
-            return
-        }
-        
-        if !thumbnailCache.loadingCameras.isEmpty {
-            streamBlockMessage = "Another camera thumbnail is loading. Please wait."
             showStreamBlockedAlert = true
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
             return
@@ -238,5 +222,135 @@ struct AreaCamerasView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemGroupedBackground))
+    }
+}
+
+// MARK: - Simple Camera Card (NO THUMBNAILS)
+struct CameraGridCardSimple: View {
+    let camera: Camera
+    let mode: GridViewMode
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Simple placeholder instead of thumbnail
+            ZStack {
+                LinearGradient(
+                    colors: camera.isOnline ? 
+                        [Color.blue.opacity(0.3), Color.blue.opacity(0.1)] :
+                        [Color.gray.opacity(0.3), Color.gray.opacity(0.1)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                
+                VStack(spacing: 6) {
+                    Image(systemName: camera.isOnline ? "video.fill" : "video.slash.fill")
+                        .font(.system(size: thumbnailIconSize))
+                        .foregroundColor(camera.isOnline ? .blue : .gray)
+                    
+                    if camera.isOnline {
+                        Text("Tap to play")
+                            .font(captionFont)
+                            .foregroundColor(.blue)
+                    } else {
+                        Text("Offline")
+                            .font(captionFont)
+                            .foregroundColor(.gray)
+                    }
+                }
+            }
+            .frame(height: thumbnailHeight)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(camera.isOnline ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
+            )
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text(camera.displayName)
+                    .font(titleFont)
+                    .fontWeight(.medium)
+                    .lineLimit(mode == .list ? 2 : 1)
+                    .foregroundColor(.primary)
+                
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(camera.isOnline ? Color.green : Color.gray)
+                        .frame(width: dotSize, height: dotSize)
+                    
+                    Text(camera.location.isEmpty ? camera.area : camera.location)
+                        .font(subtitleFont)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, mode == .list ? 0 : 4)
+        }
+        .padding(padding)
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.05), radius: 5, y: 2)
+        .opacity(camera.isOnline ? 1 : 0.6)
+    }
+    
+    private var thumbnailHeight: CGFloat {
+        switch mode {
+        case .list: return 140
+        case .grid2x2: return 120
+        case .grid3x3: return 100
+        case .grid4x4: return 80
+        }
+    }
+    
+    private var thumbnailIconSize: CGFloat {
+        switch mode {
+        case .list: return 40
+        case .grid2x2: return 32
+        case .grid3x3: return 24
+        case .grid4x4: return 20
+        }
+    }
+    
+    private var padding: CGFloat {
+        switch mode {
+        case .list: return 12
+        case .grid2x2: return 10
+        case .grid3x3: return 8
+        case .grid4x4: return 6
+        }
+    }
+    
+    private var titleFont: Font {
+        switch mode {
+        case .list: return .subheadline
+        case .grid2x2: return .caption
+        case .grid3x3: return .caption2
+        case .grid4x4: return .system(size: 10)
+        }
+    }
+    
+    private var subtitleFont: Font {
+        switch mode {
+        case .list: return .caption
+        case .grid2x2: return .caption2
+        case .grid3x3: return .system(size: 10)
+        case .grid4x4: return .system(size: 9)
+        }
+    }
+    
+    private var captionFont: Font {
+        switch mode {
+        case .list: return .caption
+        case .grid2x2: return .caption2
+        case .grid3x3: return .system(size: 10)
+        case .grid4x4: return .system(size: 9)
+        }
+    }
+    
+    private var dotSize: CGFloat {
+        switch mode {
+        case .list: return 6
+        case .grid2x2: return 5
+        case .grid3x3, .grid4x4: return 4
+        }
     }
 }

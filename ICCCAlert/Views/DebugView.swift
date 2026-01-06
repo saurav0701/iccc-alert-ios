@@ -1,12 +1,12 @@
 import SwiftUI
 
-// MARK: - Enhanced Debug Logger with Camera Status
+// MARK: - Enhanced Debug Logger
 class DebugLogger: ObservableObject {
     static let shared = DebugLogger()
     
     @Published var logs: [LogEntry] = []
-    @Published var cameraStatus: [String: CameraStreamStatus] = [:] // Camera ID -> Status
-    private let maxLogs = 500 // Increased for thumbnail debugging
+    @Published var cameraStatus: [String: CameraStreamStatus] = [:]
+    private let maxLogs = 500
     
     struct LogEntry: Identifiable {
         let id = UUID()
@@ -17,7 +17,7 @@ class DebugLogger: ObservableObject {
     }
     
     struct CameraStreamStatus: Identifiable {
-        let id: String // Camera ID
+        let id: String
         var status: String
         var lastUpdate: Date
         var error: String?
@@ -50,7 +50,6 @@ class DebugLogger: ObservableObject {
                 self.logs.removeFirst(self.logs.count - self.maxLogs)
             }
             
-            // Also print to console for easier debugging
             print("\(emoji) \(message)")
         }
     }
@@ -101,13 +100,13 @@ class DebugLogger: ObservableObject {
     }
 }
 
-// MARK: - Enhanced Debug View
+// MARK: - Debug View (NO THUMBNAIL TAB)
 struct DebugView: View {
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @StateObject private var webSocketService = WebSocketService.shared
     @StateObject private var cameraManager = CameraManager.shared
-    @StateObject private var thumbnailCache = ThumbnailCacheManager.shared
     @StateObject private var logger = DebugLogger.shared
+    @StateObject private var memoryMonitor = MemoryMonitor.shared
     @State private var refreshTrigger = UUID()
     @State private var autoRefreshTimer: Timer?
     @State private var selectedTab = 0
@@ -115,12 +114,11 @@ struct DebugView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
-                // Tab Selector
+                // Tab Selector (removed Thumbnails tab)
                 Picker("", selection: $selectedTab) {
                     Text("Overview").tag(0)
-                    Text("Thumbnails").tag(1)
-                    Text("Cameras").tag(2)
-                    Text("Logs").tag(3)
+                    Text("Cameras").tag(1)
+                    Text("Logs").tag(2)
                 }
                 .pickerStyle(SegmentedPickerStyle())
                 .padding()
@@ -128,9 +126,8 @@ struct DebugView: View {
                 // Content based on selected tab
                 TabView(selection: $selectedTab) {
                     overviewTab.tag(0)
-                    thumbnailsTab.tag(1)
-                    camerasTab.tag(2)
-                    logsTab.tag(3)
+                    camerasTab.tag(1)
+                    logsTab.tag(2)
                 }
                 .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
             }
@@ -173,10 +170,32 @@ struct DebugView: View {
                 }
             }
             
+            // Memory Usage
+            Section(header: Text("Memory Usage")) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Current Memory")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(String(format: "%.1f MB", memoryMonitor.currentMemoryMB))
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .foregroundColor(memoryMonitor.isMemoryWarning ? .red : .green)
+                    }
+                    
+                    Spacer()
+                    
+                    if memoryMonitor.isMemoryWarning {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.red)
+                            .font(.title2)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            
             // Camera Statistics
             Section(header: Text("Camera Stream Status")) {
-                let _ = logger.getCamerasByStatus()
-                
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Total Cameras")
@@ -216,112 +235,6 @@ struct DebugView: View {
                                 .font(.caption)
                                 .foregroundColor(.red)
                         }
-                    }
-                }
-            }
-        }
-    }
-    
-    // MARK: - Thumbnails Tab
-    private var thumbnailsTab: some View {
-        List {
-            // Thumbnail Test Section - FIXED: Changed manualRefresh to manualLoad
-            Section(header: Text("Thumbnail Capture Test")) {
-                Button(action: {
-                    // Test with first online camera - using manualLoad
-                    if let testCamera = cameraManager.cameras.first(where: { $0.isOnline }) {
-                        DebugLogger.shared.log("🧪 Testing thumbnail capture for: \(testCamera.displayName)", emoji: "🧪", color: .blue)
-                        thumbnailCache.manualLoad(for: testCamera) { success in
-                            if success {
-                                DebugLogger.shared.log("✅ Test capture successful", emoji: "✅", color: .green)
-                            } else {
-                                DebugLogger.shared.log("❌ Test capture failed", emoji: "❌", color: .red)
-                            }
-                        }
-                    } else {
-                        DebugLogger.shared.log("⚠️ No online cameras available for test", emoji: "⚠️", color: .orange)
-                    }
-                }) {
-                    HStack {
-                        Image(systemName: "photo.badge.plus")
-                        Text("Test Thumbnail Capture")
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(10)
-                }
-                .buttonStyle(PlainButtonStyle())
-                
-                // Show captured thumbnails count
-                let thumbnailCount = thumbnailCache.thumbnails.count
-                HStack {
-                    Text("Captured Thumbnails:")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    Text("\(thumbnailCount)")
-                        .font(.headline)
-                        .fontWeight(.bold)
-                        .foregroundColor(thumbnailCount > 0 ? .green : .gray)
-                }
-            }
-            
-            // Show thumbnails grid
-            if !thumbnailCache.thumbnails.isEmpty {
-                Section(header: HStack {
-                    Text("Captured Thumbnails")
-                    Spacer()
-                    Button("Clear All") {
-                        thumbnailCache.clearAllThumbnails()
-                        DebugLogger.shared.log("🗑️ Cleared all thumbnails", emoji: "🗑️", color: .red)
-                    }
-                    .font(.caption)
-                    .foregroundColor(.red)
-                }) {
-                    let thumbnails = Array(thumbnailCache.thumbnails)
-                    ForEach(0..<thumbnails.count, id: \.self) { index in
-                        let (key, image) = thumbnails[index]
-                        HStack(spacing: 12) {
-                            Image(uiImage: image)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: 100, height: 75)
-                                .cornerRadius(8)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .stroke(Color.green, lineWidth: 2)
-                                )
-                            
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(key)
-                                    .font(.system(size: 12, weight: .bold))
-                                    .lineLimit(2)
-                                
-                                Text("\(Int(image.size.width))x\(Int(image.size.height))")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.secondary)
-                                
-                                if let timestamp = thumbnailCache.thumbnailTimestamps[key] {
-                                    let age = Date().timeIntervalSince(timestamp)
-                                    let isFresh = thumbnailCache.isThumbnailFresh(for: key)
-                                    Text(isFresh ? "Fresh ✓" : "Stale (\(Int(age/60))m old)")
-                                        .font(.system(size: 9))
-                                        .foregroundColor(isFresh ? .green : .orange)
-                                }
-                            }
-                            
-                            Spacer()
-                            
-                            Button(action: {
-                                thumbnailCache.clearThumbnail(for: key)
-                            }) {
-                                Image(systemName: "trash")
-                                    .foregroundColor(.red)
-                            }
-                        }
-                        .padding(.vertical, 4)
                     }
                 }
             }

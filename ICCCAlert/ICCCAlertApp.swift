@@ -8,7 +8,7 @@ struct ICCCAlertApp: App {
     
     @Environment(\.scenePhase) var scenePhase
     
-    // CRITICAL: Memory monitoring
+    // Memory monitoring
     @State private var memoryMonitorTimer: Timer?
     
     init() {
@@ -91,7 +91,7 @@ struct ICCCAlertApp: App {
         }
     }
     
-    // MARK: - Proactive Memory Monitoring (NEW - CRITICAL)
+    // MARK: - Proactive Memory Monitoring
     
     private func startProactiveMemoryMonitoring() {
         // Monitor memory every 15 seconds
@@ -118,13 +118,16 @@ struct ICCCAlertApp: App {
             
             print("💾 Memory: \(String(format: "%.1f", usedMemoryMB)) MB")
             
-            // CRITICAL: Proactive cleanup at 180MB (before reaching 200MB threshold)
+            // Update MemoryMonitor
+            MemoryMonitor.shared.currentMemoryMB = usedMemoryMB
+            
+            // Proactive cleanup at 180MB
             if usedMemoryMB > 180 {
                 print("⚠️ Memory approaching threshold - proactive cleanup")
                 performProactiveCleanup()
             }
             
-            // CRITICAL: Emergency cleanup at 220MB
+            // Emergency cleanup at 220MB
             if usedMemoryMB > 220 {
                 print("🚨 CRITICAL MEMORY - Emergency cleanup")
                 ICCCAlertApp.handleMemoryWarning()
@@ -133,9 +136,6 @@ struct ICCCAlertApp: App {
     }
     
     private func performProactiveCleanup() {
-        // Clear thumbnail memory cache (keep disk cache)
-        ThumbnailCacheManager.shared.clearChannelThumbnails()
-        
         // Clear image caches
         EventImageLoader.shared.clearCache()
         
@@ -179,16 +179,15 @@ struct ICCCAlertApp: App {
             
         case .inactive:
             print("📱 App became inactive")
-            // CRITICAL: Stop all active streams immediately
+            // Stop all active streams immediately
             PlayerManager.shared.clearAll()
             
         case .background:
             print("📱 App moved to background")
             saveAppState()
             
-            // CRITICAL: Aggressive cleanup for background
+            // Aggressive cleanup for background
             PlayerManager.shared.clearAll()
-            ThumbnailCacheManager.shared.clearChannelThumbnails()
             EventImageLoader.shared.clearCache()
             URLCache.shared.removeAllCachedResponses()
             
@@ -218,7 +217,6 @@ struct ICCCAlertApp: App {
         PlayerManager.shared.clearAll()
         
         // Clear all caches
-        ThumbnailCacheManager.shared.clearAllThumbnails()
         EventImageLoader.shared.clearCache()
         URLCache.shared.removeAllCachedResponses()
         
@@ -234,7 +232,6 @@ struct ICCCAlertApp: App {
         print("🛑 App terminating - cleanup")
         
         PlayerManager.shared.clearAll()
-        ThumbnailCacheManager.shared.clearChannelThumbnails()
         
         SubscriptionManager.shared.forceSave()
         ChannelSyncState.shared.forceSave()
@@ -252,7 +249,6 @@ struct ICCCAlertApp: App {
         PlayerManager.shared.clearAll()
         
         // 2. Clear ALL caches
-        ThumbnailCacheManager.shared.clearChannelThumbnails()
         EventImageLoader.shared.clearCache()
         
         // 3. Clear URL cache

@@ -585,7 +585,7 @@ class GoogleHybridTileOverlay: MKTileOverlay {
     }
 }
 
-// MARK: - Custom Map Annotation
+
 
 class CustomMapAnnotation: NSObject, MKAnnotation {
     let coordinate: CLLocationCoordinate2D
