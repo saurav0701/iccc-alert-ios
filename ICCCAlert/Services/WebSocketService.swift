@@ -12,7 +12,7 @@ class WebSocketService: ObservableObject {
     private var session: URLSession?
     private var pingTimer: Timer?
     
-    private let baseURL = "ws://103.208.173.227:2222"
+    private let baseURL = "ws://192.168.29.69:2222"
     
     private var pendingSubscriptionUpdate = false
     private var hasSubscribed = false
@@ -31,10 +31,6 @@ class WebSocketService: ObservableObject {
     private var _processedCount = 0
     private var _droppedCount = 0
     private var _ackedCount = 0
-    
-    // REMOVED: Camera update throttling variables
-    // private var lastCameraUpdate: TimeInterval = 0
-    // private let cameraUpdateInterval: TimeInterval = 300
     
     private var receivedCount: Int {
         get {
@@ -137,19 +133,16 @@ class WebSocketService: ObservableObject {
         Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             
-            // Only check if we're supposed to be connected
             guard self.isConnected else { return }
             
             let now = Date().timeIntervalSince1970
             
-            // Check for processing stall (no messages for 30 seconds)
             if self.lastProcessedTimestamp > 0 && (now - self.lastProcessedTimestamp) > 30 {
                 DebugLogger.shared.log("⚠️ Processing stalled (30s), reconnecting", emoji: "🔄", color: .orange)
                 self.reconnect()
                 return
             }
             
-            // Check message queue overflow
             if self.queuedMessageCount > self.maxQueuedMessages {
                 DebugLogger.shared.log("⚠️ Message queue overflow, clearing", emoji: "🧹", color: .orange)
                 self.queuedMessageCount = 0
@@ -207,7 +200,6 @@ class WebSocketService: ObservableObject {
     private func reconnect() {
         DebugLogger.shared.log("Attempting reconnect...", emoji: "🔄", color: .orange)
         
-        // Prevent multiple simultaneous reconnects
         guard webSocketTask?.state != .running else {
             DebugLogger.shared.log("Already connected, skipping reconnect", emoji: "⚠️", color: .orange)
             return
@@ -218,7 +210,6 @@ class WebSocketService: ObservableObject {
         isConnected = false
         hasSubscribed = false
         
-        // Wait longer before reconnecting
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             self.connect()
         }
@@ -269,11 +260,6 @@ class WebSocketService: ObservableObject {
         receivedCount += 1
         lastProcessedTimestamp = Date().timeIntervalSince1970
         
-        // Log messages containing "camera" for debugging
-        if text.contains("camera") || text.contains("Camera") {
-            DebugLogger.shared.log("📥 RAW MESSAGE (contains camera): \(text.prefix(200))...", emoji: "📥", color: .blue)
-        }
-        
         guard queuedMessageCount < maxQueuedMessages else {
             droppedCount += 1
             DebugLogger.shared.log("⚠️ Dropped message - queue full", emoji: "🗑️", color: .red)
@@ -311,101 +297,58 @@ class WebSocketService: ObservableObject {
             throw NSError(domain: "WebSocket", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert to data"])
         }
         
-        // Parse as dictionary first to inspect structure
+        // ✅ Try to parse as dictionary to check message type
         if let jsonDict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             
-            // Check if this looks like a camera list event
+            // ✅ Check if this is a camera list message
             if let type = jsonDict["type"] as? String, type == "camera-list" {
-                DebugLogger.shared.log("📹 CAMERA LIST DETECTED (type=camera-list)", emoji: "📹", color: .green)
-                
-                // Extract the camera JSON directly from dictionary
-                if let dataDict = jsonDict["data"] as? [String: Any],
-                   let rawCameraJSON = dataDict["_raw_camera_json"] as? String {
-                    
-                    DebugLogger.shared.log("   Found _raw_camera_json string, length: \(rawCameraJSON.count)", emoji: "📦", color: .blue)
-                    
-                    // Parse the camera JSON
-                    if let cameraData = rawCameraJSON.data(using: .utf8) {
-                        do {
-                            let cameraResponse = try JSONDecoder().decode(CameraListResponse.self, from: cameraData)
-                            DebugLogger.shared.log("✅ Decoded \(cameraResponse.cameras.count) cameras!", emoji: "✅", color: .green)
-                            
-                            handleCameraList(cameraResponse)
-                            return
-                            
-                        } catch {
-                            DebugLogger.shared.log("❌ Failed to decode cameras: \(error)", emoji: "❌", color: .red)
-                            
-                            if let decodingError = error as? DecodingError {
-                                switch decodingError {
-                                case .keyNotFound(let key, _):
-                                    DebugLogger.shared.log("   Missing key: \(key.stringValue)", emoji: "🔑", color: .orange)
-                                case .typeMismatch(let type, let context):
-                                    DebugLogger.shared.log("   Type mismatch: \(type) at \(context.codingPath)", emoji: "⚠️", color: .orange)
-                                case .valueNotFound(let type, let context):
-                                    DebugLogger.shared.log("   Value not found: \(type) at \(context.codingPath)", emoji: "⚠️", color: .orange)
-                                case .dataCorrupted(let context):
-                                    DebugLogger.shared.log("   Data corrupted at: \(context.codingPath)", emoji: "⚠️", color: .orange)
-                                @unknown default:
-                                    break
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    DebugLogger.shared.log("❌ No _raw_camera_json string found in data", emoji: "❌", color: .red)
-                    if let dataDict = jsonDict["data"] as? [String: Any] {
-                        DebugLogger.shared.log("   Data keys: \(dataDict.keys.joined(separator: ", "))", emoji: "🔑", color: .gray)
-                    }
-                }
-                
-                // Don't process as regular event
+                handleCameraListMessage(jsonDict)
                 return
             }
         }
         
-        // Now try to decode as Event (for regular events)
+        // Otherwise decode as Event
         let decoder = JSONDecoder()
         
         guard let event = try? decoder.decode(Event.self, from: data) else {
-            DebugLogger.shared.log("⚠️ Could not decode as Event", emoji: "⚠️", color: .orange)
-            throw NSError(domain: "WebSocket", code: -2, userInfo: [NSLocalizedDescriptionKey: "Failed to decode as Event"])
+            // Not an event we care about - ignore silently
+            return
         }
         
         // Handle regular event
         handleEvent(event)
     }
-
-    // MARK: - Handle Camera List Updates (NO THROTTLING - IMMEDIATE PROCESSING)
     
-    private func handleCameraList(_ response: CameraListResponse) {
-        let onlineCount = response.cameras.filter { $0.isOnline }.count
-        let areas = Set(response.cameras.map { $0.area })
-        
-        DebugLogger.shared.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", emoji: "📹", color: .blue)
-        DebugLogger.shared.log("📹 Processing camera list", emoji: "📹", color: .blue)
-        DebugLogger.shared.log("   Total: \(response.cameras.count)", emoji: "📊", color: .blue)
-        DebugLogger.shared.log("   Online: \(onlineCount)", emoji: "🟢", color: .green)
-        DebugLogger.shared.log("   Offline: \(response.cameras.count - onlineCount)", emoji: "⚫️", color: .gray)
-        DebugLogger.shared.log("   Areas: \(areas.count) - \(areas.sorted().joined(separator: ", "))", emoji: "📍", color: .blue)
-        
-        // Print first 3 cameras only (reduce log spam)
-        let sampleCount = min(3, response.cameras.count)
-        for (index, camera) in response.cameras.prefix(sampleCount).enumerated() {
-            let status = camera.isOnline ? "🟢" : "⚫️"
-            DebugLogger.shared.log("   \(index+1). \(status) \(camera.name) - \(camera.area)", emoji: "📷", color: .gray)
+    // ✅ Handle camera list updates from backend
+    private func handleCameraListMessage(_ jsonDict: [String: Any]) {
+        guard let dataDict = jsonDict["data"] as? [String: Any],
+              let rawCameraJSON = dataDict["_raw_camera_json"] as? String else {
+            DebugLogger.shared.log("❌ No camera JSON in message", emoji: "❌", color: .red)
+            return
         }
         
-        if response.cameras.count > 3 {
-            DebugLogger.shared.log("   ... and \(response.cameras.count - 3) more cameras", emoji: "📷", color: .gray)
+        DebugLogger.shared.log("📹 Received camera list update", emoji: "📹", color: .blue)
+        
+        // Parse camera JSON
+        guard let cameraData = rawCameraJSON.data(using: .utf8) else {
+            DebugLogger.shared.log("❌ Failed to convert camera JSON", emoji: "❌", color: .red)
+            return
         }
         
-        DebugLogger.shared.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", emoji: "📹", color: .blue)
-        
-        // Update on main thread - NO THROTTLING, IMMEDIATE PROCESSING
-        DispatchQueue.main.async {
-            CameraManager.shared.updateCameras(response.cameras)
-            DebugLogger.shared.log("✅ CameraManager updated", emoji: "✅", color: .green)
+        do {
+            let cameraResponse = try JSONDecoder().decode(CameraListResponse.self, from: cameraData)
+            
+            let onlineCount = cameraResponse.cameras.filter { $0.isOnline }.count
+            
+            DebugLogger.shared.log("✅ Parsed \(cameraResponse.cameras.count) cameras (\(onlineCount) online)", emoji: "✅", color: .green)
+            
+            // Update CameraManager on main thread
+            DispatchQueue.main.async {
+                CameraManager.shared.updateCameras(cameraResponse.cameras)
+            }
+            
+        } catch {
+            DebugLogger.shared.log("❌ Failed to decode cameras: \(error)", emoji: "❌", color: .red)
         }
     }
     
@@ -679,14 +622,12 @@ class WebSocketService: ObservableObject {
         pingTimer = Timer.scheduledTimer(withTimeInterval: 25, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             
-            // Only ping if connected
             guard self.isConnected else { return }
             
             if self.webSocketTask?.state == .running {
                 self.webSocketTask?.sendPing { error in
                     if let error = error {
                         DebugLogger.shared.log("Ping failed: \(error.localizedDescription)", emoji: "❌", color: .red)
-                
                     }
                 }
             } else {

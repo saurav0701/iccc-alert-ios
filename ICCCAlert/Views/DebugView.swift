@@ -1,11 +1,10 @@
 import SwiftUI
 
-// MARK: - Enhanced Debug Logger with Camera Status
+// MARK: - Enhanced Debug Logger
 class DebugLogger: ObservableObject {
     static let shared = DebugLogger()
     
     @Published var logs: [LogEntry] = []
-    @Published var cameraStatus: [String: CameraStreamStatus] = [:] // Camera ID -> Status
     private let maxLogs = 200
     
     struct LogEntry: Identifiable {
@@ -14,29 +13,6 @@ class DebugLogger: ObservableObject {
         let message: String
         let emoji: String
         let color: Color
-    }
-    
-    struct CameraStreamStatus: Identifiable {
-        let id: String // Camera ID
-        var status: String
-        var lastUpdate: Date
-        var error: String?
-        var streamURL: String?
-        
-        var statusColor: Color {
-            if status.contains("Playing") { return .green }
-            if status.contains("Codec") || status.contains("Error") { return .red }
-            if status.contains("Buffering") || status.contains("retry") { return .orange }
-            return .blue
-        }
-        
-        var statusEmoji: String {
-            if status.contains("Playing") { return "✅" }
-            if status.contains("Codec") { return "🚫" }
-            if status.contains("Error") { return "❌" }
-            if status.contains("Buffering") { return "⏳" }
-            return "📹"
-        }
     }
     
     private init() {}
@@ -52,58 +28,21 @@ class DebugLogger: ObservableObject {
         }
     }
     
-    func updateCameraStatus(cameraId: String, status: String, streamURL: String? = nil, error: String? = nil) {
-        DispatchQueue.main.async {
-            self.cameraStatus[cameraId] = CameraStreamStatus(
-                id: cameraId,
-                status: status,
-                lastUpdate: Date(),
-                error: error,
-                streamURL: streamURL
-            )
-        }
-    }
-    
-    func getCamerasByStatus() -> (working: Int, codec: Int, error: Int, other: Int) {
-        var working = 0
-        var codec = 0
-        var error = 0
-        var other = 0
-        
-        for (_, status) in cameraStatus {
-            if status.status.contains("Playing") {
-                working += 1
-            } else if status.status.contains("Codec") {
-                codec += 1
-            } else if status.status.contains("Error") {
-                error += 1
-            } else {
-                other += 1
-            }
-        }
-        
-        return (working, codec, error, other)
-    }
-    
     func clear() {
         DispatchQueue.main.async {
             self.logs.removeAll()
         }
     }
-    
-    func clearCameraStatus() {
-        DispatchQueue.main.async {
-            self.cameraStatus.removeAll()
-        }
-    }
 }
 
-// MARK: - Enhanced Debug View
+// MARK: - Debug View
 struct DebugView: View {
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @StateObject private var webSocketService = WebSocketService.shared
     @StateObject private var cameraManager = CameraManager.shared
+    @StateObject private var playerManager = HLSPlayerManager.shared
     @StateObject private var logger = DebugLogger.shared
+    
     @State private var refreshTrigger = UUID()
     @State private var autoRefreshTimer: Timer?
     @State private var selectedTab = 0
@@ -167,10 +106,58 @@ struct DebugView: View {
                 }
             }
             
-            // Camera Statistics
-            Section(header: Text("Camera Stream Status")) {
-                let stats = logger.getCamerasByStatus()
+            // HLS Player Status
+            Section(header: Text("HLS Video Players")) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Active Players")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text("\(playerManager.activePlayerCount) / 2")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .foregroundColor(playerManager.activePlayerCount >= 2 ? .orange : .green)
+                    }
+                    
+                    Spacer()
+                    
+                    if playerManager.activePlayerCount > 0 {
+                        Button("Release All") {
+                            playerManager.releaseAllPlayers()
+                        }
+                        .font(.caption)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.red.opacity(0.2))
+                        .cornerRadius(6)
+                    }
+                }
+                .padding(.vertical, 4)
                 
+                if playerManager.activePlayerCount >= 2 {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Divider()
+                        HStack(alignment: .top, spacing: 8) {
+                            Text("⚠️")
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Player Limit Reached")
+                                    .font(.caption)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.orange)
+                                Text("Maximum 2 concurrent streams allowed. Release a player before opening another.")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .padding(8)
+                        .background(Color.orange.opacity(0.1))
+                        .cornerRadius(8)
+                    }
+                }
+            }
+            
+            // Camera Statistics
+            Section(header: Text("Camera Status")) {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Total Cameras")
@@ -194,78 +181,6 @@ struct DebugView: View {
                     }
                 }
                 .padding(.vertical, 4)
-                
-                Divider()
-                
-                VStack(spacing: 8) {
-                    HStack {
-                        HStack(spacing: 4) {
-                            Text("✅")
-                            Text("Working")
-                                .font(.caption)
-                        }
-                        Spacer()
-                        Text("\(stats.working)")
-                            .fontWeight(.bold)
-                            .foregroundColor(.green)
-                    }
-                    
-                    HStack {
-                        HStack(spacing: 4) {
-                            Text("🚫")
-                            Text("Codec Issue")
-                                .font(.caption)
-                        }
-                        Spacer()
-                        Text("\(stats.codec)")
-                            .fontWeight(.bold)
-                            .foregroundColor(.red)
-                    }
-                    
-                    HStack {
-                        HStack(spacing: 4) {
-                            Text("❌")
-                            Text("Other Errors")
-                                .font(.caption)
-                        }
-                        Spacer()
-                        Text("\(stats.error)")
-                            .fontWeight(.bold)
-                            .foregroundColor(.orange)
-                    }
-                    
-                    HStack {
-                        HStack(spacing: 4) {
-                            Text("📹")
-                            Text("Other")
-                                .font(.caption)
-                        }
-                        Spacer()
-                        Text("\(stats.other)")
-                            .fontWeight(.bold)
-                    }
-                }
-                
-                if stats.codec > 0 {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Divider()
-                        HStack(alignment: .top, spacing: 8) {
-                            Text("⚠️")
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("H.265/HEVC Codec Issue")
-                                    .font(.caption)
-                                    .fontWeight(.bold)
-                                    .foregroundColor(.orange)
-                                Text("\(stats.codec) cameras use H.265 codec which is not well supported on iOS 15.8. These streams need to be re-encoded to H.264 on the backend.")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .padding(8)
-                        .background(Color.orange.opacity(0.1))
-                        .cornerRadius(8)
-                    }
-                }
             }
             
             // Subscriptions
@@ -285,68 +200,31 @@ struct DebugView: View {
                     }
                 }
             }
+            
+            // Memory Info
+            Section(header: Text("System")) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Memory Status")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text("Monitoring")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                    }
+                    
+                    Text("App will automatically release video players on memory warnings")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
         }
     }
     
     // MARK: - Cameras Tab
     private var camerasTab: some View {
         List {
-            Section(header: HStack {
-                Text("Camera Stream Status (\(logger.cameraStatus.count))")
-                Spacer()
-                Button("Clear") {
-                    logger.clearCameraStatus()
-                }
-                .font(.caption)
-            }) {
-                if logger.cameraStatus.isEmpty {
-                    Text("No camera stream data yet. Open some camera streams to see their status.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding()
-                } else {
-                    ForEach(Array(logger.cameraStatus.values).sorted(by: { $0.lastUpdate > $1.lastUpdate })) { status in
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text(status.statusEmoji)
-                                    .font(.title3)
-                                
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Camera: \(status.id)")
-                                        .font(.system(size: 12, weight: .bold))
-                                    
-                                    Text(status.status)
-                                        .font(.system(size: 11))
-                                        .foregroundColor(status.statusColor)
-                                    
-                                    if let error = status.error {
-                                        Text(error)
-                                            .font(.system(size: 10))
-                                            .foregroundColor(.red)
-                                    }
-                                    
-                                    Text(formatTime(status.lastUpdate))
-                                        .font(.system(size: 9))
-                                        .foregroundColor(.secondary)
-                                }
-                                
-                                Spacer()
-                            }
-                            
-                            if let url = status.streamURL {
-                                Text(url)
-                                    .font(.system(size: 9))
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                }
-            }
-            
-            // Group by Area
             Section(header: Text("By Area")) {
                 ForEach(cameraManager.availableAreas, id: \.self) { area in
                     VStack(alignment: .leading, spacing: 4) {
@@ -367,6 +245,24 @@ struct DebugView: View {
                     }
                 }
             }
+            
+            Section(header: Text("Stream Protocol")) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Protocol")
+                            .font(.caption)
+                        Spacer()
+                        Text("HLS (HTTP Live Streaming)")
+                            .font(.caption)
+                            .fontWeight(.bold)
+                            .foregroundColor(.blue)
+                    }
+                    
+                    Text("Using native iOS AVPlayer with HLS for maximum stability and battery efficiency")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
         }
     }
     
@@ -382,20 +278,27 @@ struct DebugView: View {
                 }
                 .font(.caption)
             }) {
-                ForEach(logger.logs.reversed()) { log in
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Text(log.emoji)
-                            Text(log.message)
-                                .font(.system(size: 11))
-                                .foregroundColor(log.color)
-                            Spacer()
+                if logger.logs.isEmpty {
+                    Text("No logs yet")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding()
+                } else {
+                    ForEach(logger.logs.reversed()) { log in
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Text(log.emoji)
+                                Text(log.message)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(log.color)
+                                Spacer()
+                            }
+                            Text(formatTime(log.timestamp))
+                                .font(.system(size: 9))
+                                .foregroundColor(.secondary)
                         }
-                        Text(formatTime(log.timestamp))
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
+                        .padding(.vertical, 2)
                     }
-                    .padding(.vertical, 2)
                 }
             }
         }

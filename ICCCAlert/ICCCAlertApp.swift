@@ -75,7 +75,7 @@ struct ICCCAlertApp: App {
                         } else {
                             print("🔐 USER LOGGED OUT")
                             // Clean up all resources
-                            PlayerManager.shared.clearAll()
+                            HLSPlayerManager.shared.releaseAllPlayers()
                         }
                     }
             }
@@ -111,15 +111,15 @@ struct ICCCAlertApp: App {
             
         case .inactive:
             print("📱 App became inactive")
-            // Pause all video players
-            PlayerManager.shared.clearAll()
+            // Pause all video players (they keep resources but stop decoding)
+            HLSPlayerManager.shared.pauseAllPlayers()
             
         case .background:
             print("📱 App moved to background")
             saveAppState()
             
-            // ✅ CRITICAL: Clean up all video players
-            PlayerManager.shared.clearAll()
+            // ✅ CRITICAL: Release ALL video players to free memory
+            HLSPlayerManager.shared.releaseAllPlayers()
             
             NotificationManager.shared.updateBadgeCount()
             
@@ -128,12 +128,12 @@ struct ICCCAlertApp: App {
         }
     }
     
-    // ✅ Handle app termination
+    // ✅ Handle app termination (clean shutdown)
     private static func handleAppTermination() {
         print("🛑 App will terminate - cleaning up resources")
         
-        // Clean up video players
-        PlayerManager.shared.clearAll()
+        // Release video players
+        HLSPlayerManager.shared.releaseAllPlayers()
         
         // Save state
         SubscriptionManager.shared.forceSave()
@@ -143,12 +143,12 @@ struct ICCCAlertApp: App {
         print("✅ Resources cleaned up")
     }
     
-    // ✅ Handle memory warnings
+    // ✅ Handle memory warnings (aggressive cleanup)
     private static func handleMemoryWarning() {
         print("⚠️ MEMORY WARNING - Aggressive cleanup")
         
-        // Clear all video players immediately
-        PlayerManager.shared.clearAll()
+        // Immediately release ALL video players
+        HLSPlayerManager.shared.releaseAllPlayers()
         
         // Clear image caches
         EventImageLoader.shared.clearCache()
