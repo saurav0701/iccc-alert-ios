@@ -5,7 +5,7 @@ import AVFoundation
 // MARK: - Stream Type
 enum StreamType: String {
     case hls = "HLS"
-    case webrtc = "WebRTC"
+    case alternative = "Alternative"
 }
 
 // MARK: - Player State
@@ -233,7 +233,7 @@ struct HLSPlayerView: UIViewControllerRepresentable {
         controller.allowsPictureInPicturePlayback = false
         controller.videoGravity = .resizeAspect
         
-        let bufferDuration: TimeInterval = streamType == .hls ? 3.0 : 2.0
+        let bufferDuration: TimeInterval = streamType == .hls ? 3.0 : 3.0
         
         if let player = playerManager.getPlayer(for: cameraId, streamURL: streamURL, preferredBufferDuration: bufferDuration) {
             controller.player = player
@@ -648,7 +648,7 @@ struct FullscreenHLSPlayerView: View {
                     if camera.webrtcStreamURL != nil {
                         Button(action: switchStreamType) {
                             HStack(spacing: 4) {
-                                Image(systemName: streamType == .hls ? "play.tv" : "antenna.radiowaves.left.and.right")
+                                Image(systemName: streamType == .hls ? "play.tv" : "play.circle.fill")
                                 Text(streamType.rawValue)
                             }
                             .font(.caption)
@@ -711,7 +711,7 @@ struct FullscreenHLSPlayerView: View {
             if let urlString = camera.streamURL {
                 return URL(string: urlString)
             }
-        case .webrtc:
+        case .alternative:
             if let urlString = camera.webrtcStreamURL {
                 return URL(string: urlString)
             }
@@ -739,7 +739,7 @@ struct FullscreenHLSPlayerView: View {
         isRetrying = true
         playerManager.releasePlayer(for: camera.id)
         
-        streamType = streamType == .hls ? .webrtc : .hls
+        streamType = streamType == .hls ? .alternative : .hls
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             isRetrying = false
@@ -825,7 +825,7 @@ struct FullscreenHLSPlayerView: View {
             
             if camera.webrtcStreamURL != nil && streamType == .hls {
                 Button(action: switchStreamType) {
-                    Text("Try WebRTC")
+                    Text("Try Alternative Stream")
                         .font(.headline)
                         .foregroundColor(.white)
                         .padding(.horizontal, 32)
