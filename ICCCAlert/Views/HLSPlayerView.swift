@@ -260,7 +260,7 @@ struct HLSPlayerView: UIViewControllerRepresentable {
         
         private var stallTimer: Timer?
         private var retryCount = 0
-        private let maxRetries = 3
+        private let maxRetries = 6  // Increased from 3 to 6
         private var isMonitoring = false
         private weak var player: AVPlayer?
         private var statusObserver: NSKeyValueObservation?
@@ -353,12 +353,13 @@ struct HLSPlayerView: UIViewControllerRepresentable {
             
             stallTimer?.invalidate()
             
-            stallTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self, weak player] _ in
+            // Increased from 10 to 30 seconds - give stream more time before considering it stalled
+            stallTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self, weak player] _ in
                 guard let self = self, let player = player else { return }
                 
                 // Check if player is stalled
                 if player.rate == 0 && player.currentItem?.status == .readyToPlay {
-                    print("⚠️ Player stalled, checking...")
+                    print("⚠️ Player stalled for 30s, checking...")
                     
                     // Check if the item has seekable ranges (indicates it's a valid stream)
                     if let item = player.currentItem, !item.seekableTimeRanges.isEmpty {
@@ -382,13 +383,15 @@ struct HLSPlayerView: UIViewControllerRepresentable {
         
         private func attemptRecovery() {
             guard retryCount < maxRetries else {
-                print("❌ Max retries reached for \(cameraId)")
+                print("❌ Max retries reached for \(cameraId) - stream unavailable")
                 stallTimer?.invalidate()
                 return
             }
             
             retryCount += 1
-            print("🔄 Retry attempt \(retryCount)/\(maxRetries) for \(cameraId)")
+            // Exponential backoff: 2s, 4s, 8s, 16s, 32s, 60s
+            let delaySeconds = min(pow(2.0, Double(retryCount)), 60.0)
+            print("🔄 Retry attempt \(retryCount)/\(maxRetries) for \(cameraId) (waiting \(delaySeconds)s)")
             
             guard let player = player else { return }
             
@@ -400,18 +403,27 @@ struct HLSPlayerView: UIViewControllerRepresentable {
                     
                     player.seek(to: seekTime) { [weak self] finished in
                         if finished {
-                            print("✅ Seeked to live edge")
+                            print("✅ Seeked to live edge - Retry \(self?.retryCount ?? 0)")
                             player.play()
                         } else {
-                            print("❌ Seek failed")
-                            self?.recreatePlayer()
+                            print("❌ Seek failed - will retry")
+                            // Schedule next retry with exponential backoff
+                            DispatchQueue.main.asyncAfter(deadline: .now() + delaySeconds) {
+                                self?.attemptRecovery()
+                            }
                         }
                     }
                 } else {
-                    recreatePlayer()
+                    // Schedule next retry with exponential backoff
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delaySeconds) {
+                        self.attemptRecovery()
+                    }
                 }
             } else {
-                recreatePlayer()
+                // Schedule next retry with exponential backoff
+                DispatchQueue.main.asyncAfter(deadline: .now() + delaySeconds) {
+                    self.attemptRecovery()
+                }
             }
         }
         
@@ -651,20 +663,14 @@ struct FullscreenHLSPlayerView: View {
         errorMessage = error.localizedDescription
         showError = true
         
-        // Auto-hide error after 5 seconds
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+        // Auto-hide error after 10 seconds (longer display time)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
             showError = false
         }
         
-        // If HLS fails and WebRTC is available, try switching
-        if streamType == .hls && camera.webrtcStreamURL != nil {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                if showError {
-                    print("🔄 Auto-switching to WebRTC fallback")
-                    switchStreamType()
-                }
-            }
-        }
+        // REMOVED: Auto-switching to WebRTC
+        // HLS has proper retry logic now - let it exhaust retries first
+        // User can manually switch if needed
     }
     
     private func switchStreamType() {
