@@ -2,15 +2,17 @@ import SwiftUI
 import AVKit
 import AVFoundation
 
-// MARK: - Player Manager (Maximum 2 concurrent players to prevent crashes)
+// MARK: - Player Manager (ULTRA DEFENSIVE)
 class HLSPlayerManager: ObservableObject {
     static let shared = HLSPlayerManager()
     
     private var activePlayers: [String: AVPlayer] = [:]
     private let lock = NSLock()
-    private let maxPlayers = 2 // Strict limit: only 2 concurrent streams
+    private let maxPlayers = 1 // ✅ CRITICAL: Only 1 player at a time
     
     @Published var activePlayerCount = 0
+    
+    private var cleanupInProgress = false
     
     private init() {
         // Monitor memory warnings
@@ -20,10 +22,23 @@ class HLSPlayerManager: ObservableObject {
             name: UIApplication.didReceiveMemoryWarningNotification,
             object: nil
         )
+        
+        // Monitor background
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleBackground),
+            name: UIApplication.didEnterBackgroundNotification,
+            object: nil
+        )
     }
     
     @objc private func handleMemoryWarning() {
-        print("⚠️ MEMORY WARNING - Releasing all players")
+        print("⚠️⚠️⚠️ MEMORY WARNING - Releasing ALL players immediately")
+        releaseAllPlayers()
+    }
+    
+    @objc private func handleBackground() {
+        print("📱 App backgrounded - Releasing ALL players")
         releaseAllPlayers()
     }
     
@@ -34,25 +49,35 @@ class HLSPlayerManager: ObservableObject {
             updatePlayerCount()
         }
         
-        // Return existing player if available
-        if let existingPlayer = activePlayers[cameraId] {
-            print("♻️ Reusing player for: \(cameraId)")
-            return existingPlayer
-        }
-        
-        // Check player limit
-        if activePlayers.count >= maxPlayers {
-            print("⚠️ Player limit reached (\(maxPlayers)), cannot create new player")
+        guard !cleanupInProgress else {
+            print("⚠️ Cleanup in progress, cannot create player")
             return nil
         }
         
-        // Create new player
+        // ✅ Return existing player if available
+        if let existingPlayer = activePlayers[cameraId] {
+            print("♻️ Reusing player: \(cameraId)")
+            return existingPlayer
+        }
+        
+        // ✅ CRITICAL: Only 1 active player
+        if activePlayers.count >= maxPlayers {
+            print("⚠️ Player limit reached (\(maxPlayers)), clear first")
+            return nil
+        }
+        
+        // ✅ Create new player
         let player = AVPlayer(url: streamURL)
         player.allowsExternalPlayback = false
         player.automaticallyWaitsToMinimizeStalling = true
         
+        // ✅ Set low buffer size
+        if let currentItem = player.currentItem {
+            currentItem.preferredForwardBufferDuration = 1.0 // Only 1 second buffer
+        }
+        
         activePlayers[cameraId] = player
-        print("✅ Created player for: \(cameraId) (Total: \(activePlayers.count))")
+        print("✅ Created player: \(cameraId)")
         
         return player
     }
@@ -68,21 +93,18 @@ class HLSPlayerManager: ObservableObject {
             return
         }
         
-        // Stop playback
+        // ✅ Stop everything
         player.pause()
         player.replaceCurrentItem(with: nil)
         
-        print("🗑️ Released player: \(cameraId) (Remaining: \(activePlayers.count))")
+        print("🗑️ Released: \(cameraId)")
     }
     
     func releaseAllPlayers() {
         lock.lock()
-        defer { 
-            lock.unlock()
-            updatePlayerCount()
-        }
+        cleanupInProgress = true
         
-        print("🧹 Releasing all players (\(activePlayers.count))")
+        print("🧹 Releasing ALL players (\(activePlayers.count))")
         
         activePlayers.forEach { (id, player) in
             player.pause()
@@ -90,6 +112,14 @@ class HLSPlayerManager: ObservableObject {
         }
         
         activePlayers.removeAll()
+        cleanupInProgress = false
+        lock.unlock()
+        
+        updatePlayerCount()
+        
+        // ✅ Force garbage collection
+        autoreleasepool { }
+        
         print("✅ All players released")
     }
     
@@ -112,7 +142,7 @@ class HLSPlayerManager: ObservableObject {
     }
 }
 
-// MARK: - HLS Player View
+// MARK: - HLS Player View (CRASH SAFE)
 struct HLSPlayerView: UIViewControllerRepresentable {
     let streamURL: URL
     let cameraId: String
@@ -126,7 +156,7 @@ struct HLSPlayerView: UIViewControllerRepresentable {
         controller.allowsPictureInPicturePlayback = false
         controller.videoGravity = .resizeAspect
         
-        // Try to get or create player
+        // ✅ Try to get player
         if let player = playerManager.getPlayer(for: cameraId, streamURL: streamURL) {
             controller.player = player
             
@@ -136,8 +166,7 @@ struct HLSPlayerView: UIViewControllerRepresentable {
                 }
             }
         } else {
-            // Player limit reached
-            context.coordinator.showError = true
+            print("❌ Cannot create player (limit reached)")
         }
         
         return controller
@@ -146,6 +175,12 @@ struct HLSPlayerView: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {}
     
     static func dismantleUIViewController(_ uiViewController: AVPlayerViewController, coordinator: Coordinator) {
+        // ✅ Stop playback immediately
+        uiViewController.player?.pause()
+        uiViewController.player?.replaceCurrentItem(with: nil)
+        uiViewController.player = nil
+        
+        // Release from manager
         coordinator.cleanup()
     }
     
@@ -155,7 +190,6 @@ struct HLSPlayerView: UIViewControllerRepresentable {
     
     class Coordinator {
         let cameraId: String
-        var showError = false
         
         init(cameraId: String) {
             self.cameraId = cameraId
@@ -167,7 +201,7 @@ struct HLSPlayerView: UIViewControllerRepresentable {
     }
 }
 
-// MARK: - Camera Thumbnail (Static - No Auto-Loading)
+// MARK: - Camera Thumbnail (Static)
 struct CameraThumbnailView: View {
     let camera: Camera
     let isGridView: Bool
@@ -224,22 +258,18 @@ struct CameraThumbnailView: View {
     }
 }
 
-// MARK: - Fullscreen Player View
+// MARK: - Fullscreen Player View (SIMPLIFIED)
 struct FullscreenHLSPlayerView: View {
     let camera: Camera
     @Environment(\.presentationMode) var presentationMode
     @StateObject private var playerManager = HLSPlayerManager.shared
-    
-    @State private var showError = false
-    @State private var errorMessage = ""
     
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             
             if let streamURL = camera.streamURL, let url = URL(string: streamURL) {
-                if playerManager.activePlayerCount >= 2 {
-                    // Player limit reached
+                if playerManager.activePlayerCount >= 1 {
                     playerLimitView
                 } else {
                     HLSPlayerView(streamURL: url, cameraId: camera.id, autoPlay: true)
@@ -249,23 +279,21 @@ struct FullscreenHLSPlayerView: View {
                 errorView(message: "Stream URL not available")
             }
             
-            // Close button overlay
+            // Close button
             VStack {
                 HStack {
                     Button(action: {
+                        playerManager.releasePlayer(for: camera.id)
                         presentationMode.wrappedValue.dismiss()
                     }) {
                         HStack(spacing: 8) {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 18, weight: .semibold))
-                            Text("Back")
-                                .font(.headline)
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 28))
                         }
                         .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
+                        .padding(12)
                         .background(Color.black.opacity(0.6))
-                        .cornerRadius(10)
+                        .clipShape(Circle())
                     }
                     
                     Spacer()
@@ -274,7 +302,7 @@ struct FullscreenHLSPlayerView: View {
                 
                 Spacer()
                 
-                // Camera info overlay
+                // Camera info
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(camera.displayName)
@@ -301,7 +329,6 @@ struct FullscreenHLSPlayerView: View {
         }
         .navigationBarHidden(true)
         .onDisappear {
-            // Cleanup when dismissed
             playerManager.releasePlayer(for: camera.id)
         }
     }
@@ -312,12 +339,12 @@ struct FullscreenHLSPlayerView: View {
                 .font(.system(size: 60))
                 .foregroundColor(.orange)
             
-            Text("Player Limit Reached")
+            Text("Close Current Stream First")
                 .font(.title2)
                 .fontWeight(.bold)
                 .foregroundColor(.white)
             
-            Text("Only 2 cameras can play simultaneously.\nClose another camera first.")
+            Text("Only 1 camera can play at a time for stability")
                 .font(.subheadline)
                 .foregroundColor(.white.opacity(0.8))
                 .multilineTextAlignment(.center)
