@@ -96,17 +96,11 @@ class HLSPlayerManager: ObservableObject {
         
         let asset = AVURLAsset(url: streamURL, options: [
             AVURLAssetPreferPreciseDurationAndTimingKey: false,
-            AVURLAssetHTTPHeaderFieldsKey: [
+            "AVURLAssetHTTPHeaderFieldsKey": [
                 "Connection": "keep-alive",
                 "User-Agent": "ICCC-Alert-iOS/1.0"
             ]
         ])
-        
-        // Set timeout for asset loading
-        var config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30
-        config.timeoutIntervalForResource = 60
-        config.waitsForConnectivity = true
         
         let playerItem = AVPlayerItem(asset: asset)
         playerItem.preferredForwardBufferDuration = preferredBufferDuration
@@ -117,7 +111,7 @@ class HLSPlayerManager: ObservableObject {
         player.allowsExternalPlayback = false
         player.automaticallyWaitsToMinimizeStalling = true
         
-        let observer = player.observe(\.currentItem?.status, options: [.new]) { player, _ in
+        let observer: NSKeyValueObservation? = player.observe(\.currentItem?.status, options: [.new]) { player, _ in
             guard let status = player.currentItem?.status else { return }
             
             switch status {
@@ -171,7 +165,6 @@ class HLSPlayerManager: ObservableObject {
             playerObservers.removeValue(forKey: cameraId)
             print("🧹 Force-released (corrupted): \(cameraId)")
         }
-    }
     }
     
     func releaseAllPlayers() {
