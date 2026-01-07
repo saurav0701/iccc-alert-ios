@@ -2,13 +2,13 @@ import SwiftUI
 import AVKit
 import AVFoundation
 
-// MARK: - Player Manager (ULTRA DEFENSIVE)
+// MARK: - Player Manager (FIXED - No False Warnings)
 class HLSPlayerManager: ObservableObject {
     static let shared = HLSPlayerManager()
     
     private var activePlayers: [String: AVPlayer] = [:]
     private let lock = NSLock()
-    private let maxPlayers = 1 // ✅ CRITICAL: Only 1 player at a time
+    private let maxPlayers = 1 // ✅ Only 1 player at a time
     
     @Published var activePlayerCount = 0
     
@@ -42,6 +42,20 @@ class HLSPlayerManager: ObservableObject {
         releaseAllPlayers()
     }
     
+    // ✅ FIXED: Check if we can create a NEW player (excluding the one we're trying to create)
+    func canCreatePlayer(for cameraId: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        // If player already exists for this camera, we can reuse it
+        if activePlayers[cameraId] != nil {
+            return true
+        }
+        
+        // If we haven't hit the limit, we can create
+        return activePlayers.count < maxPlayers
+    }
+    
     func getPlayer(for cameraId: String, streamURL: URL) -> AVPlayer? {
         lock.lock()
         defer { 
@@ -60,7 +74,7 @@ class HLSPlayerManager: ObservableObject {
             return existingPlayer
         }
         
-        // ✅ CRITICAL: Only 1 active player
+        // ✅ Check limit (excluding current camera)
         if activePlayers.count >= maxPlayers {
             print("⚠️ Player limit reached (\(maxPlayers)), clear first")
             return nil
@@ -77,7 +91,7 @@ class HLSPlayerManager: ObservableObject {
         }
         
         activePlayers[cameraId] = player
-        print("✅ Created player: \(cameraId)")
+        print("✅ Created player: \(cameraId) (total: \(activePlayers.count))")
         
         return player
     }
@@ -97,7 +111,7 @@ class HLSPlayerManager: ObservableObject {
         player.pause()
         player.replaceCurrentItem(with: nil)
         
-        print("🗑️ Released: \(cameraId)")
+        print("🗑️ Released: \(cameraId) (remaining: \(activePlayers.count))")
     }
     
     func releaseAllPlayers() {
@@ -258,7 +272,7 @@ struct CameraThumbnailView: View {
     }
 }
 
-// MARK: - Fullscreen Player View (SIMPLIFIED)
+// MARK: - Fullscreen Player View (FIXED - No False Warnings)
 struct FullscreenHLSPlayerView: View {
     let camera: Camera
     @Environment(\.presentationMode) var presentationMode
@@ -269,7 +283,8 @@ struct FullscreenHLSPlayerView: View {
             Color.black.ignoresSafeArea()
             
             if let streamURL = camera.streamURL, let url = URL(string: streamURL) {
-                if playerManager.activePlayerCount >= 1 {
+                // ✅ FIXED: Check if we CAN create this specific player
+                if !playerManager.canCreatePlayer(for: camera.id) {
                     playerLimitView
                 } else {
                     HLSPlayerView(streamURL: url, cameraId: camera.id, autoPlay: true)
