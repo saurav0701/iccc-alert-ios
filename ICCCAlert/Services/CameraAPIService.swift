@@ -5,7 +5,7 @@ import Foundation
 class CameraAPIService {
     static let shared = CameraAPIService()
     
-    private let baseURL = "http://192.168.29.69:2222"
+    private let baseURL = "http://192.168.29.69:8890"
     
     private init() {}
     
