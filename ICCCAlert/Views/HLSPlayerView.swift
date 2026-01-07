@@ -96,13 +96,21 @@ class HLSPlayerManager: ObservableObject {
         
         let asset = AVURLAsset(url: streamURL, options: [
             AVURLAssetPreferPreciseDurationAndTimingKey: false,
-            "AVURLAssetHTTPHeaderFieldsKey": [
-                "Connection": "keep-alive"
+            AVURLAssetHTTPHeaderFieldsKey: [
+                "Connection": "keep-alive",
+                "User-Agent": "ICCC-Alert-iOS/1.0"
             ]
         ])
         
+        // Set timeout for asset loading
+        var config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 60
+        config.waitsForConnectivity = true
+        
         let playerItem = AVPlayerItem(asset: asset)
         playerItem.preferredForwardBufferDuration = preferredBufferDuration
+        playerItem.preferredMaximumResolution = CGSize(width: 1920, height: 1080)
         playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
         
         let player = AVPlayer(playerItem: playerItem)
@@ -149,6 +157,21 @@ class HLSPlayerManager: ObservableObject {
         playerObservers.removeValue(forKey: cameraId)
         
         print("🗑️ Released: \(cameraId) (remaining: \(activePlayers.count))")
+    }
+    
+    func forceRecreatePlayer(for cameraId: String) {
+        lock.lock()
+        defer { 
+            lock.unlock()
+            updatePlayerCount()
+        }
+        
+        if let player = activePlayers.removeValue(forKey: cameraId) {
+            cleanupPlayer(player)
+            playerObservers.removeValue(forKey: cameraId)
+            print("🧹 Force-released (corrupted): \(cameraId)")
+        }
+    }
     }
     
     func releaseAllPlayers() {
@@ -283,7 +306,13 @@ struct HLSPlayerView: UIViewControllerRepresentable {
                 switch item.status {
                 case .failed:
                     if let error = item.error {
-                        print("❌ Player item failed: \(error.localizedDescription)")
+                        print("❌ CODEC/PLAYBACK ERROR: \(error.localizedDescription)")
+                        print("   Error code: \((error as NSError).code)")
+                        print("   Domain: \((error as NSError).domain)")
+                        // Check for codec errors (12000 range)
+                        if (error as NSError).code >= 12000 && (error as NSError).code < 13000 {
+                            print("⚠️ DETECTED CODEC ERROR - will recreate player")
+                        }
                         self.handleError(error)
                     }
                 case .readyToPlay:
@@ -353,16 +382,23 @@ struct HLSPlayerView: UIViewControllerRepresentable {
             
             stallTimer?.invalidate()
             
-            // Increased from 10 to 30 seconds - give stream more time before considering it stalled
-            stallTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self, weak player] _ in
+            stallTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self, weak player] _ in
                 guard let self = self, let player = player else { return }
                 
-                // Check if player is stalled
+                // Check for player item errors (codec errors, etc)
+                if let item = player.currentItem {
+                    if item.status == .failed {
+                        print("⚠️ Detected failed item status during monitoring - triggering recovery")
+                        self.attemptRecovery()
+                        return
+                    }
+                }
+                
+                // Check if player is stalled (not playing and ready)
                 if player.rate == 0 && player.currentItem?.status == .readyToPlay {
-                    print("⚠️ Player stalled for 30s, checking...")
-                    
                     // Check if the item has seekable ranges (indicates it's a valid stream)
                     if let item = player.currentItem, !item.seekableTimeRanges.isEmpty {
+                        print("⚠️ Player stalled (not playing) - attempting recovery")
                         self.attemptRecovery()
                     }
                 }
@@ -391,22 +427,33 @@ struct HLSPlayerView: UIViewControllerRepresentable {
             retryCount += 1
             // Exponential backoff: 2s, 4s, 8s, 16s, 32s, 60s
             let delaySeconds = min(pow(2.0, Double(retryCount)), 60.0)
-            print("🔄 Retry attempt \(retryCount)/\(maxRetries) for \(cameraId) (waiting \(delaySeconds)s)")
+            print("🔄 Retry attempt \(retryCount)/\(maxRetries) for \(cameraId) (waiting \(Int(delaySeconds))s)")
             
             guard let player = player else { return }
             
+            // Check if player item is in failed state
+            if let item = player.currentItem, item.status == .failed {
+                print("⚠️ PlayerItem is in FAILED state - need to recreate")
+                // Player item is corrupted, need complete recreation
+                DispatchQueue.main.asyncAfter(deadline: .now() + delaySeconds) { [weak self] in
+                    self?.recreatePlayer()
+                }
+                return
+            }
+            
             // Try to recover by seeking to live edge
-            if let item = player.currentItem {
+            if let item = player.currentItem, item.status == .readyToPlay {
                 let seekableRanges = item.seekableTimeRanges
                 if let lastRange = seekableRanges.last?.timeRangeValue {
                     let seekTime = CMTimeAdd(lastRange.start, lastRange.duration)
                     
+                    print("📍 Seeking to live edge...")
                     player.seek(to: seekTime) { [weak self] finished in
                         if finished {
-                            print("✅ Seeked to live edge - Retry \(self?.retryCount ?? 0)")
+                            print("✅ Seeked to live edge - Retry \(self?.retryCount ?? 0)/\(self?.maxRetries ?? 0)")
                             player.play()
                         } else {
-                            print("❌ Seek failed - will retry")
+                            print("❌ Seek failed - scheduling next attempt")
                             // Schedule next retry with exponential backoff
                             DispatchQueue.main.asyncAfter(deadline: .now() + delaySeconds) {
                                 self?.attemptRecovery()
@@ -414,39 +461,61 @@ struct HLSPlayerView: UIViewControllerRepresentable {
                         }
                     }
                 } else {
-                    // Schedule next retry with exponential backoff
-                    DispatchQueue.main.asyncAfter(deadline: .now() + delaySeconds) {
-                        self.attemptRecovery()
+                    print("❌ No seekable ranges - recreating player")
+                    // No seekable ranges, player item is bad
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delaySeconds) { [weak self] in
+                        self?.recreatePlayer()
                     }
                 }
             } else {
-                // Schedule next retry with exponential backoff
-                DispatchQueue.main.asyncAfter(deadline: .now() + delaySeconds) {
-                    self.attemptRecovery()
+                print("⚠️ PlayerItem not ready - recreating")
+                // PlayerItem not in ready state, need recreation
+                DispatchQueue.main.asyncAfter(deadline: .now() + delaySeconds) { [weak self] in
+                    self?.recreatePlayer()
                 }
             }
         }
         
         private func recreatePlayer() {
-            print("🔄 Recreating player for \(cameraId)")
+            print("🔄 Recreating player for \(cameraId) (Retry \(retryCount)/\(maxRetries))")
+            
+            stallTimer?.invalidate()
+            stallTimer = nil
             
             guard let player = player else { return }
             
-            // Release old player
-            HLSPlayerManager.shared.releasePlayer(for: cameraId)
+            // Proper cleanup of old player and item
+            player.pause()
+            player.replaceCurrentItem(with: nil)
             
-            // Small delay before recreating
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            // Force release old player completely
+            HLSPlayerManager.shared.forceRecreatePlayer(for: cameraId)
+            self.player = nil
+            
+            // Wait before creating new player
+            let delaySeconds = min(pow(2.0, Double(retryCount + 1)), 60.0)
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + delaySeconds) { [weak self] in
                 guard let self = self else { return }
+                
+                print("🔧 Creating new player after \(Int(delaySeconds))s delay...")
                 
                 if let newPlayer = HLSPlayerManager.shared.getPlayer(
                     for: self.cameraId,
                     streamURL: self.streamURL,
                     preferredBufferDuration: self.streamType == .hls ? 3.0 : 2.0
                 ) {
+                    self.player = newPlayer
                     self.setupPlayer(player: newPlayer)
-                    newPlayer.play()
-                    self.startMonitoring(player: newPlayer)
+                    
+                    // Wait a bit more before playing
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        print("▶️ Starting playback on recreated player")
+                        newPlayer.play()
+                        self.startMonitoring(player: newPlayer)
+                    }
+                } else {
+                    print("❌ Failed to create new player - limit reached")
                 }
             }
         }
