@@ -18,8 +18,7 @@ class WebSocketService: ObservableObject {
     private var hasSubscribed = false
     private var lastSubscriptionTime: TimeInterval = 0
  
-    // ✅ CRITICAL: Reduce queue size to prevent memory issues
-    private let messageProcessingQueue = DispatchQueue(label: "com.iccc.messageProcessing", qos: .utility) // Lower priority
+    private let messageProcessingQueue = DispatchQueue(label: "com.iccc.messageProcessing", qos: .utility)
     private let ackQueue = DispatchQueue(label: "com.iccc.ackProcessing", qos: .utility)
     
     private var pendingAcks: [String] = []
@@ -90,8 +89,7 @@ class WebSocketService: ObservableObject {
     
     private var memoryWarningObserver: NSObjectProtocol?
     
-    // ✅ CRITICAL: Much lower limits
-    private let maxQueuedMessages = 100 // Reduced from 1000
+    private let maxQueuedMessages = 100
     private var queuedMessageCount = 0
     
     private var clientId: String {
@@ -105,8 +103,6 @@ class WebSocketService: ObservableObject {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
         config.waitsForConnectivity = true
-        
-        // ✅ CRITICAL: Reduce memory usage
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         
@@ -126,7 +122,6 @@ class WebSocketService: ObservableObject {
             guard let self = self else { return }
             print("⚠️⚠️⚠️ MEMORY WARNING - AGGRESSIVE CLEANUP")
             
-            // Clear everything
             self.ackLock.lock()
             self.pendingAcks.removeAll()
             self.ackLock.unlock()
@@ -136,7 +131,6 @@ class WebSocketService: ObservableObject {
             
             self.queuedMessageCount = 0
             
-            // Force garbage collection
             autoreleasepool { }
         }
     }
@@ -149,14 +143,12 @@ class WebSocketService: ObservableObject {
             
             let now = Date().timeIntervalSince1970
             
-            // ✅ Detect stalls faster
             if self.lastProcessedTimestamp > 0 && (now - self.lastProcessedTimestamp) > 15 {
                 print("⚠️ Processing stalled, reconnecting")
                 self.reconnect()
                 return
             }
             
-            // ✅ Clear queue more aggressively
             if self.queuedMessageCount > 50 {
                 print("⚠️ Queue overflow (\(self.queuedMessageCount)), clearing")
                 self.queuedMessageCount = 0
@@ -225,7 +217,6 @@ class WebSocketService: ObservableObject {
         isConnected = false
         hasSubscribed = false
         
-        // ✅ Clear queue on reconnect
         queuedMessageCount = 0
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
@@ -239,7 +230,6 @@ class WebSocketService: ObservableObject {
             
             switch result {
             case .success(let message):
-                // ✅ CRITICAL: Wrap everything in autoreleasepool
                 autoreleasepool {
                     switch message {
                     case .string(let text):
@@ -254,7 +244,6 @@ class WebSocketService: ObservableObject {
                     }
                 }
                 
-                // ✅ Continue receiving with queue check
                 if self.queuedMessageCount < self.maxQueuedMessages {
                     self.receiveMessage()
                 } else {
@@ -280,7 +269,6 @@ class WebSocketService: ObservableObject {
         receivedCount += 1
         lastProcessedTimestamp = Date().timeIntervalSince1970
         
-        // ✅ CRITICAL: Drop messages aggressively if queue is full
         guard queuedMessageCount < maxQueuedMessages else {
             droppedCount += 1
             if droppedCount % 10 == 0 {
@@ -291,7 +279,6 @@ class WebSocketService: ObservableObject {
         
         queuedMessageCount += 1
         
-        // ✅ Process with lower priority and autoreleasepool
         messageProcessingQueue.async { [weak self] in
             autoreleasepool {
                 self?.handleMessage(text)
@@ -301,7 +288,6 @@ class WebSocketService: ObservableObject {
     }
 
     private func handleMessage(_ text: String) {
-        // ✅ CRITICAL: Catch ALL exceptions
         do {
             try _handleMessageInternal(text)
         } catch {
@@ -322,50 +308,23 @@ class WebSocketService: ObservableObject {
             return
         }
         
-        // ✅ CRITICAL: Safe JSON parsing
-        guard let jsonDict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            // Not valid JSON, ignore
+        // ✅ REMOVED: Camera list handling - iOS will use REST API instead
+        // Camera broadcasts are ignored by iOS (Kotlin still receives them)
+        
+        // Check if this might be a camera message and skip it
+        if text.contains("\"cameras\":[") || text.contains("\"type\":\"camera-list\"") {
+            // Silently ignore camera messages - we use REST API
             return
         }
         
-        // ✅ Check if camera list (handle FIRST before other processing)
-        if let type = jsonDict["type"] as? String, type == "camera-list" {
-            handleCameraListMessage(jsonDict)
-            return
-        }
-        
-        // ✅ Try to decode as Event
+        // Try to decode as Event
         let decoder = JSONDecoder()
         guard let event = try? decoder.decode(Event.self, from: data) else {
-            // Not an event we care about
+            // Not an event, ignore
             return
         }
         
         handleEvent(event)
-    }
-    
-    // ✅ CRITICAL: Simplified camera handler
-    private func handleCameraListMessage(_ jsonDict: [String: Any]) {
-        autoreleasepool {
-            guard let dataDict = jsonDict["data"] as? [String: Any],
-                  let rawCameraJSON = dataDict["_raw_camera_json"] as? String,
-                  let cameraData = rawCameraJSON.data(using: .utf8) else {
-                print("❌ Invalid camera message")
-                return
-            }
-            
-            do {
-                let cameraResponse = try JSONDecoder().decode(CameraListResponse.self, from: cameraData)
-                
-                // ✅ Update on main thread (avoid race conditions)
-                DispatchQueue.main.async {
-                    CameraManager.shared.updateCameras(cameraResponse.cameras)
-                }
-                
-            } catch {
-                print("❌ Camera decode error: \(error)")
-            }
-        }
     }
     
     private func handleEvent(_ event: Event) {
@@ -447,7 +406,6 @@ class WebSocketService: ObservableObject {
         
         sendAck(eventId: eventId)
 
-        // ✅ Log less frequently
         if processedCount % 50 == 0 {
             print("📊 Stats: received=\(receivedCount), processed=\(processedCount), dropped=\(droppedCount)")
         }
@@ -465,7 +423,6 @@ class WebSocketService: ObservableObject {
     }
 
     private func startAckFlusher() {
-        // ✅ Slower flushing
         ackFlushTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.flushAcks()
         }

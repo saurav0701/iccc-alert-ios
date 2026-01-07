@@ -95,23 +95,21 @@ struct CameraStreamsView: View {
     }
     
     private func manualRefresh() {
-        isRefreshing = true
-        
-        CameraAPIService.shared.fetchAllCameras { result in
-            DispatchQueue.main.async {
-                isRefreshing = false
-                
-                switch result {
-                case .success(let cameras):
-                    DebugLogger.shared.log("✅ Manual refresh: \(cameras.count) cameras", emoji: "✅", color: .green)
-                    cameraManager.updateCameras(cameras)
-                    
-                case .failure(let error):
-                    DebugLogger.shared.log("❌ Manual refresh failed: \(error.localizedDescription)", emoji: "❌", color: .red)
-                }
+    isRefreshing = true
+    
+    // ✅ Use CameraManager's built-in manual refresh
+    cameraManager.manualRefresh { success in
+        DispatchQueue.main.async {
+            self.isRefreshing = false
+            
+            if success {
+                DebugLogger.shared.log("✅ Manual refresh successful", emoji: "✅", color: .green)
+            } else {
+                DebugLogger.shared.log("❌ Manual refresh failed", emoji: "❌", color: .red)
             }
         }
     }
+}
 
     private var statsHeader: some View {
         HStack(spacing: 0) {
