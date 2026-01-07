@@ -16,6 +16,11 @@ class CameraManager: ObservableObject {
     private let hasInitialDataKey = "has_initial_camera_data"
     private let saveQueue = DispatchQueue(label: "com.iccc.camerasSaveQueue", qos: .background)
     
+    // ✅ NEW: REST API polling timer
+    private var cameraRefreshTimer: Timer?
+    private let refreshInterval: TimeInterval = 30.0 // 30 seconds
+    private var isFetching = false
+    
     private var hasInitialData: Bool {
         get { userDefaults.bool(forKey: hasInitialDataKey) }
         set { userDefaults.set(newValue, forKey: hasInitialDataKey) }
@@ -35,17 +40,101 @@ class CameraManager: ObservableObject {
     
     private init() {
         loadCachedCameras()
-        DebugLogger.shared.log("📹 CameraManager initialized", emoji: "📹", color: .blue)
-        DebugLogger.shared.log("   Has initial data: \(hasInitialData)", emoji: "📊", color: .gray)
-        DebugLogger.shared.log("   Cameras loaded: \(cameras.count)", emoji: "📊", color: .gray)
+        print("📹 CameraManager initialized")
+        print("   Has initial data: \(hasInitialData)")
+        print("   Cameras loaded: \(cameras.count)")
+        
+        // ✅ Start REST API polling
+        startPeriodicRefresh()
+    }
+    
+    // MARK: - REST API Polling
+    
+    /// ✅ Start periodic camera refresh via REST API
+    private func startPeriodicRefresh() {
+        // Initial fetch after 2 seconds (give WebSocket time to connect)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            self?.fetchCamerasViaREST()
+        }
+        
+        // Then every 30 seconds
+        cameraRefreshTimer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
+            self?.fetchCamerasViaREST()
+        }
+        
+        print("✅ Camera REST API polling started (every \(Int(refreshInterval))s)")
+    }
+    
+    /// ✅ Fetch cameras via REST API
+    private func fetchCamerasViaREST() {
+        guard !isFetching else {
+            print("⏳ Camera fetch already in progress, skipping")
+            return
+        }
+        
+        isFetching = true
+        
+        print("📡 Fetching cameras via REST API...")
+        
+        CameraAPIService.shared.fetchAllCameras { [weak self] result in
+            guard let self = self else { return }
+            
+            DispatchQueue.main.async {
+                self.isFetching = false
+                
+                switch result {
+                case .success(let cameras):
+                    print("✅ REST API: Received \(cameras.count) cameras")
+                    self.updateCameras(cameras)
+                    
+                case .failure(let error):
+                    print("❌ REST API failed: \(error.localizedDescription)")
+                    // Keep existing cached data on failure
+                    // Don't clear cameras - use stale data until next successful fetch
+                }
+            }
+        }
+    }
+    
+    /// ✅ Manual refresh (called from UI)
+    func manualRefresh(completion: @escaping (Bool) -> Void) {
+        guard !isFetching else {
+            completion(false)
+            return
+        }
+        
+        print("🔄 Manual camera refresh triggered")
+        
+        isFetching = true
+        isLoading = true
+        
+        CameraAPIService.shared.fetchAllCameras { [weak self] result in
+            guard let self = self else { return }
+            
+            DispatchQueue.main.async {
+                self.isFetching = false
+                self.isLoading = false
+                
+                switch result {
+                case .success(let cameras):
+                    print("✅ Manual refresh: \(cameras.count) cameras")
+                    self.updateCameras(cameras)
+                    completion(true)
+                    
+                case .failure(let error):
+                    print("❌ Manual refresh failed: \(error.localizedDescription)")
+                    completion(false)
+                }
+            }
+        }
     }
     
     // MARK: - Update Cameras (Smart Update Strategy)
     
     func updateCameras(_ newCameras: [Camera]) {
-        DebugLogger.shared.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", emoji: "📹", color: .blue)
-        DebugLogger.shared.log("📹 CameraManager.updateCameras() called", emoji: "📹", color: .blue)
-        DebugLogger.shared.log("   Received: \(newCameras.count) cameras", emoji: "📊", color: .blue)
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print("📹 CameraManager.updateCameras() called")
+        print("   Received: \(newCameras.count) cameras")
         
         DispatchQueue.main.async {
             if !self.hasInitialData || self.cameras.isEmpty {
@@ -58,18 +147,18 @@ class CameraManager: ObservableObject {
             
             self.lastUpdateTime = Date()
             
-            DebugLogger.shared.log("   Current total: \(self.cameras.count)", emoji: "🔄", color: .blue)
-            DebugLogger.shared.log("   Online: \(self.onlineCamerasCount)", emoji: "🟢", color: .green)
-            DebugLogger.shared.log("   Areas: \(self.availableAreas.count)", emoji: "📍", color: .blue)
+            print("   Current total: \(self.cameras.count)")
+            print("   Online: \(self.onlineCamerasCount)")
+            print("   Areas: \(self.availableAreas.count)")
             
             // Log per-area breakdown (first 3 areas)
             for area in self.availableAreas.prefix(3) {
                 let areaCameras = self.getCameras(forArea: area)
                 let areaOnline = areaCameras.filter { $0.isOnline }.count
-                DebugLogger.shared.log("      \(area): \(areaCameras.count) total, \(areaOnline) online", emoji: "📍", color: .gray)
+                print("      \(area): \(areaCameras.count) total, \(areaOnline) online")
             }
             
-            DebugLogger.shared.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", emoji: "📹", color: .blue)
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
             
             // Force UI refresh
             NotificationCenter.default.post(name: NSNotification.Name("CamerasUpdated"), object: nil)
@@ -79,7 +168,7 @@ class CameraManager: ObservableObject {
     // MARK: - Initial Load (Complete Camera List)
     
     private func performInitialLoad(_ newCameras: [Camera]) {
-        DebugLogger.shared.log("📹 INITIAL LOAD: Storing \(newCameras.count) cameras permanently", emoji: "📹", color: .green)
+        print("📹 INITIAL LOAD: Storing \(newCameras.count) cameras permanently")
         
         // Store complete camera list
         self.cameras = newCameras
@@ -88,9 +177,9 @@ class CameraManager: ObservableObject {
         // Save permanently
         saveCameraList()
         
-        DebugLogger.shared.log("✅ Initial load complete", emoji: "✅", color: .green)
-        DebugLogger.shared.log("   Cameras: \(self.cameras.count)", emoji: "📊", color: .gray)
-        DebugLogger.shared.log("   Areas: \(self.availableAreas.joined(separator: ", "))", emoji: "📍", color: .gray)
+        print("✅ Initial load complete")
+        print("   Cameras: \(self.cameras.count)")
+        print("   Areas: \(self.availableAreas.joined(separator: ", "))")
     }
     
     // MARK: - Status Update (Only Update Online/Offline Status)
@@ -120,14 +209,14 @@ class CameraManager: ObservableObject {
             cameras.append(contentsOf: newCamerasToAdd)
             newCamerasCount = newCamerasToAdd.count
             
-            DebugLogger.shared.log("➕ Added \(newCamerasCount) new cameras", emoji: "➕", color: .green)
+            print("➕ Added \(newCamerasCount) new cameras")
             
             // Save complete list when cameras are added
             saveCameraList()
         }
         
         if updatedCount > 0 {
-            DebugLogger.shared.log("📹 Status update: \(updatedCount) cameras changed status", emoji: "📹", color: .blue)
+            print("📹 Status update: \(updatedCount) cameras changed status")
             
             // Save status changes (lighter operation)
             saveCameraStatuses()
@@ -140,8 +229,8 @@ class CameraManager: ObservableObject {
         let filtered = cameras.filter { $0.area == area }
         
         if filtered.isEmpty && hasInitialData {
-            DebugLogger.shared.log("⚠️ No cameras found for area: \(area)", emoji: "⚠️", color: .orange)
-            DebugLogger.shared.log("   Available areas: \(availableAreas.joined(separator: ", "))", emoji: "📍", color: .gray)
+            print("⚠️ No cameras found for area: \(area)")
+            print("   Available areas: \(availableAreas.joined(separator: ", "))")
         }
         
         return filtered
@@ -204,7 +293,7 @@ class CameraManager: ObservableObject {
             if let data = try? JSONEncoder().encode(self.cameras) {
                 self.userDefaults.set(data, forKey: self.cameraListKey)
                 self.userDefaults.set(Date().timeIntervalSince1970, forKey: self.lastUpdateKey)
-                DebugLogger.shared.log("💾 Saved complete camera list (\(self.cameras.count) cameras)", emoji: "💾", color: .blue)
+                print("💾 Saved complete camera list (\(self.cameras.count) cameras)")
             }
         }
     }
@@ -215,7 +304,7 @@ class CameraManager: ObservableObject {
             let statusData = self.cameras.map { ["id": $0.id, "status": $0.status] }
             if let data = try? JSONEncoder().encode(statusData) {
                 self.userDefaults.set(data, forKey: self.cameraStatusKey)
-                DebugLogger.shared.log("💾 Saved camera statuses", emoji: "💾", color: .gray)
+                print("💾 Saved camera statuses")
             }
         }
     }
@@ -230,17 +319,17 @@ class CameraManager: ObservableObject {
                 lastUpdateTime = Date(timeIntervalSince1970: lastUpdate)
             }
             
-            DebugLogger.shared.log("📦 Loaded \(cached.count) cameras from cache", emoji: "📦", color: .blue)
-            DebugLogger.shared.log("   Online: \(onlineCamerasCount)", emoji: "🟢", color: .green)
-            DebugLogger.shared.log("   Areas: \(availableAreas.joined(separator: ", "))", emoji: "📍", color: .gray)
+            print("📦 Loaded \(cached.count) cameras from cache")
+            print("   Online: \(onlineCamerasCount)")
+            print("   Areas: \(availableAreas.joined(separator: ", "))")
             
             if let lastUpdate = lastUpdateTime {
                 let formatter = DateFormatter()
                 formatter.dateFormat = "HH:mm:ss"
-                DebugLogger.shared.log("   Last update: \(formatter.string(from: lastUpdate))", emoji: "🕐", color: .gray)
+                print("   Last update: \(formatter.string(from: lastUpdate))")
             }
         } else {
-            DebugLogger.shared.log("⚠️ No cached cameras found", emoji: "⚠️", color: .orange)
+            print("⚠️ No cached cameras found")
         }
     }
     
@@ -256,12 +345,16 @@ class CameraManager: ObservableObject {
         userDefaults.removeObject(forKey: lastUpdateKey)
         userDefaults.removeObject(forKey: hasInitialDataKey)
         lastUpdateTime = nil
-        DebugLogger.shared.log("🗑️ Camera cache cleared", emoji: "🗑️", color: .red)
+        print("🗑️ Camera cache cleared")
     }
     
     func forceRefresh() {
-        DebugLogger.shared.log("🔄 Force refreshing camera list", emoji: "🔄", color: .orange)
+        print("🔄 Force refreshing camera list")
         NotificationCenter.default.post(name: NSNotification.Name("CamerasUpdated"), object: nil)
+    }
+    
+    deinit {
+        cameraRefreshTimer?.invalidate()
     }
 }
 
