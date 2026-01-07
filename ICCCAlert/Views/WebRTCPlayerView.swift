@@ -2,7 +2,7 @@ import SwiftUI
 import WebKit
 
 // MARK: - WebRTC Player using WebKit
-struct WebRTCPlayerView: UIViewRepresentable {
+struct WebRTCPlayerView: UIViewControllerRepresentable {
     let streamURL: URL
     let cameraId: String
     let onError: ((Error) -> Void)?
