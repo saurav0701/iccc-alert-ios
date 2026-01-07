@@ -17,7 +17,7 @@ class CameraManager: ObservableObject {
     private let saveQueue = DispatchQueue(label: "com.iccc.camerasSaveQueue", qos: .background)
     
     // Pagination settings
-    private let pageSize = 100 // Fetch 100 cameras per page
+    private let pageSize = 100
     private var isFetching = false
     
     private var hasInitialData: Bool {
@@ -43,7 +43,6 @@ class CameraManager: ObservableObject {
         print("   Has initial data: \(hasInitialData)")
         print("   Cameras loaded: \(cameras.count)")
         
-        // Initial fetch if no cached data
         if !hasInitialData || cameras.isEmpty {
             fetchAllCamerasPaginated()
         }
@@ -51,7 +50,6 @@ class CameraManager: ObservableObject {
     
     // MARK: - Paginated Camera Fetch
     
-    /// Fetch all cameras using pagination to avoid crashes
     func fetchAllCamerasPaginated() {
         guard !isFetching else {
             print("⏳ Fetch already in progress")
@@ -77,7 +75,6 @@ class CameraManager: ObservableObject {
                     case .success(let response):
                         allCameras.append(contentsOf: response.cameras)
                         
-                        // Update progress
                         self.loadingProgress = Double(allCameras.count) / Double(response.total)
                         
                         print("📦 Fetched page \(currentPage): \(response.cameras.count) cameras (total: \(allCameras.count)/\(response.total))")
@@ -86,19 +83,16 @@ class CameraManager: ObservableObject {
                         currentPage += 1
                         
                         if hasMore {
-                            // Small delay to prevent overwhelming the server
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                                 fetchNextPage()
                             }
                         } else {
-                            // All pages fetched
                             self.handleFetchComplete(allCameras)
                         }
                         
                     case .failure(let error):
                         print("❌ Fetch failed on page \(currentPage): \(error.localizedDescription)")
                         
-                        // If we got some cameras, use them
                         if !allCameras.isEmpty {
                             self.handleFetchComplete(allCameras)
                         } else {
@@ -127,7 +121,6 @@ class CameraManager: ObservableObject {
         isLoading = false
         loadingProgress = 1.0
         
-        // Reset progress after a delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             self.loadingProgress = 0.0
         }
@@ -145,7 +138,6 @@ class CameraManager: ObservableObject {
         
         isFetching = true
         
-        // For manual refresh, just fetch first page to update status
         CameraAPIService.shared.fetchCameras(page: 1, pageSize: 200) { [weak self] result in
             guard let self = self else { return }
             
@@ -227,7 +219,6 @@ class CameraManager: ObservableObject {
             }
         }
         
-        // Add any NEW cameras
         let existingIds = Set(cameras.map { $0.id })
         let newCamerasToAdd = newCameras.filter { !existingIds.contains($0.id) }
         

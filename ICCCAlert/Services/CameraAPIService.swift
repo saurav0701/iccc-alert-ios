@@ -1,15 +1,108 @@
 import Foundation
 
-/// Optional REST API service for manual camera refresh
-/// Use this if WebSocket camera updates aren't working
+// MARK: - Paginated Response Model
+struct PaginatedCameraResponse: Codable {
+    let cameras: [Camera]
+    let page: Int
+    let pageSize: Int
+    let total: Int
+    let hasMore: Bool
+}
+
+// MARK: - Camera API Service
 class CameraAPIService {
     static let shared = CameraAPIService()
     
     private let baseURL = "http://192.168.29.69:8890"
+    private let session: URLSession
     
-    private init() {}
+    private init() {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 60
+        config.waitsForConnectivity = true
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        self.session = URLSession(configuration: config)
+    }
     
-    // ✅ Fetch all cameras via REST API
+    // MARK: - Paginated Fetch (NEW - for faster loading)
+    func fetchCameras(page: Int, pageSize: Int, completion: @escaping (Result<PaginatedCameraResponse, Error>) -> Void) {
+        // If your backend supports pagination, use this:
+        guard let url = URL(string: "\(baseURL)/cameras?page=\(page)&pageSize=\(pageSize)") else {
+            completion(.failure(NSError(domain: "Invalid URL", code: -1)))
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        if let token = AuthManager.shared.token {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        DebugLogger.shared.log("📡 Fetching cameras (page \(page), size \(pageSize))", emoji: "📡", color: .blue)
+        
+        session.dataTask(with: request) { data, response, error in
+            if let error = error {
+                DebugLogger.shared.log("❌ API error: \(error.localizedDescription)", emoji: "❌", color: .red)
+                completion(.failure(error))
+                return
+            }
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "Invalid response", code: -1)))
+                return
+            }
+            
+            guard httpResponse.statusCode == 200 else {
+                DebugLogger.shared.log("❌ API status \(httpResponse.statusCode)", emoji: "❌", color: .red)
+                completion(.failure(NSError(domain: "Server error", code: httpResponse.statusCode)))
+                return
+            }
+            
+            guard let data = data else {
+                completion(.failure(NSError(domain: "No data", code: -1)))
+                return
+            }
+            
+            do {
+                // Try to parse paginated response first
+                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let dataDict = json["data"] as? [String: Any],
+                   let camerasArray = dataDict["cameras"] as? [[String: Any]],
+                   let totalCount = dataDict["total"] as? Int {
+                    
+                    let camerasData = try JSONSerialization.data(withJSONObject: camerasArray)
+                    let cameras = try JSONDecoder().decode([Camera].self, from: camerasData)
+                    
+                    let currentPage = dataDict["page"] as? Int ?? page
+                    let currentPageSize = dataDict["pageSize"] as? Int ?? pageSize
+                    let hasMore = cameras.count >= currentPageSize && (currentPage * currentPageSize) < totalCount
+                    
+                    let response = PaginatedCameraResponse(
+                        cameras: cameras,
+                        page: currentPage,
+                        pageSize: currentPageSize,
+                        total: totalCount,
+                        hasMore: hasMore
+                    )
+                    
+                    DebugLogger.shared.log("✅ Fetched \(cameras.count) cameras (page \(page))", emoji: "✅", color: .green)
+                    completion(.success(response))
+                    
+                } else {
+                    throw NSError(domain: "Invalid response structure", code: -1)
+                }
+                
+            } catch {
+                DebugLogger.shared.log("❌ Parse error: \(error)", emoji: "❌", color: .red)
+                completion(.failure(error))
+            }
+        }.resume()
+    }
+    
+    // MARK: - Fetch All Cameras (Fallback for non-paginated backends)
     func fetchAllCameras(completion: @escaping (Result<[Camera], Error>) -> Void) {
         guard let url = URL(string: "\(baseURL)/cameras") else {
             completion(.failure(NSError(domain: "Invalid URL", code: -1)))
@@ -20,14 +113,13 @@ class CameraAPIService {
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        // Add auth token if needed
         if let token = AuthManager.shared.token {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         
-        DebugLogger.shared.log("📡 Fetching cameras via REST API", emoji: "📡", color: .blue)
+        DebugLogger.shared.log("📡 Fetching all cameras via REST API", emoji: "📡", color: .blue)
         
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        session.dataTask(with: request) { data, response, error in
             if let error = error {
                 DebugLogger.shared.log("❌ API error: \(error.localizedDescription)", emoji: "❌", color: .red)
                 completion(.failure(error))
@@ -51,7 +143,6 @@ class CameraAPIService {
             }
             
             do {
-                // Parse response: { "success": true, "data": { "cameras": [...] } }
                 let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
                 
                 guard let dataDict = json?["data"] as? [String: Any],
@@ -59,7 +150,6 @@ class CameraAPIService {
                     throw NSError(domain: "Invalid response structure", code: -1)
                 }
                 
-                // Convert to JSON data for decoding
                 let camerasData = try JSONSerialization.data(withJSONObject: camerasArray)
                 let cameras = try JSONDecoder().decode([Camera].self, from: camerasData)
                 
@@ -74,7 +164,7 @@ class CameraAPIService {
         }.resume()
     }
     
-    // ✅ Fetch cameras by area
+    // MARK: - Fetch by Area
     func fetchCamerasByArea(_ area: String, completion: @escaping (Result<[Camera], Error>) -> Void) {
         guard let url = URL(string: "\(baseURL)/cameras/area/\(area)") else {
             completion(.failure(NSError(domain: "Invalid URL", code: -1)))
@@ -88,7 +178,7 @@ class CameraAPIService {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        session.dataTask(with: request) { data, response, error in
             if let error = error {
                 completion(.failure(error))
                 return
@@ -117,7 +207,7 @@ class CameraAPIService {
         }.resume()
     }
     
-    // ✅ Fetch online cameras only
+    // MARK: - Fetch Online Cameras
     func fetchOnlineCameras(completion: @escaping (Result<[Camera], Error>) -> Void) {
         guard let url = URL(string: "\(baseURL)/cameras/online") else {
             completion(.failure(NSError(domain: "Invalid URL", code: -1)))
@@ -131,7 +221,7 @@ class CameraAPIService {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        session.dataTask(with: request) { data, response, error in
             if let error = error {
                 completion(.failure(error))
                 return
