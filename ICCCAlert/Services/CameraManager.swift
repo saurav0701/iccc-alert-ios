@@ -16,9 +16,9 @@ class CameraManager: ObservableObject {
     private let hasInitialDataKey = "has_initial_camera_data"
     private let saveQueue = DispatchQueue(label: "com.iccc.camerasSaveQueue", qos: .background)
     
-    // ✅ FIXED: REST API polling timer - REDUCED TO 2 HOURS
+    // ✅ NEW: REST API polling timer
     private var cameraRefreshTimer: Timer?
-    private let refreshInterval: TimeInterval = 2 * 60 * 60 // 2 HOURS (cameras don't change frequently)
+    private let refreshInterval: TimeInterval = 30.0 // 30 seconds
     private var isFetching = false
     
     private var hasInitialData: Bool {
@@ -44,25 +44,25 @@ class CameraManager: ObservableObject {
         print("   Has initial data: \(hasInitialData)")
         print("   Cameras loaded: \(cameras.count)")
         
-        // ✅ Start REST API polling (2 hours interval)
+        // ✅ Start REST API polling
         startPeriodicRefresh()
     }
     
-    // MARK: - REST API Polling (2 HOUR INTERVAL)
+    // MARK: - REST API Polling
     
-    /// ✅ Start periodic camera refresh via REST API (2 hours)
+    /// ✅ Start periodic camera refresh via REST API
     private func startPeriodicRefresh() {
-        // Initial fetch after 5 seconds (give WebSocket time to connect first)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+        // Initial fetch after 2 seconds (give WebSocket time to connect)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
             self?.fetchCamerasViaREST()
         }
         
-        // ✅ CHANGED: Then every 2 HOURS (not 30 seconds!)
+        // Then every 30 seconds
         cameraRefreshTimer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
             self?.fetchCamerasViaREST()
         }
         
-        print("✅ Camera REST API polling started (every \(Int(refreshInterval/3600)) hours)")
+        print("✅ Camera REST API polling started (every \(Int(refreshInterval))s)")
     }
     
     /// ✅ Fetch cameras via REST API
@@ -90,12 +90,13 @@ class CameraManager: ObservableObject {
                 case .failure(let error):
                     print("❌ REST API failed: \(error.localizedDescription)")
                     // Keep existing cached data on failure
+                    // Don't clear cameras - use stale data until next successful fetch
                 }
             }
         }
     }
     
-    /// ✅ Manual refresh (called from UI pull-to-refresh)
+    /// ✅ Manual refresh (called from UI)
     func manualRefresh(completion: @escaping (Bool) -> Void) {
         guard !isFetching else {
             completion(false)
