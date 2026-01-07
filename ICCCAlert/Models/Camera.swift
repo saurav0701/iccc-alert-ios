@@ -149,12 +149,13 @@ struct Camera: Codable, Identifiable, Equatable {
         return fallbackUrl
     }
     
-    // ✅ WebRTC Stream URL (HTTP endpoint) - Alternative stream source
+    // ✅ WebRTC Stream URL (HTTP endpoint on port 8889)
     var webrtcStreamURL: String? {
-        return getAlternativeStreamURL(for: groupId, cameraIp: ip, cameraId: id)
+        return getWebRTCStreamURL(for: groupId, cameraIp: ip, cameraId: id)
     }
     
-    private func getAlternativeStreamURL(for groupId: Int, cameraIp: String, cameraId: String) -> String? {
+    private func getWebRTCStreamURL(for groupId: Int, cameraIp: String, cameraId: String) -> String? {
+        // WebRTC endpoints on port 8889
         let serverURLs: [Int: String] = [
             5: "http://103.208.173.131:8889",
             6: "http://103.208.173.147:8889",
@@ -172,20 +173,20 @@ struct Camera: Codable, Identifiable, Equatable {
         ]
         
         guard let serverURL = serverURLs[groupId] else {
-            print("❌ No alternative stream server URL for groupId: \(groupId)")
+            print("❌ No WebRTC server URL for groupId: \(groupId)")
             return nil
         }
         
-        // Use camera IP as stream path (HTTP/HLS endpoint)
+        // Use camera IP as stream path
         if !cameraIp.isEmpty {
             let url = "\(serverURL)/\(cameraIp)/"
-            print("✅ Alternative stream URL (IP-based): \(url)")
+            print("✅ WebRTC URL: \(url)")
             return url
         }
         
-        // Fallback to camera ID if IP is missing
+        // Fallback to camera ID
         let fallbackUrl = "\(serverURL)/\(cameraId)/"
-        print("⚠️ Alternative stream URL (ID-based fallback): \(fallbackUrl)")
+        print("⚠️ WebRTC URL (fallback): \(fallbackUrl)")
         return fallbackUrl
     }
     

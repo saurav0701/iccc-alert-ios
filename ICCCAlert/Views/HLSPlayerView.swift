@@ -5,7 +5,7 @@ import AVFoundation
 // MARK: - Stream Type
 enum StreamType: String {
     case hls = "HLS"
-    case alternative = "Alternative"
+    case webrtc = "WebRTC"
 }
 
 // MARK: - Player State
@@ -606,17 +606,28 @@ struct FullscreenHLSPlayerView: View {
             Color.black.ignoresSafeArea()
             
             if let streamURL = getStreamURL() {
-                if !playerManager.canCreatePlayer(for: camera.id) {
+                if !playerManager.canCreatePlayer(for: camera.id) && streamType == .hls {
                     playerLimitView
                 } else {
-                    HLSPlayerView(
-                        streamURL: streamURL,
-                        cameraId: camera.id,
-                        autoPlay: true,
-                        streamType: streamType,
-                        onError: handlePlayerError
-                    )
-                    .ignoresSafeArea()
+                    // Show appropriate player based on stream type
+                    if streamType == .hls {
+                        HLSPlayerView(
+                            streamURL: streamURL,
+                            cameraId: camera.id,
+                            autoPlay: true,
+                            streamType: streamType,
+                            onError: handlePlayerError
+                        )
+                        .ignoresSafeArea()
+                    } else {
+                        // WebRTC player
+                        WebRTCPlayerView(
+                            streamURL: streamURL,
+                            cameraId: camera.id,
+                            onError: handlePlayerError
+                        )
+                        .ignoresSafeArea()
+                    }
                 }
             } else {
                 errorView(message: "Stream URL not available")
@@ -648,7 +659,7 @@ struct FullscreenHLSPlayerView: View {
                     if camera.webrtcStreamURL != nil {
                         Button(action: switchStreamType) {
                             HStack(spacing: 4) {
-                                Image(systemName: streamType == .hls ? "play.tv" : "play.circle.fill")
+                                Image(systemName: streamType == .hls ? "play.tv" : "antenna.radiowaves.left.and.right")
                                 Text(streamType.rawValue)
                             }
                             .font(.caption)
@@ -711,7 +722,7 @@ struct FullscreenHLSPlayerView: View {
             if let urlString = camera.streamURL {
                 return URL(string: urlString)
             }
-        case .alternative:
+        case .webrtc:
             if let urlString = camera.webrtcStreamURL {
                 return URL(string: urlString)
             }
@@ -737,9 +748,13 @@ struct FullscreenHLSPlayerView: View {
     
     private func switchStreamType() {
         isRetrying = true
-        playerManager.releasePlayer(for: camera.id)
         
-        streamType = streamType == .hls ? .alternative : .hls
+        // Release HLS player if switching away from HLS
+        if streamType == .hls {
+            playerManager.releasePlayer(for: camera.id)
+        }
+        
+        streamType = streamType == .hls ? .webrtc : .hls
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             isRetrying = false
@@ -825,7 +840,7 @@ struct FullscreenHLSPlayerView: View {
             
             if camera.webrtcStreamURL != nil && streamType == .hls {
                 Button(action: switchStreamType) {
-                    Text("Try Alternative Stream")
+                    Text("Try WebRTC")
                         .font(.headline)
                         .foregroundColor(.white)
                         .padding(.horizontal, 32)
