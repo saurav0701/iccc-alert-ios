@@ -56,10 +56,15 @@ struct CameraStreamsView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
+                // Loading progress bar
+                if cameraManager.isLoading && cameraManager.loadingProgress > 0 {
+                    loadingProgressView
+                }
+                
                 statsHeader
                 filterBar
 
-                if cameraManager.cameras.isEmpty {
+                if cameraManager.cameras.isEmpty && !cameraManager.isLoading {
                     emptyStateView
                 } else if filteredAreas.isEmpty {
                     noResultsView
@@ -78,7 +83,7 @@ struct CameraStreamsView: View {
                                 .rotationEffect(.degrees(isRefreshing ? 360 : 0))
                                 .animation(isRefreshing ? Animation.linear(duration: 1).repeatForever(autoreverses: false) : .default, value: isRefreshing)
                         }
-                        .disabled(isRefreshing)
+                        .disabled(isRefreshing || cameraManager.isLoading)
                         
                         NavigationLink(destination: DebugView()) {
                             Image(systemName: "ladybug.fill")
@@ -94,22 +99,35 @@ struct CameraStreamsView: View {
         }
     }
     
-    private func manualRefresh() {
-    isRefreshing = true
-    
-    // ✅ Use CameraManager's built-in manual refresh
-    cameraManager.manualRefresh { success in
-        DispatchQueue.main.async {
-            self.isRefreshing = false
+    private var loadingProgressView: some View {
+        VStack(spacing: 8) {
+            ProgressView(value: cameraManager.loadingProgress)
+                .progressViewStyle(LinearProgressViewStyle(tint: .blue))
+                .padding(.horizontal)
             
-            if success {
-                DebugLogger.shared.log("✅ Manual refresh successful", emoji: "✅", color: .green)
-            } else {
-                DebugLogger.shared.log("❌ Manual refresh failed", emoji: "❌", color: .red)
+            Text("Loading cameras: \(Int(cameraManager.loadingProgress * 100))%")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(.vertical, 8)
+        .background(Color(.systemBackground))
+    }
+    
+    private func manualRefresh() {
+        isRefreshing = true
+        
+        cameraManager.manualRefresh { success in
+            DispatchQueue.main.async {
+                self.isRefreshing = false
+                
+                if success {
+                    DebugLogger.shared.log("✅ Manual refresh successful", emoji: "✅", color: .green)
+                } else {
+                    DebugLogger.shared.log("❌ Manual refresh failed", emoji: "❌", color: .red)
+                }
             }
         }
     }
-}
 
     private var statsHeader: some View {
         HStack(spacing: 0) {
@@ -328,7 +346,7 @@ struct AreaCamerasView: View {
             statsBar
             filterBar
             
-            if playerManager.activePlayerCount >= 2 {
+            if playerManager.activePlayerCount >= 4 {
                 playerLimitWarning
             }
             
@@ -367,7 +385,7 @@ struct AreaCamerasView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundColor(.orange)
             
-            Text("2 cameras playing. Close one before opening another.")
+            Text("4 cameras playing. Close some before opening more.")
                 .font(.caption)
                 .foregroundColor(.secondary)
             
@@ -471,7 +489,7 @@ struct AreaCamerasView: View {
                     CameraGridCard(camera: camera, mode: gridMode)
                         .onTapGesture {
                             if camera.isOnline {
-                                if playerManager.activePlayerCount >= 2 {
+                                if playerManager.activePlayerCount >= 4 {
                                     UINotificationFeedbackGenerator().notificationOccurred(.warning)
                                 } else {
                                     selectedCamera = camera

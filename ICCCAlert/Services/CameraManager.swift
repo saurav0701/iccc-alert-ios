@@ -8,17 +8,16 @@ class CameraManager: ObservableObject {
     @Published var selectedArea: String? = nil
     @Published var isLoading = false
     @Published var lastUpdateTime: Date?
+    @Published var loadingProgress: Double = 0.0
     
     private let userDefaults = UserDefaults.standard
     private let cameraListKey = "camera_list_permanent"
-    private let cameraStatusKey = "camera_status_cache"
     private let lastUpdateKey = "cameras_last_update"
     private let hasInitialDataKey = "has_initial_camera_data"
     private let saveQueue = DispatchQueue(label: "com.iccc.camerasSaveQueue", qos: .background)
     
-    // ✅ NEW: REST API polling timer
-    private var cameraRefreshTimer: Timer?
-    private let refreshInterval: TimeInterval = 30.0 // 30 seconds
+    // Pagination settings
+    private let pageSize = 100 // Fetch 100 cameras per page
     private var isFetching = false
     
     private var hasInitialData: Bool {
@@ -44,81 +43,119 @@ class CameraManager: ObservableObject {
         print("   Has initial data: \(hasInitialData)")
         print("   Cameras loaded: \(cameras.count)")
         
-        // ✅ Start REST API polling
-        startPeriodicRefresh()
+        // Initial fetch if no cached data
+        if !hasInitialData || cameras.isEmpty {
+            fetchAllCamerasPaginated()
+        }
     }
     
-    // MARK: - REST API Polling
+    // MARK: - Paginated Camera Fetch
     
-    /// ✅ Start periodic camera refresh via REST API
-    private func startPeriodicRefresh() {
-        // Initial fetch after 2 seconds (give WebSocket time to connect)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-            self?.fetchCamerasViaREST()
-        }
-        
-        // Then every 30 seconds
-        cameraRefreshTimer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
-            self?.fetchCamerasViaREST()
-        }
-        
-        print("✅ Camera REST API polling started (every \(Int(refreshInterval))s)")
-    }
-    
-    /// ✅ Fetch cameras via REST API
-    private func fetchCamerasViaREST() {
+    /// Fetch all cameras using pagination to avoid crashes
+    func fetchAllCamerasPaginated() {
         guard !isFetching else {
-            print("⏳ Camera fetch already in progress, skipping")
+            print("⏳ Fetch already in progress")
             return
         }
         
         isFetching = true
+        isLoading = true
+        loadingProgress = 0.0
         
-        print("📡 Fetching cameras via REST API...")
+        var allCameras: [Camera] = []
+        var currentPage = 1
+        var hasMore = true
         
-        CameraAPIService.shared.fetchAllCameras { [weak self] result in
-            guard let self = self else { return }
-            
-            DispatchQueue.main.async {
-                self.isFetching = false
+        print("📡 Starting paginated camera fetch...")
+        
+        func fetchNextPage() {
+            CameraAPIService.shared.fetchCameras(page: currentPage, pageSize: pageSize) { [weak self] result in
+                guard let self = self else { return }
                 
-                switch result {
-                case .success(let cameras):
-                    print("✅ REST API: Received \(cameras.count) cameras")
-                    self.updateCameras(cameras)
-                    
-                case .failure(let error):
-                    print("❌ REST API failed: \(error.localizedDescription)")
-                    // Keep existing cached data on failure
-                    // Don't clear cameras - use stale data until next successful fetch
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let response):
+                        allCameras.append(contentsOf: response.cameras)
+                        
+                        // Update progress
+                        self.loadingProgress = Double(allCameras.count) / Double(response.total)
+                        
+                        print("📦 Fetched page \(currentPage): \(response.cameras.count) cameras (total: \(allCameras.count)/\(response.total))")
+                        
+                        hasMore = response.hasMore
+                        currentPage += 1
+                        
+                        if hasMore {
+                            // Small delay to prevent overwhelming the server
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                fetchNextPage()
+                            }
+                        } else {
+                            // All pages fetched
+                            self.handleFetchComplete(allCameras)
+                        }
+                        
+                    case .failure(let error):
+                        print("❌ Fetch failed on page \(currentPage): \(error.localizedDescription)")
+                        
+                        // If we got some cameras, use them
+                        if !allCameras.isEmpty {
+                            self.handleFetchComplete(allCameras)
+                        } else {
+                            self.isFetching = false
+                            self.isLoading = false
+                            self.loadingProgress = 0.0
+                        }
+                    }
                 }
             }
         }
+        
+        fetchNextPage()
     }
     
-    /// ✅ Manual refresh (called from UI)
+    private func handleFetchComplete(_ cameras: [Camera]) {
+        print("✅ Fetch complete: \(cameras.count) cameras")
+        
+        if !hasInitialData || self.cameras.isEmpty {
+            performInitialLoad(cameras)
+        } else {
+            performStatusUpdate(cameras)
+        }
+        
+        isFetching = false
+        isLoading = false
+        loadingProgress = 1.0
+        
+        // Reset progress after a delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            self.loadingProgress = 0.0
+        }
+    }
+    
+    // MARK: - Manual Refresh (Status Only)
+    
     func manualRefresh(completion: @escaping (Bool) -> Void) {
         guard !isFetching else {
             completion(false)
             return
         }
         
-        print("🔄 Manual camera refresh triggered")
+        print("🔄 Manual refresh triggered")
         
         isFetching = true
-        isLoading = true
         
-        CameraAPIService.shared.fetchAllCameras { [weak self] result in
+        // For manual refresh, just fetch first page to update status
+        CameraAPIService.shared.fetchCameras(page: 1, pageSize: 200) { [weak self] result in
             guard let self = self else { return }
             
             DispatchQueue.main.async {
                 self.isFetching = false
-                self.isLoading = false
                 
                 switch result {
-                case .success(let cameras):
-                    print("✅ Manual refresh: \(cameras.count) cameras")
-                    self.updateCameras(cameras)
+                case .success(let response):
+                    print("✅ Manual refresh: \(response.cameras.count) cameras")
+                    self.performStatusUpdate(response.cameras)
                     completion(true)
                     
                 case .failure(let error):
@@ -138,10 +175,8 @@ class CameraManager: ObservableObject {
         
         DispatchQueue.main.async {
             if !self.hasInitialData || self.cameras.isEmpty {
-                // FIRST TIME: Store complete camera list permanently
                 self.performInitialLoad(newCameras)
             } else {
-                // SUBSEQUENT: Only update status + add any new cameras
                 self.performStatusUpdate(newCameras)
             }
             
@@ -151,47 +186,38 @@ class CameraManager: ObservableObject {
             print("   Online: \(self.onlineCamerasCount)")
             print("   Areas: \(self.availableAreas.count)")
             
-            // Log per-area breakdown (first 3 areas)
-            for area in self.availableAreas.prefix(3) {
-                let areaCameras = self.getCameras(forArea: area)
-                let areaOnline = areaCameras.filter { $0.isOnline }.count
-                print("      \(area): \(areaCameras.count) total, \(areaOnline) online")
-            }
-            
             print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
             
-            // Force UI refresh
             NotificationCenter.default.post(name: NSNotification.Name("CamerasUpdated"), object: nil)
         }
     }
     
-    // MARK: - Initial Load (Complete Camera List)
+    // MARK: - Initial Load
     
     private func performInitialLoad(_ newCameras: [Camera]) {
         print("📹 INITIAL LOAD: Storing \(newCameras.count) cameras permanently")
         
-        // Store complete camera list
         self.cameras = newCameras
         self.hasInitialData = true
+        self.lastUpdateTime = Date()
         
-        // Save permanently
         saveCameraList()
         
         print("✅ Initial load complete")
         print("   Cameras: \(self.cameras.count)")
         print("   Areas: \(self.availableAreas.joined(separator: ", "))")
+        
+        NotificationCenter.default.post(name: NSNotification.Name("CamerasUpdated"), object: nil)
     }
     
-    // MARK: - Status Update (Only Update Online/Offline Status)
+    // MARK: - Status Update
     
     private func performStatusUpdate(_ newCameras: [Camera]) {
         var updatedCount = 0
         var newCamerasCount = 0
         
-        // Create lookup dictionary for fast status updates
         let statusMap = Dictionary(uniqueKeysWithValues: newCameras.map { ($0.id, $0) })
         
-        // Update existing cameras' status
         for i in 0..<cameras.count {
             if let newCamera = statusMap[cameras[i].id] {
                 if cameras[i].status != newCamera.status {
@@ -201,39 +227,29 @@ class CameraManager: ObservableObject {
             }
         }
         
-        // Add any NEW cameras not in our list (camera additions are rare but possible)
+        // Add any NEW cameras
         let existingIds = Set(cameras.map { $0.id })
         let newCamerasToAdd = newCameras.filter { !existingIds.contains($0.id) }
         
         if !newCamerasToAdd.isEmpty {
             cameras.append(contentsOf: newCamerasToAdd)
             newCamerasCount = newCamerasToAdd.count
-            
             print("➕ Added \(newCamerasCount) new cameras")
-            
-            // Save complete list when cameras are added
             saveCameraList()
         }
         
         if updatedCount > 0 {
-            print("📹 Status update: \(updatedCount) cameras changed status")
-            
-            // Save status changes (lighter operation)
-            saveCameraStatuses()
+            print("📹 Status update: \(updatedCount) cameras changed")
         }
+        
+        lastUpdateTime = Date()
+        NotificationCenter.default.post(name: NSNotification.Name("CamerasUpdated"), object: nil)
     }
     
-    // MARK: - Get Cameras by Area
+    // MARK: - Get Cameras
     
     func getCameras(forArea area: String) -> [Camera] {
-        let filtered = cameras.filter { $0.area == area }
-        
-        if filtered.isEmpty && hasInitialData {
-            print("⚠️ No cameras found for area: \(area)")
-            print("   Available areas: \(availableAreas.joined(separator: ", "))")
-        }
-        
-        return filtered
+        return cameras.filter { $0.area == area }
     }
     
     func getOnlineCameras(forArea area: String) -> [Camera] {
@@ -286,31 +302,19 @@ class CameraManager: ObservableObject {
         )
     }
     
-    // MARK: - Persistence (Separate Storage for List vs Status)
+    // MARK: - Persistence
     
     private func saveCameraList() {
         saveQueue.async {
             if let data = try? JSONEncoder().encode(self.cameras) {
                 self.userDefaults.set(data, forKey: self.cameraListKey)
                 self.userDefaults.set(Date().timeIntervalSince1970, forKey: self.lastUpdateKey)
-                print("💾 Saved complete camera list (\(self.cameras.count) cameras)")
-            }
-        }
-    }
-    
-    private func saveCameraStatuses() {
-        saveQueue.async {
-            // Only save status data (lighter operation)
-            let statusData = self.cameras.map { ["id": $0.id, "status": $0.status] }
-            if let data = try? JSONEncoder().encode(statusData) {
-                self.userDefaults.set(data, forKey: self.cameraStatusKey)
-                print("💾 Saved camera statuses")
+                print("💾 Saved \(self.cameras.count) cameras")
             }
         }
     }
     
     private func loadCachedCameras() {
-        // Load full camera list
         if let data = userDefaults.data(forKey: cameraListKey),
            let cached = try? JSONDecoder().decode([Camera].self, from: data) {
             cameras = cached
@@ -321,15 +325,6 @@ class CameraManager: ObservableObject {
             
             print("📦 Loaded \(cached.count) cameras from cache")
             print("   Online: \(onlineCamerasCount)")
-            print("   Areas: \(availableAreas.joined(separator: ", "))")
-            
-            if let lastUpdate = lastUpdateTime {
-                let formatter = DateFormatter()
-                formatter.dateFormat = "HH:mm:ss"
-                print("   Last update: \(formatter.string(from: lastUpdate))")
-            }
-        } else {
-            print("⚠️ No cached cameras found")
         }
     }
     
@@ -341,20 +336,15 @@ class CameraManager: ObservableObject {
         cameras.removeAll()
         hasInitialData = false
         userDefaults.removeObject(forKey: cameraListKey)
-        userDefaults.removeObject(forKey: cameraStatusKey)
         userDefaults.removeObject(forKey: lastUpdateKey)
         userDefaults.removeObject(forKey: hasInitialDataKey)
         lastUpdateTime = nil
-        print("🗑️ Camera cache cleared")
+        print("🗑️ Cache cleared")
     }
     
     func forceRefresh() {
         print("🔄 Force refreshing camera list")
         NotificationCenter.default.post(name: NSNotification.Name("CamerasUpdated"), object: nil)
-    }
-    
-    deinit {
-        cameraRefreshTimer?.invalidate()
     }
 }
 
