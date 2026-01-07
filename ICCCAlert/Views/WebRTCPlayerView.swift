@@ -1,14 +1,18 @@
 import SwiftUI
 import WebKit
+import Combine
 
-// MARK: - WebRTC Player using WebKit
+// MARK: - WebRTC Player View (Proper RTCPeerConnection)
 struct WebRTCPlayerView: UIViewControllerRepresentable {
     let streamURL: URL
     let cameraId: String
     let onError: ((Error) -> Void)?
     
     func makeUIViewController(context: Context) -> WKWebViewController {
-        let controller = WKWebViewController(streamURL: streamURL, cameraId: cameraId)
+        let controller = WKWebViewController(
+            streamURL: streamURL.absoluteString,
+            cameraId: cameraId
+        )
         controller.onError = onError
         return controller
     }
@@ -23,11 +27,11 @@ struct WebRTCPlayerView: UIViewControllerRepresentable {
 // MARK: - WebRTC WebKit Controller
 class WKWebViewController: UIViewController {
     private var webView: WKWebView!
-    private let streamURL: URL
+    private let streamURL: String
     private let cameraId: String
     var onError: ((Error) -> Void)?
     
-    init(streamURL: URL, cameraId: String) {
+    init(streamURL: String, cameraId: String) {
         self.streamURL = streamURL
         self.cameraId = cameraId
         super.init(nibName: nil, bundle: nil)
@@ -44,21 +48,28 @@ class WKWebViewController: UIViewController {
         
         // Create WebKit configuration
         let config = WKWebViewConfiguration()
-        config.mediaTypesRequiringUserActionForPlayback = []
         config.allowsInlineMediaPlayback = true
-        config.allowsAirPlayForMediaPlayback = true
+        config.mediaTypesRequiringUserActionForPlayback = []
+        config.allowsPictureInPictureMediaPlayback = false
+        config.websiteDataStore = .nonPersistent()
         
-        // Enable media capture permissions
-        if #available(iOS 15.0, *) {
-            config.mediaTypesRequiringUserActionForPlayback = []
-        }
+        // Memory optimization
+        config.processPool = WKProcessPool()
+        config.suppressesIncrementalRendering = true
+        
+        let prefs = WKWebpagePreferences()
+        prefs.allowsContentJavaScript = true
+        config.defaultWebpagePreferences = prefs
         
         webView = WKWebView(frame: view.bounds, configuration: config)
         webView.backgroundColor = .black
         webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        webView.scrollView.isScrollEnabled = false
+        webView.scrollView.bounces = false
+        webView.isOpaque = true
         view.addSubview(webView)
         
-        // Load WebRTC HTML page
+        // Load WebRTC page
         loadWebRTCPage()
     }
     
@@ -71,138 +82,194 @@ class WKWebViewController: UIViewController {
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>WebRTC Stream</title>
             <style>
-                body {
-                    margin: 0;
-                    padding: 0;
-                    background-color: black;
-                    font-family: Arial, sans-serif;
-                    overflow: hidden;
-                }
-                
-                #videoContainer {
-                    width: 100vw;
-                    height: 100vh;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    background-color: black;
-                }
-                
-                video {
-                    width: 100%;
-                    height: 100%;
-                    object-fit: contain;
-                    background-color: black;
-                }
-                
-                #status {
-                    position: absolute;
-                    top: 10px;
-                    left: 10px;
-                    color: white;
-                    font-size: 14px;
-                    background-color: rgba(0, 0, 0, 0.7);
-                    padding: 10px;
-                    border-radius: 5px;
-                }
-                
-                #error {
-                    position: absolute;
-                    top: 10px;
-                    right: 10px;
-                    color: red;
-                    font-size: 14px;
-                    background-color: rgba(0, 0, 0, 0.9);
-                    padding: 10px;
-                    border-radius: 5px;
-                    max-width: 300px;
-                }
+                * { margin: 0; padding: 0; box-sizing: border-box; }
+                html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+                #videoContainer { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #000; }
+                video { width: 100%; height: 100%; object-fit: contain; background-color: #000; }
+                #status { position: absolute; top: 10px; left: 10px; color: white; font-size: 12px; background-color: rgba(0, 0, 0, 0.8); padding: 8px; border-radius: 4px; font-family: -apple-system; }
+                #error { position: absolute; top: 10px; right: 10px; color: #ff5252; font-size: 12px; background-color: rgba(0, 0, 0, 0.9); padding: 8px; border-radius: 4px; font-family: -apple-system; max-width: 300px; }
+                #live { position: absolute; top: 10px; right: 10px; background: rgba(244,67,54,0.9); color: white; padding: 4px 8px; border-radius: 4px; font-weight: 700; font-size: 10px; display: none; align-items: center; gap: 4px; font-family: -apple-system; }
+                #live.show { display: flex; }
+                .dot { width: 6px; height: 6px; background: white; border-radius: 50%; animation: pulse 1.5s ease-in-out infinite; }
+                @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
             </style>
         </head>
         <body>
             <div id="videoContainer">
-                <video id="video" autoplay playsinline controls></video>
+                <video id="video" playsinline autoplay muted></video>
             </div>
-            <div id="status">Loading...</div>
+            <div id="status">Connecting...</div>
             <div id="error"></div>
+            <div id="live"><span class="dot"></span>LIVE</div>
             
             <script>
-                const VIDEO_URL = '\(streamURL.absoluteString)';
+            (function() {
                 const video = document.getElementById('video');
                 const statusDiv = document.getElementById('status');
                 const errorDiv = document.getElementById('error');
-                let reconnectAttempts = 0;
-                const MAX_RECONNECT = 6;
+                const liveDiv = document.getElementById('live');
+                const streamUrl = '\(streamURL)';
                 
-                async function startStream() {
+                let pc = null;
+                let reconnectTimeout = null;
+                let retryCount = 0;
+                const MAX_RETRIES = 2;
+                let isActive = true;
+                
+                // Global cleanup function
+                window.cleanup = function() {
+                    isActive = false;
+                    if (reconnectTimeout) {
+                        clearTimeout(reconnectTimeout);
+                        reconnectTimeout = null;
+                    }
+                    if (pc) {
+                        try { pc.close(); } catch(e) {}
+                        pc = null;
+                    }
+                    if (video.srcObject) {
+                        try {
+                            video.srcObject.getTracks().forEach(t => {
+                                try { t.stop(); } catch(e) {}
+                            });
+                            video.srcObject = null;
+                        } catch(e) {}
+                    }
+                    video.pause();
+                    video.src = '';
+                    video.load();
+                    liveDiv.classList.remove('show');
+                };
+                
+                function log(msg, isError = false) {
+                    if (!isActive) return;
+                    if (isError) {
+                        errorDiv.textContent = msg;
+                        errorDiv.style.display = 'block';
+                        statusDiv.textContent = msg;
+                    } else {
+                        statusDiv.textContent = msg;
+                        errorDiv.style.display = 'none';
+                    }
+                    console.log('[WebRTC] ' + msg);
+                }
+                
+                async function startConnection() {
+                    if (!isActive || retryCount >= MAX_RETRIES) {
+                        if (retryCount >= MAX_RETRIES) {
+                            log('Max retries reached', true);
+                        }
+                        return;
+                    }
+                    
+                    if (pc) {
+                        try { pc.close(); } catch(e) {}
+                        pc = null;
+                    }
+                    
+                    log('Connecting...');
+                    liveDiv.classList.remove('show');
+                    
                     try {
-                        statusDiv.textContent = 'Connecting to stream...';
-                        errorDiv.textContent = '';
+                        pc = new RTCPeerConnection({
+                            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+                            bundlePolicy: 'max-bundle',
+                            rtcpMuxPolicy: 'require'
+                        });
                         
-                        // Try to fetch the stream
-                        const response = await fetch(VIDEO_URL);
+                        pc.ontrack = (e) => {
+                            if (isActive) {
+                                log('Stream received');
+                                video.srcObject = e.streams[0];
+                                retryCount = 0;
+                            }
+                        };
                         
-                        if (!response.ok) {
-                            throw new Error(`HTTP error! status: ${response.status}`);
+                        pc.oniceconnectionstatechange = () => {
+                            if (!isActive) return;
+                            const state = pc.iceConnectionState;
+                            
+                            if (state === 'connected' || state === 'completed') {
+                                log('Connected');
+                                liveDiv.classList.add('show');
+                                retryCount = 0;
+                            } else if (state === 'failed' || state === 'disconnected') {
+                                log('Connection ' + state);
+                                liveDiv.classList.remove('show');
+                                
+                                retryCount++;
+                                if (isActive && retryCount < MAX_RETRIES) {
+                                    log('Retry ' + retryCount + '/' + MAX_RETRIES);
+                                    reconnectTimeout = setTimeout(startConnection, 3000);
+                                } else if (retryCount >= MAX_RETRIES) {
+                                    log('Failed - max retries', true);
+                                }
+                            }
+                        };
+                        
+                        pc.addTransceiver('video', { direction: 'recvonly' });
+                        pc.addTransceiver('audio', { direction: 'recvonly' });
+                        
+                        const offer = await pc.createOffer();
+                        await pc.setLocalDescription(offer);
+                        
+                        const controller = new AbortController();
+                        const timeoutId = setTimeout(() => controller.abort(), 10000);
+                        
+                        const res = await fetch(streamUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/sdp' },
+                            body: offer.sdp,
+                            signal: controller.signal
+                        });
+                        
+                        clearTimeout(timeoutId);
+                        
+                        if (!res.ok) {
+                            throw new Error('Server error: ' + res.status);
                         }
                         
-                        const blob = await response.blob();
-                        const objectUrl = URL.createObjectURL(blob);
+                        const answer = await res.text();
+                        if (isActive && pc) {
+                            await pc.setRemoteDescription({ type: 'answer', sdp: answer });
+                        }
                         
-                        video.src = objectUrl;
-                        video.play();
-                        
-                        statusDiv.textContent = '✅ Connected';
-                        reconnectAttempts = 0;
-                        
-                    } catch (error) {
-                        console.error('Stream error:', error);
-                        handleStreamError(error);
+                    } catch (err) {
+                        log('Error: ' + err.message, true);
+                        retryCount++;
+                        if (isActive && retryCount < MAX_RETRIES) {
+                            log('Retry ' + retryCount + '/' + MAX_RETRIES);
+                            reconnectTimeout = setTimeout(startConnection, 5000);
+                        } else {
+                            log('Failed: ' + err.message, true);
+                        }
                     }
                 }
                 
-                function handleStreamError(error) {
-                    reconnectAttempts++;
-                    const message = `Error: ${error.message}`;
-                    errorDiv.textContent = message;
-                    statusDiv.textContent = `Retrying... (${reconnectAttempts}/${MAX_RECONNECT})`;
-                    
-                    if (reconnectAttempts < MAX_RECONNECT) {
-                        const delay = Math.min(Math.pow(2, reconnectAttempts), 60) * 1000;
-                        console.log(`Reconnecting in ${delay/1000}s...`);
-                        setTimeout(startStream, delay);
-                    } else {
-                        statusDiv.textContent = '❌ Stream unavailable';
-                        errorDiv.textContent = 'Max retries reached';
-                    }
-                }
-                
-                // Handle video play events
-                video.addEventListener('play', () => {
-                    console.log('Video started playing');
-                    statusDiv.textContent = '▶️ Playing';
-                });
-                
-                video.addEventListener('pause', () => {
-                    console.log('Video paused');
-                    statusDiv.textContent = '⏸️ Paused';
-                });
-                
-                video.addEventListener('ended', () => {
-                    console.log('Video ended, reconnecting...');
-                    if (reconnectAttempts < MAX_RECONNECT) {
-                        startStream();
+                video.addEventListener('playing', () => {
+                    if (isActive) {
+                        log('Playing');
+                        liveDiv.classList.add('show');
                     }
                 });
                 
                 video.addEventListener('error', (e) => {
-                    console.error('Video error:', e);
-                    handleStreamError(new Error('Video playback error'));
+                    log('Video playback error', true);
                 });
                 
-                // Start stream on load
-                window.addEventListener('load', startStream);
-                startStream();
+                video.addEventListener('pause', () => {
+                    if (isActive && pc && (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected')) {
+                        log('Stream lost, reconnecting...');
+                    }
+                });
+                
+                window.addEventListener('beforeunload', window.cleanup);
+                window.addEventListener('pagehide', window.cleanup);
+                
+                // Start initial connection
+                startConnection();
+                
+            })();
             </script>
         </body>
         </html>
@@ -213,10 +280,12 @@ class WKWebViewController: UIViewController {
     
     func cleanup() {
         webView.stopLoading()
-        webView.configuration.userContentController.removeAllUserScripts()
+        webView.evaluateJavaScript("window.cleanup();") { _, _ in }
+        webView.configuration.userContentController.removeAllScriptMessageHandlers()
     }
     
     deinit {
         cleanup()
     }
 }
+
