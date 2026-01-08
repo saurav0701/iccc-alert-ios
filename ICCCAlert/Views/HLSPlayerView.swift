@@ -1,7 +1,19 @@
+// HLSPlayerView.swift
+// Renamed but now contains WebRTC-only implementation
+
 import SwiftUI
 import WebKit
 
-// MARK: - Production WebRTC Player
+// MARK: - Player State
+enum PlayerState {
+    case loading
+    case playing
+    case paused
+    case failed(String)
+    case retrying(Int)
+}
+
+// MARK: - WebRTC Player (iOS 14+ Compatible)
 struct ProductionWebRTCPlayerView: UIViewRepresentable {
     let streamURL: URL
     let cameraId: String
@@ -16,19 +28,12 @@ struct ProductionWebRTCPlayerView: UIViewRepresentable {
         configuration.allowsInlineMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = []
         
-        // ✅ Enable WebRTC features
-        if #available(iOS 14.3, *) {
-            configuration.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
-        }
-        
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.scrollView.isScrollEnabled = false
         webView.isOpaque = false
         webView.backgroundColor = .black
         webView.navigationDelegate = context.coordinator
         webView.scrollView.contentInsetAdjustmentBehavior = .never
-        
-        // ✅ Disable zooming
         webView.scrollView.minimumZoomScale = 1.0
         webView.scrollView.maximumZoomScale = 1.0
         webView.scrollView.bouncesZoom = false
@@ -75,7 +80,6 @@ struct ProductionWebRTCPlayerView: UIViewRepresentable {
                 self.isLoading = true
             }
             
-            // ✅ Set 30-second timeout
             loadTimeout?.invalidate()
             loadTimeout = Timer.scheduledTimer(withTimeInterval: 30, repeats: false) { [weak self] _ in
                 guard let self = self else { return }
@@ -92,7 +96,6 @@ struct ProductionWebRTCPlayerView: UIViewRepresentable {
             
             DebugLogger.shared.log("✅ WebRTC page loaded: \(cameraId)", emoji: "✅", color: .green)
             
-            // ✅ Give WebRTC time to establish connection
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                 self.playerState = .playing
                 self.isLoading = false
@@ -154,7 +157,7 @@ struct UnifiedCameraPlayerView: View {
     
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Color.black.edgesIgnoringSafeArea(.all)
             
             if let urlString = camera.webrtcStreamURL, let url = URL(string: urlString) {
                 ProductionWebRTCPlayerView(
@@ -168,17 +171,14 @@ struct UnifiedCameraPlayerView: View {
                 errorView(message: "Camera stream not available")
             }
             
-            // Loading overlay
             if isLoading {
                 loadingOverlay
             }
             
-            // Error overlay
             if case .failed(let message) = playerState {
                 failedOverlay(message: message)
             }
             
-            // Controls overlay
             if showControls && !isLoading {
                 controlsOverlay
                     .transition(.opacity)
@@ -202,7 +202,7 @@ struct UnifiedCameraPlayerView: View {
     
     private func logCameraInfo() {
         DebugLogger.shared.log("━━━━━━━━━━━━━━━━━━━━━━━━━━", emoji: "📹", color: .blue)
-        DebugLogger.shared.log("📹 Opening Camera (WebRTC Only)", emoji: "📹", color: .blue)
+        DebugLogger.shared.log("📹 Opening Camera (WebRTC)", emoji: "📹", color: .blue)
         DebugLogger.shared.log("   Name: \(camera.displayName)", emoji: "📝", color: .blue)
         DebugLogger.shared.log("   ID: \(camera.id)", emoji: "🆔", color: .blue)
         DebugLogger.shared.log("   IP: \(camera.ip.isEmpty ? "MISSING!" : camera.ip)", emoji: camera.ip.isEmpty ? "⚠️" : "🌐", color: camera.ip.isEmpty ? .red : .blue)
@@ -315,7 +315,6 @@ struct UnifiedCameraPlayerView: View {
             
             Spacer()
             
-            // Bottom info bar
             HStack {
                 HStack(spacing: 4) {
                     Image(systemName: "circle.fill")
@@ -323,7 +322,7 @@ struct UnifiedCameraPlayerView: View {
                         .font(.system(size: 8))
                     Text("LIVE")
                         .font(.caption2)
-                        .fontWeight(.bold)
+                        .bold()
                         .foregroundColor(.white)
                 }
                 .padding(.horizontal, 10)
@@ -374,17 +373,5 @@ struct UnifiedCameraPlayerView: View {
         
         hideControlsTask = task
         DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: task)
-    }
-}
-
-// MARK: - Updated Camera Model Extension
-extension Camera {
-    // ✅ Use only WebRTC
-    var primaryStreamURL: String? {
-        return webrtcStreamURL
-    }
-    
-    var hasValidStream: Bool {
-        return webrtcStreamURL != nil
     }
 }

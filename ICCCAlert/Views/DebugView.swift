@@ -49,7 +49,6 @@ struct DebugView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
-                // Tab Selector
                 Picker("", selection: $selectedTab) {
                     Text("Overview").tag(0)
                     Text("Cameras").tag(1)
@@ -58,7 +57,6 @@ struct DebugView: View {
                 .pickerStyle(SegmentedPickerStyle())
                 .padding()
                 
-                // Content based on selected tab
                 TabView(selection: $selectedTab) {
                     overviewTab.tag(0)
                     camerasTab.tag(1)
@@ -84,10 +82,8 @@ struct DebugView: View {
         }
     }
     
-    // MARK: - Overview Tab
     private var overviewTab: some View {
         List {
-            // Connection Status
             Section(header: Text("Connection")) {
                 HStack {
                     Circle()
@@ -105,7 +101,6 @@ struct DebugView: View {
                 }
             }
             
-            // Camera Statistics
             Section(header: Text("Camera Status")) {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
@@ -132,7 +127,6 @@ struct DebugView: View {
                 .padding(.vertical, 4)
             }
             
-            // Subscriptions
             Section(header: Text("Subscriptions (\(subscriptionManager.subscribedChannels.count))")) {
                 ForEach(subscriptionManager.subscribedChannels) { channel in
                     VStack(alignment: .leading, spacing: 4) {
@@ -150,20 +144,20 @@ struct DebugView: View {
                 }
             }
             
-            // Memory Info
             Section(header: Text("System")) {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
-                        Text("Memory Status")
+                        Text("Streaming Protocol")
                             .font(.caption)
                             .foregroundColor(.secondary)
                         Spacer()
-                        Text("Monitoring")
+                        Text("WebRTC Only")
                             .font(.caption)
+                            .fontWeight(.bold)
                             .foregroundColor(.green)
                     }
                     
-                    Text("App will automatically manage video player resources")
+                    Text("Using WKWebView for low-latency WebRTC streaming")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
@@ -171,7 +165,6 @@ struct DebugView: View {
         }
     }
     
-    // MARK: - Cameras Tab
     private var camerasTab: some View {
         List {
             Section(header: Text("By Area")) {
@@ -182,6 +175,7 @@ struct DebugView: View {
                         
                         let areaCameras = cameraManager.getCameras(forArea: area)
                         let online = areaCameras.filter { $0.isOnline }.count
+                        let withWebRTC = areaCameras.filter { $0.webrtcStreamURL != nil }.count
                         
                         HStack {
                             Text("Total: \(areaCameras.count)")
@@ -191,31 +185,56 @@ struct DebugView: View {
                                 .font(.caption)
                                 .foregroundColor(.green)
                         }
+                        
+                        HStack {
+                            Text("WebRTC: \(withWebRTC)")
+                                .font(.caption)
+                                .foregroundColor(.blue)
+                            Spacer()
+                        }
                     }
                 }
             }
             
-            Section(header: Text("Stream Protocol")) {
+            Section(header: Text("Stream Info")) {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("Protocol")
                             .font(.caption)
                         Spacer()
-                        Text("HLS & WebRTC")
+                        Text("WebRTC")
                             .font(.caption)
                             .fontWeight(.bold)
+                            .foregroundColor(.green)
+                    }
+                    
+                    HStack {
+                        Text("Latency")
+                            .font(.caption)
+                        Spacer()
+                        Text("0.5-2 seconds")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                    }
+                    
+                    HStack {
+                        Text("Format")
+                            .font(.caption)
+                        Spacer()
+                        Text("Live Stream")
+                            .font(.caption)
                             .foregroundColor(.blue)
                     }
                     
-                    Text("Using AVPlayer for HLS and WKWebView for WebRTC streaming")
+                    Text("WebRTC provides real-time streaming with minimal latency")
                         .font(.caption2)
                         .foregroundColor(.secondary)
+                        .padding(.top, 4)
                 }
             }
         }
     }
     
-    // MARK: - Logs Tab
     private var logsTab: some View {
         List {
             Section(header: HStack {
