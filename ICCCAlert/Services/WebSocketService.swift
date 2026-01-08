@@ -127,7 +127,7 @@ class WebSocketService: ObservableObject {
             self.ackLock.unlock()
             
             EventImageLoader.shared.clearCache()
-            HLSPlayerManager.shared.releaseAllPlayers()
+            // HLSPlayerManager.shared.releaseAllPlayers()
             
             self.queuedMessageCount = 0
             

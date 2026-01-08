@@ -74,8 +74,7 @@ struct ICCCAlertApp: App {
                             }
                         } else {
                             print("🔐 USER LOGGED OUT")
-                            // Clean up all resources
-                            HLSPlayerManager.shared.releaseAllPlayers()
+                            // Note: Video players will be cleaned up when views disappear
                         }
                     }
             }
@@ -111,15 +110,14 @@ struct ICCCAlertApp: App {
             
         case .inactive:
             print("📱 App became inactive")
-            // Pause all video players (they keep resources but stop decoding)
-            HLSPlayerManager.shared.pauseAllPlayers()
+            // Video players will pause automatically when views disappear
             
         case .background:
             print("📱 App moved to background")
             saveAppState()
             
-            // ✅ CRITICAL: Release ALL video players to free memory
-            HLSPlayerManager.shared.releaseAllPlayers()
+            // Note: Video players are released when their views are dismissed
+            // No manual cleanup needed here
             
             NotificationManager.shared.updateBadgeCount()
             
@@ -132,9 +130,6 @@ struct ICCCAlertApp: App {
     private static func handleAppTermination() {
         print("🛑 App will terminate - cleaning up resources")
         
-        // Release video players
-        HLSPlayerManager.shared.releaseAllPlayers()
-        
         // Save state
         SubscriptionManager.shared.forceSave()
         ChannelSyncState.shared.forceSave()
@@ -146,9 +141,6 @@ struct ICCCAlertApp: App {
     // ✅ Handle memory warnings (aggressive cleanup)
     private static func handleMemoryWarning() {
         print("⚠️ MEMORY WARNING - Aggressive cleanup")
-        
-        // Immediately release ALL video players
-        HLSPlayerManager.shared.releaseAllPlayers()
         
         // Clear image caches
         EventImageLoader.shared.clearCache()

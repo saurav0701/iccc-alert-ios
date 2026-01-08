@@ -351,39 +351,39 @@ struct WebRTCPlayerView: UIViewRepresentable {
 }
 
 // MARK: - Camera Extension for WebRTC URL
-extension Camera {
-    // WebRTC stream URL - matches your MediaMTX server format
-    var webrtcStreamURL: String? {
-        let serverURLs: [Int: String] = [
-            5: "http://103.208.173.131:8889",
-            6: "http://103.208.173.147:8889",
-            7: "http://103.208.173.163:8889",
-            8: "http://a5va.bccliccc.in:8889",
-            9: "http://a5va.bccliccc.in:8889",
-            10: "http://a6va.bccliccc.in:8889",
-            11: "http://103.208.173.195:8889",
-            12: "http://a9va.bccliccc.in:8889",
-            13: "http://a10va.bccliccc.in:8889",
-            14: "http://103.210.88.195:8889",
-            15: "http://103.210.88.211:8889",
-            16: "http://103.208.173.179:8889",
-            22: "http://103.208.173.211:8889"
-        ]
+// extension Camera {
+//     // WebRTC stream URL - matches your MediaMTX server format
+//     var webrtcStreamURL: String? {
+//         let serverURLs: [Int: String] = [
+//             5: "http://103.208.173.131:8889",
+//             6: "http://103.208.173.147:8889",
+//             7: "http://103.208.173.163:8889",
+//             8: "http://a5va.bccliccc.in:8889",
+//             9: "http://a5va.bccliccc.in:8889",
+//             10: "http://a6va.bccliccc.in:8889",
+//             11: "http://103.208.173.195:8889",
+//             12: "http://a9va.bccliccc.in:8889",
+//             13: "http://a10va.bccliccc.in:8889",
+//             14: "http://103.210.88.195:8889",
+//             15: "http://103.210.88.211:8889",
+//             16: "http://103.208.173.179:8889",
+//             22: "http://103.208.173.211:8889"
+//         ]
         
-        guard let serverURL = serverURLs[groupId] else {
-            print("❌ No WebRTC server for groupId: \(groupId)")
-            return nil
-        }
+//         guard let serverURL = serverURLs[groupId] else {
+//             print("❌ No WebRTC server for groupId: \(groupId)")
+//             return nil
+//         }
         
-        // Use IP address as stream path
-        if !ip.isEmpty {
-            return "\(serverURL)/\(ip)/"
-        }
+//         // Use IP address as stream path
+//         if !ip.isEmpty {
+//             return "\(serverURL)/\(ip)/"
+//         }
         
-        // Fallback to camera ID
-        return "\(serverURL)/\(id)/"
-    }
-}
+//         // Fallback to camera ID
+//         return "\(serverURL)/\(id)/"
+//     }
+// }
 
 // MARK: - Unified Camera Player View
 struct UnifiedCameraPlayerView: View {
