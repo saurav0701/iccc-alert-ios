@@ -371,7 +371,7 @@ struct AreaCamerasView: View {
                     .foregroundColor(.blue)
                 Text("\(cameras.count) camera\(cameras.count == 1 ? "" : "s")")
                     .font(.subheadline)
-                    .fontWeight(.medium)
+                    .bold()
             }
             
             Spacer()
