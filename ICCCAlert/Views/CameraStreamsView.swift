@@ -314,7 +314,6 @@ struct CameraStreamsView: View {
     }
 }
 
-// MARK: - Area Cameras View
 struct AreaCamerasView: View {
     let area: String
     @StateObject private var cameraManager = CameraManager.shared
@@ -323,8 +322,6 @@ struct AreaCamerasView: View {
     @State private var showOnlineOnly = true
     @State private var gridMode: GridViewMode = .grid2x2
     @State private var selectedCamera: Camera? = nil
-    
-    @Environment(\.scenePhase) var scenePhase
     
     var cameras: [Camera] {
         var result = cameraManager.getCameras(forArea: area)
@@ -364,12 +361,6 @@ struct AreaCamerasView: View {
         }
         .fullScreenCover(item: $selectedCamera) { camera in
             UnifiedCameraPlayerView(camera: camera)
-        }
-        .onChange(of: scenePhase) { phase in
-            if phase == .background || phase == .inactive {
-                // App going to background
-                print("📱 App entering background - cleaning up")
-            }
         }
     }
     
@@ -457,20 +448,35 @@ struct AreaCamerasView: View {
                 ForEach(cameras, id: \.id) { camera in
                     CameraGridCard(camera: camera, mode: gridMode)
                         .onTapGesture {
-                            if camera.isOnline {
-                                print("📹 Opening camera: \(camera.displayName)")
-                                print("   HLS: \(camera.streamURL ?? "nil")")
-                                print("   WebRTC: \(camera.webrtcStreamURL ?? "nil")")
-                                selectedCamera = camera
-                            } else {
-                                UINotificationFeedbackGenerator().notificationOccurred(.warning)
-                            }
+                            handleCameraTap(camera)
                         }
                 }
             }
             .padding()
         }
         .background(Color(.systemGroupedBackground))
+    }
+    
+    private func handleCameraTap(_ camera: Camera) {
+        if !camera.isOnline {
+            // Camera is offline - show feedback
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            DebugLogger.shared.log("⚠️ Camera offline: \(camera.displayName)", emoji: "⚠️", color: .orange)
+            return
+        }
+        
+        // ✅ Check if WebRTC stream is available
+        if camera.webrtcStreamURL == nil {
+            UINotificationFeedbackGenerator().notificationOccurred(.error)
+            DebugLogger.shared.log("❌ No WebRTC stream for: \(camera.displayName)", emoji: "❌", color: .red)
+            return
+        }
+        
+        // ✅ All good - open camera
+        DebugLogger.shared.log("📹 Opening camera: \(camera.displayName)", emoji: "📹", color: .green)
+        DebugLogger.shared.log("   WebRTC: \(camera.webrtcStreamURL!)", emoji: "🌐", color: .green)
+        
+        selectedCamera = camera
     }
     
     private var emptyView: some View {
@@ -606,7 +612,7 @@ struct CameraGridCard: View {
                 .cornerRadius(12)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12)
-                        .stroke(camera.isOnline ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
+                        .stroke(camera.isOnline ? Color.green.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
                 )
             
             VStack(alignment: .leading, spacing: 4) {
@@ -625,6 +631,15 @@ struct CameraGridCard: View {
                         .font(subtitleFont)
                         .foregroundColor(.secondary)
                         .lineLimit(1)
+                    
+                    Spacer()
+                    
+                    // ✅ WebRTC badge
+                    if camera.isOnline && camera.webrtcStreamURL != nil {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .font(.system(size: mode == .list ? 10 : 8))
+                            .foregroundColor(.green)
+                    }
                 }
             }
             .padding(.horizontal, mode == .list ? 0 : 4)
@@ -684,7 +699,7 @@ struct CameraThumbnailView: View {
     
     var body: some View {
         ZStack {
-            if camera.isOnline {
+            if camera.isOnline && camera.webrtcStreamURL != nil {
                 playButtonView
             } else {
                 offlineView
@@ -695,7 +710,7 @@ struct CameraThumbnailView: View {
     private var playButtonView: some View {
         ZStack {
             LinearGradient(
-                colors: [Color.blue.opacity(0.3), Color.blue.opacity(0.1)],
+                colors: [Color.green.opacity(0.3), Color.green.opacity(0.1)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -703,12 +718,16 @@ struct CameraThumbnailView: View {
             VStack(spacing: 8) {
                 Image(systemName: "play.circle.fill")
                     .font(.system(size: isGridView ? 32 : 40))
-                    .foregroundColor(.blue)
+                    .foregroundColor(.green)
                 
-                Text("Tap to view")
-                    .font(.caption)
-                    .foregroundColor(.blue)
-                    .fontWeight(.medium)
+                HStack(spacing: 4) {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .font(.system(size: 10))
+                    Text("WebRTC")
+                        .font(.caption2)
+                }
+                .foregroundColor(.green)
+                .fontWeight(.medium)
             }
         }
     }
