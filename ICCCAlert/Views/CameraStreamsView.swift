@@ -34,6 +34,7 @@ struct CameraStreamsView: View {
     @State private var showOnlineOnly = false
     @State private var selectedArea: String? = nil
     @State private var isRefreshing = false
+    @State private var showMapView = false
     
     var filteredAreas: [String] {
         var areas = cameraManager.availableAreas
@@ -51,6 +52,17 @@ struct CameraStreamsView: View {
     
     var onlineCameras: Int {
         cameraManager.onlineCamerasCount
+    }
+    
+    // Count cameras with valid GPS coordinates
+    var camerasWithLocation: Int {
+        cameraManager.cameras.filter { camera in
+            guard let lat = Double(camera.latitude),
+                  let lng = Double(camera.longitude) else {
+                return false
+            }
+            return lat != 0 && lng != 0
+        }.count
     }
     
     var body: some View {
@@ -77,6 +89,12 @@ struct CameraStreamsView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 12) {
+                        // Map View Button
+                        Button(action: { showMapView = true }) {
+                            Image(systemName: "map.fill")
+                                .foregroundColor(.blue)
+                        }
+                        
                         // Manual refresh button
                         Button(action: manualRefresh) {
                             Image(systemName: isRefreshing ? "arrow.clockwise.circle.fill" : "arrow.clockwise")
@@ -91,6 +109,9 @@ struct CameraStreamsView: View {
                         }
                     }
                 }
+            }
+            .sheet(isPresented: $showMapView) {
+                CameraMapView()
             }
         }
         .navigationViewStyle(StackNavigationViewStyle())
@@ -153,8 +174,8 @@ struct CameraStreamsView: View {
             
             StatCard(
                 icon: "map.fill",
-                value: "\(cameraManager.availableAreas.count)",
-                label: "Areas",
+                value: "\(camerasWithLocation)",
+                label: "On Map",
                 color: .purple
             )
         }
@@ -314,204 +335,6 @@ struct CameraStreamsView: View {
     }
 }
 
-struct AreaCamerasView: View {
-    let area: String
-    @StateObject private var cameraManager = CameraManager.shared
-    
-    @State private var searchText = ""
-    @State private var showOnlineOnly = true
-    @State private var gridMode: GridViewMode = .grid2x2
-    @State private var selectedCamera: Camera? = nil
-    
-    var cameras: [Camera] {
-        var result = cameraManager.getCameras(forArea: area)
-        if showOnlineOnly { 
-            result = result.filter { $0.isOnline } 
-        }
-        if !searchText.isEmpty {
-            result = result.filter {
-                $0.displayName.localizedCaseInsensitiveContains(searchText) ||
-                $0.location.localizedCaseInsensitiveContains(searchText)
-            }
-        }
-        return result.sorted { $0.displayName < $1.displayName }
-    }
-    
-    var body: some View {
-        VStack(spacing: 0) {
-            statsBar
-            filterBar
-            
-            cameras.isEmpty ? AnyView(emptyView) : AnyView(cameraGridView)
-        }
-        .navigationTitle(area)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Menu {
-                    Picker("Layout", selection: $gridMode) {
-                        ForEach(GridViewMode.allCases) { mode in
-                            Label(mode.rawValue, systemImage: mode.icon).tag(mode)
-                        }
-                    }
-                } label: {
-                    Image(systemName: gridMode.icon).font(.system(size: 18))
-                }
-            }
-        }
-        .fullScreenCover(item: $selectedCamera) { camera in
-            UnifiedCameraPlayerView(camera: camera)
-        }
-    }
-    
-    private var statsBar: some View {
-        HStack {
-            HStack(spacing: 8) {
-                Image(systemName: "video.fill")
-                    .foregroundColor(.blue)
-                Text("\(cameras.count) camera\(cameras.count == 1 ? "" : "s")")
-                    .font(.subheadline)
-                    .bold()
-            }
-            
-            Spacer()
-            
-            HStack(spacing: 12) {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(Color.green)
-                        .frame(width: 8, height: 8)
-                    Text("\(cameras.filter { $0.isOnline }.count)")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-                
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(Color.gray)
-                        .frame(width: 8, height: 8)
-                    Text("\(cameras.filter { !$0.isOnline }.count)")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-            }
-        }
-        .padding()
-        .background(Color(.systemBackground))
-        .shadow(color: Color.black.opacity(0.05), radius: 2, y: 2)
-    }
-    
-    private var filterBar: some View {
-        VStack(spacing: 12) {
-            HStack {
-                Image(systemName: "magnifyingglass")
-                    .foregroundColor(.gray)
-                
-                TextField("Search cameras...", text: $searchText)
-                    .textFieldStyle(PlainTextFieldStyle())
-                
-                if !searchText.isEmpty {
-                    Button(action: { searchText = "" }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.gray)
-                    }
-                }
-            }
-            .padding(12)
-            .background(Color(.systemGray6))
-            .cornerRadius(10)
-            .padding(.horizontal)
-            
-            HStack {
-                Toggle(isOn: $showOnlineOnly) {
-                    HStack(spacing: 8) {
-                        Image(systemName: showOnlineOnly ? "checkmark.circle.fill" : "circle")
-                            .foregroundColor(showOnlineOnly ? .green : .gray)
-                        Text("Show Online Only")
-                            .font(.subheadline)
-                    }
-                }
-                .toggleStyle(SwitchToggleStyle(tint: .green))
-            }
-            .padding(.horizontal)
-        }
-        .padding(.vertical, 8)
-        .background(Color(.systemGroupedBackground))
-    }
-    
-    private var cameraGridView: some View {
-        ScrollView {
-            LazyVGrid(
-                columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: gridMode.columns),
-                spacing: 12
-            ) {
-                ForEach(cameras, id: \.id) { camera in
-                    CameraGridCard(camera: camera, mode: gridMode)
-                        .onTapGesture {
-                            handleCameraTap(camera)
-                        }
-                }
-            }
-            .padding()
-        }
-        .background(Color(.systemGroupedBackground))
-    }
-    
-    private func handleCameraTap(_ camera: Camera) {
-        if !camera.isOnline {
-            // Camera is offline - show feedback
-            UINotificationFeedbackGenerator().notificationOccurred(.warning)
-            DebugLogger.shared.log("⚠️ Camera offline: \(camera.displayName)", emoji: "⚠️", color: .orange)
-            return
-        }
-        
-        // ✅ Check if WebRTC stream is available
-        if camera.webrtcStreamURL == nil {
-            UINotificationFeedbackGenerator().notificationOccurred(.error)
-            DebugLogger.shared.log("❌ No WebRTC stream for: \(camera.displayName)", emoji: "❌", color: .red)
-            return
-        }
-        
-        // ✅ All good - open camera
-        DebugLogger.shared.log("📹 Opening camera: \(camera.displayName)", emoji: "📹", color: .green)
-        DebugLogger.shared.log("   WebRTC: \(camera.webrtcStreamURL!)", emoji: "🌐", color: .green)
-        
-        selectedCamera = camera
-    }
-    
-    private var emptyView: some View {
-        VStack(spacing: 20) {
-            Spacer()
-            
-            ZStack {
-                Circle()
-                    .fill(Color.gray.opacity(0.1))
-                    .frame(width: 100, height: 100)
-                
-                Image(systemName: searchText.isEmpty ? "video.slash" : "magnifyingglass")
-                    .font(.system(size: 50))
-                    .foregroundColor(.gray)
-            }
-            
-            Text(searchText.isEmpty ? "No Cameras" : "No Results")
-                .font(.title2)
-                .fontWeight(.bold)
-            
-            Text(searchText.isEmpty ? 
-                 (showOnlineOnly ? "No online cameras in this area" : "No cameras found in this area") : 
-                 "No cameras match your search")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
-            
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.systemGroupedBackground))
-    }
-}
-
 // MARK: - Supporting Views
 struct StatCard: View {
     let icon: String
@@ -547,6 +370,16 @@ struct AreaRow: View {
     
     var offlineCount: Int {
         cameras.count - onlineCount
+    }
+    
+    var camerasWithLocation: Int {
+        cameras.filter { camera in
+            guard let lat = Double(camera.latitude),
+                  let lng = Double(camera.longitude) else {
+                return false
+            }
+            return lat != 0 && lng != 0
+        }.count
     }
     
     var body: some View {
@@ -586,6 +419,17 @@ struct AreaRow: View {
                         }
                     }
                 }
+                
+                // Show map availability
+                if camerasWithLocation > 0 {
+                    HStack(spacing: 4) {
+                        Image(systemName: "map")
+                            .font(.system(size: 10))
+                        Text("\(camerasWithLocation) on map")
+                            .font(.caption2)
+                            .foregroundColor(.purple)
+                    }
+                }
             }
             
             Spacer()
@@ -598,157 +442,5 @@ struct AreaRow: View {
                 .clipShape(Circle())
         }
         .padding(.vertical, 8)
-    }
-}
-
-struct CameraGridCard: View {
-    let camera: Camera
-    let mode: GridViewMode
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            CameraThumbnailView(camera: camera, isGridView: mode != .list)
-                .frame(height: height)
-                .cornerRadius(12)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(camera.isOnline ? Color.green.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
-                )
-            
-            VStack(alignment: .leading, spacing: 4) {
-                Text(camera.displayName)
-                    .font(titleFont)
-                    .fontWeight(.medium)
-                    .lineLimit(mode == .list ? 2 : 1)
-                    .foregroundColor(.primary)
-                
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(camera.isOnline ? Color.green : Color.gray)
-                        .frame(width: dotSize, height: dotSize)
-                    
-                    Text(camera.location.isEmpty ? camera.area : camera.location)
-                        .font(subtitleFont)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                    
-                    Spacer()
-                    
-                    // ✅ WebRTC badge
-                    if camera.isOnline && camera.webrtcStreamURL != nil {
-                        Image(systemName: "antenna.radiowaves.left.and.right")
-                            .font(.system(size: mode == .list ? 10 : 8))
-                            .foregroundColor(.green)
-                    }
-                }
-            }
-            .padding(.horizontal, mode == .list ? 0 : 4)
-        }
-        .padding(padding)
-        .background(Color(.systemBackground))
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.05), radius: 5, y: 2)
-        .opacity(camera.isOnline ? 1 : 0.6)
-    }
-    
-    private var height: CGFloat {
-        switch mode {
-        case .list: return 140
-        case .grid2x2: return 120
-        case .grid3x3: return 100
-        }
-    }
-    
-    private var padding: CGFloat {
-        switch mode {
-        case .list: return 12
-        case .grid2x2: return 10
-        case .grid3x3: return 8
-        }
-    }
-    
-    private var titleFont: Font {
-        switch mode {
-        case .list: return .subheadline
-        case .grid2x2: return .caption
-        case .grid3x3: return .caption2
-        }
-    }
-    
-    private var subtitleFont: Font {
-        switch mode {
-        case .list: return .caption
-        case .grid2x2: return .caption2
-        case .grid3x3: return .system(size: 10)
-        }
-    }
-    
-    private var dotSize: CGFloat {
-        switch mode {
-        case .list: return 6
-        case .grid2x2: return 5
-        case .grid3x3: return 4
-        }
-    }
-}
-
-// MARK: - Camera Thumbnail
-struct CameraThumbnailView: View {
-    let camera: Camera
-    let isGridView: Bool
-    
-    var body: some View {
-        ZStack {
-            if camera.isOnline && camera.webrtcStreamURL != nil {
-                playButtonView
-            } else {
-                offlineView
-            }
-        }
-    }
-    
-    private var playButtonView: some View {
-        ZStack {
-            LinearGradient(
-                colors: [Color.green.opacity(0.3), Color.green.opacity(0.1)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            
-            VStack(spacing: 8) {
-                Image(systemName: "play.circle.fill")
-                    .font(.system(size: isGridView ? 32 : 40))
-                    .foregroundColor(.green)
-                
-                HStack(spacing: 4) {
-                    Image(systemName: "antenna.radiowaves.left.and.right")
-                        .font(.system(size: 10))
-                    Text("WebRTC")
-                        .font(.caption2)
-                        .fontWeight(.medium)  // ✅ FIXED: Use .fontWeight(_:) on Text instead of view modifier
-                }
-                .foregroundColor(.green)
-            }
-        }
-    }
-    
-    private var offlineView: some View {
-        ZStack {
-            LinearGradient(
-                colors: [Color.gray.opacity(0.3), Color.gray.opacity(0.1)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            
-            VStack(spacing: 6) {
-                Image(systemName: "video.slash.fill")
-                    .font(.system(size: isGridView ? 24 : 28))
-                    .foregroundColor(.gray)
-                
-                Text("Offline")
-                    .font(.caption)
-                    .foregroundColor(.gray)
-            }
-        }
     }
 }
