@@ -1,9 +1,10 @@
 import SwiftUI
 import AVKit
 import AVFoundation
+import WebKit
 
 // MARK: - Stream Type
-enum StreamType: String {
+enum StreamType: String, CaseIterable {
     case hls = "HLS"
     case webrtc = "WebRTC"
 }
@@ -13,242 +14,61 @@ enum PlayerState {
     case loading
     case playing
     case paused
-    case failed(Error)
+    case failed(String)
     case retrying(Int)
 }
 
-// MARK: - Player Manager (4 Concurrent Players)
-class HLSPlayerManager: ObservableObject {
-    static let shared = HLSPlayerManager()
-    
-    private var activePlayers: [String: AVPlayer] = [:]
-    private var playerObservers: [String: NSKeyValueObservation] = [:]
-    private let lock = NSLock()
-    private let maxPlayers = 4
-    
-    @Published var activePlayerCount = 0
-    
-    private init() {
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleMemoryWarning),
-            name: UIApplication.didReceiveMemoryWarningNotification,
-            object: nil
-        )
-        
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleBackground),
-            name: UIApplication.didEnterBackgroundNotification,
-            object: nil
-        )
-    }
-    
-    @objc private func handleMemoryWarning() {
-        print("⚠️ MEMORY WARNING - Releasing extra players")
-        lock.lock()
-        defer { lock.unlock() }
-        
-        if activePlayers.count > 2 {
-            let toRemove = Array(activePlayers.keys.dropFirst(activePlayers.count - 2))
-            toRemove.forEach { id in
-                if let player = activePlayers.removeValue(forKey: id) {
-                    cleanupPlayer(player)
-                    playerObservers.removeValue(forKey: id)
-                }
-            }
-        }
-        
-        updatePlayerCount()
-    }
-    
-    @objc private func handleBackground() {
-        pauseAllPlayers()
-    }
-    
-    func canCreatePlayer(for cameraId: String) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        
-        if activePlayers[cameraId] != nil {
-            return true
-        }
-        
-        return activePlayers.count < maxPlayers
-    }
-    
-    func getPlayer(for cameraId: String, streamURL: URL, preferredBufferDuration: TimeInterval = 3.0) -> AVPlayer? {
-        lock.lock()
-        defer { 
-            lock.unlock()
-            updatePlayerCount()
-        }
-        
-        if let existingPlayer = activePlayers[cameraId] {
-            print("♻️ Reusing player: \(cameraId)")
-            return existingPlayer
-        }
-        
-        if activePlayers.count >= maxPlayers {
-            print("⚠️ Player limit reached (\(maxPlayers))")
-            return nil
-        }
-        
-        let asset = AVURLAsset(url: streamURL, options: [
-            AVURLAssetPreferPreciseDurationAndTimingKey: false,
-            "AVURLAssetHTTPHeaderFieldsKey": [
-                "Connection": "keep-alive",
-                "User-Agent": "ICCC-Alert-iOS/1.0"
-            ]
-        ])
-        
-        let playerItem = AVPlayerItem(asset: asset)
-        playerItem.preferredForwardBufferDuration = preferredBufferDuration
-        playerItem.preferredMaximumResolution = CGSize(width: 1920, height: 1080)
-        playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
-        
-        let player = AVPlayer(playerItem: playerItem)
-        player.allowsExternalPlayback = false
-        player.automaticallyWaitsToMinimizeStalling = true
-        
-        let observer: NSKeyValueObservation? = player.observe(\.currentItem?.status, options: [.new]) { player, _ in
-            guard let status = player.currentItem?.status else { return }
-            
-            switch status {
-            case .readyToPlay:
-                print("✅ Player ready: \(cameraId)")
-            case .failed:
-                if let error = player.currentItem?.error {
-                    print("❌ Player failed: \(cameraId) - \(error.localizedDescription)")
-                }
-            case .unknown:
-                break
-            @unknown default:
-                break
-            }
-        }
-        
-        activePlayers[cameraId] = player
-        playerObservers[cameraId] = observer
-        
-        print("✅ Created player: \(cameraId) (total: \(activePlayers.count))")
-        
-        return player
-    }
-    
-    func releasePlayer(for cameraId: String) {
-        lock.lock()
-        defer { 
-            lock.unlock()
-            updatePlayerCount()
-        }
-        
-        guard let player = activePlayers.removeValue(forKey: cameraId) else {
-            return
-        }
-        
-        cleanupPlayer(player)
-        playerObservers.removeValue(forKey: cameraId)
-        
-        print("🗑️ Released: \(cameraId) (remaining: \(activePlayers.count))")
-    }
-    
-    func forceRecreatePlayer(for cameraId: String) {
-        lock.lock()
-        defer { 
-            lock.unlock()
-            updatePlayerCount()
-        }
-        
-        if let player = activePlayers.removeValue(forKey: cameraId) {
-            cleanupPlayer(player)
-            playerObservers.removeValue(forKey: cameraId)
-            print("🧹 Force-released (corrupted): \(cameraId)")
-        }
-    }
-    
-    func releaseAllPlayers() {
-        lock.lock()
-        
-        print("🧹 Releasing ALL players (\(activePlayers.count))")
-        
-        activePlayers.forEach { (_, player) in
-            cleanupPlayer(player)
-        }
-        
-        activePlayers.removeAll()
-        playerObservers.removeAll()
-        
-        lock.unlock()
-        
-        updatePlayerCount()
-        print("✅ All players released")
-    }
-    
-    func pauseAllPlayers() {
-        lock.lock()
-        defer { lock.unlock() }
-        
-        activePlayers.values.forEach { $0.pause() }
-        print("⏸️ Paused all players")
-    }
-    
-    private func cleanupPlayer(_ player: AVPlayer) {
-        player.pause()
-        player.replaceCurrentItem(with: nil)
-    }
-    
-    private func updatePlayerCount() {
-        DispatchQueue.main.async {
-            self.activePlayerCount = self.activePlayers.count
-        }
-    }
-    
-    deinit {
-        NotificationCenter.default.removeObserver(self)
-    }
-}
-
-// MARK: - HLS Player View with Error Handling & Auto-Recovery
-struct HLSPlayerView: UIViewControllerRepresentable {
+// MARK: - HLS Player View (Using AVPlayer)
+struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
     let streamURL: URL
     let cameraId: String
     let autoPlay: Bool
-    let streamType: StreamType
-    let onError: ((Error) -> Void)?
-    
-    @StateObject private var playerManager = HLSPlayerManager.shared
-    
-    init(streamURL: URL, cameraId: String, autoPlay: Bool, streamType: StreamType, onError: ((Error) -> Void)? = nil) {
-        self.streamURL = streamURL
-        self.cameraId = cameraId
-        self.autoPlay = autoPlay
-        self.streamType = streamType
-        self.onError = onError
-    }
+    @Binding var playerState: PlayerState
     
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
         controller.showsPlaybackControls = true
-        controller.allowsPictureInPicturePlayback = false
+        controller.allowsPictureInPicturePlayback = true
         controller.videoGravity = .resizeAspect
         
-        let bufferDuration: TimeInterval = streamType == .hls ? 3.0 : 3.0
+        // Create asset with optimized settings for live streaming
+        let asset = AVURLAsset(url: streamURL, options: [
+            AVURLAssetPreferPreciseDurationAndTimingKey: false,
+            "AVURLAssetHTTPHeaderFieldsKey": [
+                "Connection": "keep-alive",
+                "Accept": "*/*"
+            ]
+        ])
         
-        if let player = playerManager.getPlayer(for: cameraId, streamURL: streamURL, preferredBufferDuration: bufferDuration) {
-            controller.player = player
-            
-            context.coordinator.setupPlayer(player: player)
-            
-            if autoPlay {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    player.play()
-                    context.coordinator.startMonitoring(player: player)
-                }
+        // Create player item with live streaming optimizations
+        let playerItem = AVPlayerItem(asset: asset)
+        
+        // Critical: Reduce buffer duration for live streams (Android uses 3-5 seconds)
+        playerItem.preferredForwardBufferDuration = 3.0
+        
+        // Prevent buffering when paused (saves bandwidth)
+        playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+        
+        // Create player
+        let player = AVPlayer(playerItem: playerItem)
+        player.allowsExternalPlayback = false
+        player.automaticallyWaitsToMinimizeStalling = true
+        
+        // IMPORTANT: For live streams, disable audio processing that can cause delays
+        if #available(iOS 15.0, *) {
+            player.audiovisualBackgroundPlaybackPolicy = .pauses
+        }
+        
+        controller.player = player
+        
+        // Setup observers
+        context.coordinator.setupObservers(player: player, controller: controller)
+        
+        if autoPlay {
+            // Delay play slightly to ensure stream is ready
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                player.play()
             }
-        } else {
-            print("❌ Cannot create player (limit reached)")
-            onError?(NSError(domain: "Player limit reached", code: -1))
         }
         
         return controller
@@ -258,69 +78,96 @@ struct HLSPlayerView: UIViewControllerRepresentable {
     
     static func dismantleUIViewController(_ uiViewController: AVPlayerViewController, coordinator: Coordinator) {
         coordinator.cleanup()
-        
         uiViewController.player?.pause()
         uiViewController.player?.replaceCurrentItem(with: nil)
-        uiViewController.player = nil
     }
     
     func makeCoordinator() -> Coordinator {
-        Coordinator(cameraId: cameraId, streamURL: streamURL, streamType: streamType, onError: onError)
+        Coordinator(cameraId: cameraId, playerState: $playerState)
     }
     
-    class Coordinator {
+    class Coordinator: NSObject {
         let cameraId: String
-        let streamURL: URL
-        let streamType: StreamType
-        let onError: ((Error) -> Void)?
+        @Binding var playerState: PlayerState
         
-        private var stallTimer: Timer?
-        private var retryCount = 0
-        private let maxRetries = 6  // Increased from 3 to 6
-        private var isMonitoring = false
-        private weak var player: AVPlayer?
         private var statusObserver: NSKeyValueObservation?
-        private var itemObserver: NSKeyValueObservation?
+        private var timeControlObserver: NSKeyValueObservation?
+        private var bufferEmptyObserver: NSKeyValueObservation?
+        private var likelyToKeepUpObserver: NSKeyValueObservation?
+        private weak var player: AVPlayer?
+        private var retryCount = 0
+        private let maxRetries = 3
+        private var retryTimer: Timer?
         
-        init(cameraId: String, streamURL: URL, streamType: StreamType, onError: ((Error) -> Void)?) {
+        init(cameraId: String, playerState: Binding<PlayerState>) {
             self.cameraId = cameraId
-            self.streamURL = streamURL
-            self.streamType = streamType
-            self.onError = onError
+            self._playerState = playerState
         }
         
-        func setupPlayer(player: AVPlayer) {
+        func setupObservers(player: AVPlayer, controller: AVPlayerViewController) {
             self.player = player
             
-            // Observe player item status changes
+            // Observe playback status
             statusObserver = player.observe(\.currentItem?.status, options: [.new]) { [weak self] player, _ in
                 guard let self = self, let item = player.currentItem else { return }
                 
                 switch item.status {
+                case .readyToPlay:
+                    print("✅ HLS Player ready: \(self.cameraId)")
+                    self.retryCount = 0
+                    DispatchQueue.main.async {
+                        self.playerState = .playing
+                    }
+                    
                 case .failed:
                     if let error = item.error {
-                        print("❌ CODEC/PLAYBACK ERROR: \(error.localizedDescription)")
-                        print("   Error code: \((error as NSError).code)")
-                        print("   Domain: \((error as NSError).domain)")
-                        // Check for codec errors (12000 range)
-                        if (error as NSError).code >= 12000 && (error as NSError).code < 13000 {
-                            print("⚠️ DETECTED CODEC ERROR - will recreate player")
+                        print("❌ HLS Player failed: \(error.localizedDescription)")
+                        DispatchQueue.main.async {
+                            self.playerState = .failed(error.localizedDescription)
                         }
-                        self.handleError(error)
+                        self.attemptRetry()
                     }
-                case .readyToPlay:
-                    print("✅ Player item ready to play")
-                    self.retryCount = 0
+                    
                 case .unknown:
                     break
+                    
                 @unknown default:
                     break
                 }
             }
             
-            // Observe player item changes
-            itemObserver = player.observe(\.currentItem, options: [.new]) { [weak self] _, _ in
-                self?.setupItemObservers()
+            // Observe time control status (playing/paused/buffering)
+            timeControlObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
+                switch player.timeControlStatus {
+                case .playing:
+                    print("▶️ Playing: \(self?.cameraId ?? "")")
+                    
+                case .paused:
+                    print("⏸️ Paused: \(self?.cameraId ?? "")")
+                    
+                case .waitingToPlayAtSpecifiedRate:
+                    print("🔄 Buffering: \(self?.cameraId ?? "")")
+                    DispatchQueue.main.async {
+                        self?.playerState = .loading
+                    }
+                    
+                @unknown default:
+                    break
+                }
+            }
+            
+            // Observe buffer empty (indicates stalling)
+            bufferEmptyObserver = player.observe(\.currentItem?.isPlaybackBufferEmpty, options: [.new]) { [weak self] player, _ in
+                if player.currentItem?.isPlaybackBufferEmpty == true {
+                    print("⚠️ Buffer empty, stream stalling")
+                }
+            }
+            
+            // Observe likely to keep up
+            likelyToKeepUpObserver = player.observe(\.currentItem?.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] player, _ in
+                if player.currentItem?.isPlaybackLikelyToKeepUp == true {
+                    print("✅ Stream recovered, likely to keep up")
+                }
             }
             
             // Setup notifications
@@ -339,191 +186,90 @@ struct HLSPlayerView: UIViewControllerRepresentable {
             )
         }
         
-        private func setupItemObservers() {
-            guard let item = player?.currentItem else { return }
-            
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(playerItemFailedToPlayToEndTime),
-                name: .AVPlayerItemFailedToPlayToEndTime,
-                object: item
-            )
-            
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(playerItemPlaybackStalled),
-                name: .AVPlayerItemPlaybackStalled,
-                object: item
-            )
-        }
-        
         @objc private func playerItemFailedToPlayToEndTime(notification: Notification) {
             if let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error {
                 print("❌ Failed to play to end: \(error.localizedDescription)")
-                handleError(error)
+                attemptRetry()
             }
         }
         
         @objc private func playerItemPlaybackStalled() {
             print("⚠️ Playback stalled for \(cameraId)")
-            attemptRecovery()
-        }
-        
-        func startMonitoring(player: AVPlayer) {
-            guard !isMonitoring else { return }
-            isMonitoring = true
             
-            stallTimer?.invalidate()
+            // For live streams, seek to live edge when stalled
+            guard let player = player, let item = player.currentItem else { return }
             
-            stallTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self, weak player] _ in
-                guard let self = self, let player = player else { return }
+            let seekableRanges = item.seekableTimeRanges
+            if let lastRange = seekableRanges.last?.timeRangeValue {
+                let livePosition = CMTimeAdd(lastRange.start, lastRange.duration)
+                print("🔄 Seeking to live edge...")
                 
-                // Check for player item errors (codec errors, etc)
-                if let item = player.currentItem {
-                    if item.status == .failed {
-                        print("⚠️ Detected failed item status during monitoring - triggering recovery")
-                        self.attemptRecovery()
-                        return
-                    }
-                }
-                
-                // Check if player is stalled (not playing and ready)
-                if player.rate == 0 && player.currentItem?.status == .readyToPlay {
-                    // Check if the item has seekable ranges (indicates it's a valid stream)
-                    if let item = player.currentItem, !item.seekableTimeRanges.isEmpty {
-                        print("⚠️ Player stalled (not playing) - attempting recovery")
-                        self.attemptRecovery()
+                player.seek(to: livePosition, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                    if finished {
+                        print("✅ Seeked to live edge")
+                        player.play()
                     }
                 }
             }
         }
         
-        private func handleError(_ error: Error) {
-            print("❌ Handling error for \(cameraId): \(error.localizedDescription)")
-            
-            // Notify parent view
-            DispatchQueue.main.async {
-                self.onError?(error)
-            }
-            
-            // Attempt recovery
-            attemptRecovery()
-        }
-        
-        private func attemptRecovery() {
+        private func attemptRetry() {
             guard retryCount < maxRetries else {
-                print("❌ Max retries reached for \(cameraId) - stream unavailable")
-                stallTimer?.invalidate()
+                print("❌ Max retries reached for \(cameraId)")
+                DispatchQueue.main.async {
+                    self.playerState = .failed("Stream unavailable after \(self.maxRetries) attempts")
+                }
                 return
             }
             
             retryCount += 1
-            // Exponential backoff: 2s, 4s, 8s, 16s, 32s, 60s
-            let delaySeconds = min(pow(2.0, Double(retryCount)), 60.0)
-            print("🔄 Retry attempt \(retryCount)/\(maxRetries) for \(cameraId) (waiting \(Int(delaySeconds))s)")
+            print("🔄 Retry attempt \(retryCount)/\(maxRetries) for \(cameraId)")
             
-            guard let player = player else { return }
-            
-            // Check if player item is in failed state
-            if let item = player.currentItem, item.status == .failed {
-                print("⚠️ PlayerItem is in FAILED state - need to recreate")
-                // Player item is corrupted, need complete recreation
-                DispatchQueue.main.asyncAfter(deadline: .now() + delaySeconds) { [weak self] in
-                    self?.recreatePlayer()
-                }
-                return
+            DispatchQueue.main.async {
+                self.playerState = .retrying(self.retryCount)
             }
             
-            // Try to recover by seeking to live edge
-            if let item = player.currentItem, item.status == .readyToPlay {
-                let seekableRanges = item.seekableTimeRanges
-                if let lastRange = seekableRanges.last?.timeRangeValue {
-                    let seekTime = CMTimeAdd(lastRange.start, lastRange.duration)
-                    
-                    print("📍 Seeking to live edge...")
-                    player.seek(to: seekTime) { [weak self] finished in
-                        if finished {
-                            print("✅ Seeked to live edge - Retry \(self?.retryCount ?? 0)/\(self?.maxRetries ?? 0)")
-                            player.play()
-                        } else {
-                            print("❌ Seek failed - scheduling next attempt")
-                            // Schedule next retry with exponential backoff
-                            DispatchQueue.main.asyncAfter(deadline: .now() + delaySeconds) {
-                                self?.attemptRecovery()
+            // Wait before retrying
+            retryTimer?.invalidate()
+            retryTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
+                guard let self = self, let player = self.player else { return }
+                
+                // Try seeking to live edge first
+                if let item = player.currentItem {
+                    let seekableRanges = item.seekableTimeRanges
+                    if let lastRange = seekableRanges.last?.timeRangeValue {
+                        let livePosition = CMTimeAdd(lastRange.start, lastRange.duration)
+                        player.seek(to: livePosition) { finished in
+                            if finished {
+                                player.play()
                             }
                         }
-                    }
-                } else {
-                    print("❌ No seekable ranges - recreating player")
-                    // No seekable ranges, player item is bad
-                    DispatchQueue.main.asyncAfter(deadline: .now() + delaySeconds) { [weak self] in
-                        self?.recreatePlayer()
+                        return
                     }
                 }
-            } else {
-                print("⚠️ PlayerItem not ready - recreating")
-                // PlayerItem not in ready state, need recreation
-                DispatchQueue.main.asyncAfter(deadline: .now() + delaySeconds) { [weak self] in
-                    self?.recreatePlayer()
-                }
-            }
-        }
-        
-        private func recreatePlayer() {
-            print("🔄 Recreating player for \(cameraId) (Retry \(retryCount)/\(maxRetries))")
-            
-            stallTimer?.invalidate()
-            stallTimer = nil
-            
-            guard let player = player else { return }
-            
-            // Proper cleanup of old player and item
-            player.pause()
-            player.replaceCurrentItem(with: nil)
-            
-            // Force release old player completely
-            HLSPlayerManager.shared.forceRecreatePlayer(for: cameraId)
-            self.player = nil
-            
-            // Wait before creating new player
-            let delaySeconds = min(pow(2.0, Double(retryCount + 1)), 60.0)
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + delaySeconds) { [weak self] in
-                guard let self = self else { return }
                 
-                print("🔧 Creating new player after \(Int(delaySeconds))s delay...")
-                
-                if let newPlayer = HLSPlayerManager.shared.getPlayer(
-                    for: self.cameraId,
-                    streamURL: self.streamURL,
-                    preferredBufferDuration: self.streamType == .hls ? 3.0 : 2.0
-                ) {
-                    self.player = newPlayer
-                    self.setupPlayer(player: newPlayer)
-                    
-                    // Wait a bit more before playing
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        print("▶️ Starting playback on recreated player")
-                        newPlayer.play()
-                        self.startMonitoring(player: newPlayer)
-                    }
-                } else {
-                    print("❌ Failed to create new player - limit reached")
+                // If seeking doesn't work, recreate player item
+                print("🔄 Recreating player item...")
+                if let url = player.currentItem?.asset as? AVURLAsset {
+                    let newAsset = AVURLAsset(url: url.url, options: [
+                        AVURLAssetPreferPreciseDurationAndTimingKey: false
+                    ])
+                    let newItem = AVPlayerItem(asset: newAsset)
+                    newItem.preferredForwardBufferDuration = 3.0
+                    newItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+                    player.replaceCurrentItem(with: newItem)
+                    player.play()
                 }
             }
         }
         
         func cleanup() {
-            isMonitoring = false
-            stallTimer?.invalidate()
-            stallTimer = nil
-            
+            retryTimer?.invalidate()
             statusObserver?.invalidate()
-            itemObserver?.invalidate()
-            
+            timeControlObserver?.invalidate()
+            bufferEmptyObserver?.invalidate()
+            likelyToKeepUpObserver?.invalidate()
             NotificationCenter.default.removeObserver(self)
-            
-            HLSPlayerManager.shared.releasePlayer(for: cameraId)
         }
         
         deinit {
@@ -532,292 +278,327 @@ struct HLSPlayerView: UIViewControllerRepresentable {
     }
 }
 
-// MARK: - Camera Thumbnail
-struct CameraThumbnailView: View {
-    let camera: Camera
-    let isGridView: Bool
+// MARK: - WebRTC Player View (Using WKWebView) - Simplified for MediaMTX
+struct WebRTCPlayerView: UIViewRepresentable {
+    let streamURL: URL
+    let cameraId: String
+    @Binding var playerState: PlayerState
     
-    var body: some View {
-        ZStack {
-            if camera.isOnline {
-                playButtonView
-            } else {
-                offlineView
-            }
-        }
+    func makeUIView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.allowsInlineMediaPlayback = true
+        configuration.mediaTypesRequiringUserActionForPlayback = []
+        
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.scrollView.isScrollEnabled = false
+        webView.isOpaque = false
+        webView.backgroundColor = .black
+        webView.navigationDelegate = context.coordinator
+        
+        // Load the MediaMTX WebRTC page directly
+        print("📡 Loading WebRTC stream: \(streamURL.absoluteString)")
+        let request = URLRequest(url: streamURL)
+        webView.load(request)
+        
+        return webView
     }
     
-    private var playButtonView: some View {
-        ZStack {
-            LinearGradient(
-                colors: [Color.blue.opacity(0.3), Color.blue.opacity(0.1)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            
-            VStack(spacing: 8) {
-                Image(systemName: "play.circle.fill")
-                    .font(.system(size: isGridView ? 32 : 40))
-                    .foregroundColor(.blue)
-                
-                Text("Tap to view")
-                    .font(.caption)
-                    .foregroundColor(.blue)
-                    .fontWeight(.medium)
-            }
-        }
+    func updateUIView(_ uiView: WKWebView, context: Context) {}
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(cameraId: cameraId, playerState: $playerState)
     }
     
-    private var offlineView: some View {
-        ZStack {
-            LinearGradient(
-                colors: [Color.gray.opacity(0.3), Color.gray.opacity(0.1)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
+    class Coordinator: NSObject, WKNavigationDelegate {
+        let cameraId: String
+        @Binding var playerState: PlayerState
+        
+        init(cameraId: String, playerState: Binding<PlayerState>) {
+            self.cameraId = cameraId
+            self._playerState = playerState
+        }
+        
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            print("🔄 Loading WebRTC page for \(cameraId)")
+            DispatchQueue.main.async {
+                self.playerState = .loading
+            }
+        }
+        
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            print("✅ WebRTC page loaded for \(cameraId)")
             
-            VStack(spacing: 6) {
-                Image(systemName: "video.slash.fill")
-                    .font(.system(size: isGridView ? 24 : 28))
-                    .foregroundColor(.gray)
-                
-                Text("Offline")
-                    .font(.caption)
-                    .foregroundColor(.gray)
+            // Give the page a moment to initialize
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                self.playerState = .playing
+            }
+        }
+        
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            print("❌ WebRTC page failed: \(error.localizedDescription)")
+            DispatchQueue.main.async {
+                self.playerState = .failed(error.localizedDescription)
+            }
+        }
+        
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            print("❌ WebRTC provisional navigation failed: \(error.localizedDescription)")
+            DispatchQueue.main.async {
+                self.playerState = .failed("Cannot connect to camera. Please check if camera is online.")
             }
         }
     }
 }
 
-// MARK: - Fullscreen Player with HLS/WebRTC Toggle & Error Handling
-struct FullscreenHLSPlayerView: View {
+// MARK: - Camera Extension for WebRTC URL
+extension Camera {
+    // WebRTC stream URL - matches your MediaMTX server format
+    var webrtcStreamURL: String? {
+        let serverURLs: [Int: String] = [
+            5: "http://103.208.173.131:8889",
+            6: "http://103.208.173.147:8889",
+            7: "http://103.208.173.163:8889",
+            8: "http://a5va.bccliccc.in:8889",
+            9: "http://a5va.bccliccc.in:8889",
+            10: "http://a6va.bccliccc.in:8889",
+            11: "http://103.208.173.195:8889",
+            12: "http://a9va.bccliccc.in:8889",
+            13: "http://a10va.bccliccc.in:8889",
+            14: "http://103.210.88.195:8889",
+            15: "http://103.210.88.211:8889",
+            16: "http://103.208.173.179:8889",
+            22: "http://103.208.173.211:8889"
+        ]
+        
+        guard let serverURL = serverURLs[groupId] else {
+            print("❌ No WebRTC server for groupId: \(groupId)")
+            return nil
+        }
+        
+        // Use IP address as stream path
+        if !ip.isEmpty {
+            return "\(serverURL)/\(ip)/"
+        }
+        
+        // Fallback to camera ID
+        return "\(serverURL)/\(id)/"
+    }
+}
+
+// MARK: - Unified Camera Player View
+struct UnifiedCameraPlayerView: View {
     let camera: Camera
     @Environment(\.presentationMode) var presentationMode
-    @StateObject private var playerManager = HLSPlayerManager.shared
     
     @State private var streamType: StreamType = .hls
-    @State private var showStreamTypeSelector = false
-    @State private var errorMessage: String?
-    @State private var showError = false
-    @State private var isRetrying = false
+    @State private var playerState: PlayerState = .loading
+    @State private var showControls = true
+    @State private var hideControlsTask: DispatchWorkItem?
     
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             
-            if let streamURL = getStreamURL() {
-                if !playerManager.canCreatePlayer(for: camera.id) && streamType == .hls {
-                    playerLimitView
-                } else {
-                    // Show appropriate player based on stream type
-                    if streamType == .hls {
-                        HLSPlayerView(
-                            streamURL: streamURL,
+            // Player based on stream type
+            Group {
+                if streamType == .hls {
+                    if let urlString = camera.streamURL, let url = URL(string: urlString) {
+                        OptimizedHLSPlayerView(
+                            streamURL: url,
                             cameraId: camera.id,
                             autoPlay: true,
-                            streamType: streamType,
-                            onError: handlePlayerError
+                            playerState: $playerState
                         )
-                        .ignoresSafeArea()
                     } else {
-                        // WebRTC player
+                        errorView(message: "HLS stream URL not available")
+                    }
+                } else {
+                    if let urlString = camera.webrtcStreamURL, let url = URL(string: urlString) {
                         WebRTCPlayerView(
-                            streamURL: streamURL,
+                            streamURL: url,
                             cameraId: camera.id,
-                            onError: handlePlayerError
+                            playerState: $playerState
                         )
-                        .ignoresSafeArea()
+                    } else {
+                        errorView(message: "WebRTC stream URL not available")
                     }
                 }
-            } else {
-                errorView(message: "Stream URL not available")
             }
             
-            // Error overlay
-            if showError, let errorMessage = errorMessage {
-                errorOverlay(message: errorMessage)
+            // Status overlay
+            if case .loading = playerState {
+                loadingOverlay
+            } else if case .retrying(let count) = playerState {
+                retryingOverlay(attempt: count)
+            } else if case .failed(let message) = playerState {
+                failedOverlay(message: message)
             }
             
             // Controls overlay
-            VStack {
-                HStack {
-                    Button(action: {
-                        playerManager.releasePlayer(for: camera.id)
-                        presentationMode.wrappedValue.dismiss()
-                    }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 28))
-                            .foregroundColor(.white)
-                            .padding(12)
-                            .background(Color.black.opacity(0.6))
-                            .clipShape(Circle())
-                    }
-                    
-                    Spacer()
-                    
-                    // Stream type toggle
-                    if camera.webrtcStreamURL != nil {
-                        Button(action: switchStreamType) {
-                            HStack(spacing: 4) {
-                                Image(systemName: streamType == .hls ? "play.tv" : "antenna.radiowaves.left.and.right")
-                                Text(streamType.rawValue)
-                            }
-                            .font(.caption)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color.blue.opacity(0.8))
-                            .cornerRadius(16)
-                        }
-                        .disabled(isRetrying)
-                    }
-                }
-                .padding()
-                
-                Spacer()
-                
-                // Camera info
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(camera.displayName)
-                            .font(.headline)
-                            .foregroundColor(.white)
-                        
-                        HStack(spacing: 8) {
-                            Circle()
-                                .fill(Color.green)
-                                .frame(width: 8, height: 8)
-                            Text(camera.area)
-                                .font(.caption)
-                                .foregroundColor(.white.opacity(0.8))
-                            
-                            if isRetrying {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .scaleEffect(0.7)
-                                Text("Retrying...")
-                                    .font(.caption2)
-                                    .foregroundColor(.white.opacity(0.8))
-                            }
-                        }
-                    }
-                    .padding()
-                    .background(Color.black.opacity(0.6))
-                    .cornerRadius(10)
-                    
-                    Spacer()
-                }
-                .padding()
+            if showControls {
+                controlsOverlay
+                    .transition(.opacity)
             }
         }
         .navigationBarHidden(true)
-        .onDisappear {
-            playerManager.releasePlayer(for: camera.id)
-        }
-    }
-    
-    private func getStreamURL() -> URL? {
-        switch streamType {
-        case .hls:
-            if let urlString = camera.streamURL {
-                return URL(string: urlString)
+        .onTapGesture {
+            withAnimation {
+                showControls.toggle()
             }
-        case .webrtc:
-            if let urlString = camera.webrtcStreamURL {
-                return URL(string: urlString)
+            if showControls {
+                scheduleHideControls()
             }
         }
-        return nil
-    }
-    
-    private func handlePlayerError(_ error: Error) {
-        print("❌ Player error: \(error.localizedDescription)")
-        
-        errorMessage = error.localizedDescription
-        showError = true
-        
-        // Auto-hide error after 10 seconds (longer display time)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
-            showError = false
-        }
-        
-        // REMOVED: Auto-switching to WebRTC
-        // HLS has proper retry logic now - let it exhaust retries first
-        // User can manually switch if needed
-    }
-    
-    private func switchStreamType() {
-        isRetrying = true
-        
-        // Release HLS player if switching away from HLS
-        if streamType == .hls {
-            playerManager.releasePlayer(for: camera.id)
-        }
-        
-        streamType = streamType == .hls ? .webrtc : .hls
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            isRetrying = false
+        .onAppear {
+            scheduleHideControls()
         }
     }
     
-    private func errorOverlay(message: String) -> some View {
-        VStack(spacing: 12) {
-            HStack {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundColor(.orange)
-                
-                Text(message)
-                    .font(.caption)
-                    .foregroundColor(.white)
-                
-                Spacer()
-                
-                Button(action: { showError = false }) {
-                    Image(systemName: "xmark")
-                        .foregroundColor(.white)
-                        .font(.caption)
-                }
-            }
-            .padding()
-            .background(Color.red.opacity(0.8))
-            .cornerRadius(10)
-            .padding()
+    private var loadingOverlay: some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                .scaleEffect(1.5)
+            
+            Text("Connecting to camera...")
+                .foregroundColor(.white)
+                .font(.headline)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .transition(.move(edge: .top))
-        .animation(.easeInOut, value: showError)
     }
     
-    private var playerLimitView: some View {
+    private func retryingOverlay(attempt: Int) -> some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                .scaleEffect(1.5)
+            
+            Text("Retrying... (Attempt \(attempt)/3)")
+                .foregroundColor(.white)
+                .font(.headline)
+        }
+    }
+    
+    private func failedOverlay(message: String) -> some View {
         VStack(spacing: 20) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 60))
                 .foregroundColor(.orange)
             
-            Text("Too Many Active Streams")
+            Text("Connection Failed")
                 .font(.title2)
                 .fontWeight(.bold)
                 .foregroundColor(.white)
             
-            Text("Close some cameras first (max 4 active)")
+            Text(message)
                 .font(.subheadline)
                 .foregroundColor(.white.opacity(0.8))
                 .multilineTextAlignment(.center)
-                .padding(.horizontal)
+                .padding(.horizontal, 40)
             
-            Button(action: {
-                presentationMode.wrappedValue.dismiss()
-            }) {
-                Text("Close")
-                    .font(.headline)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 32)
-                    .padding(.vertical, 12)
-                    .background(Color.blue)
-                    .cornerRadius(10)
+            HStack(spacing: 16) {
+                if streamType == .hls && camera.webrtcStreamURL != nil {
+                    Button(action: { switchToWebRTC() }) {
+                        HStack {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                            Text("Try WebRTC")
+                        }
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 12)
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                    }
+                } else if streamType == .webrtc && camera.streamURL != nil {
+                    Button(action: { switchToHLS() }) {
+                        HStack {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                            Text("Try HLS")
+                        }
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 12)
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                    }
+                }
+                
+                Button(action: { presentationMode.wrappedValue.dismiss() }) {
+                    Text("Close")
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 12)
+                        .background(Color.gray)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                }
             }
-            .padding(.top)
+        }
+    }
+    
+    private var controlsOverlay: some View {
+        VStack {
+            // Top bar
+            HStack {
+                Button(action: { presentationMode.wrappedValue.dismiss() }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 32))
+                        .foregroundColor(.white)
+                        .shadow(radius: 3)
+                }
+                
+                Spacer()
+                
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text(camera.displayName)
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .shadow(radius: 2)
+                    
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 8, height: 8)
+                        Text(camera.area)
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.9))
+                    }
+                }
+                
+                Spacer()
+                
+                // Stream type toggle
+                if camera.webrtcStreamURL != nil && camera.streamURL != nil {
+                    Menu {
+                        Button(action: { switchToHLS() }) {
+                            Label("HLS Stream", systemImage: "play.tv")
+                        }
+                        
+                        Button(action: { switchToWebRTC() }) {
+                            Label("WebRTC Stream", systemImage: "antenna.radiowaves.left.and.right")
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: streamType == .hls ? "play.tv" : "antenna.radiowaves.left.and.right")
+                            Text(streamType.rawValue)
+                        }
+                        .font(.caption)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.blue.opacity(0.8))
+                        .cornerRadius(16)
+                    }
+                }
+            }
+            .padding()
+            .background(
+                LinearGradient(
+                    colors: [Color.black.opacity(0.7), Color.clear],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            
+            Spacer()
         }
     }
     
@@ -827,7 +608,7 @@ struct FullscreenHLSPlayerView: View {
                 .font(.system(size: 60))
                 .foregroundColor(.red)
             
-            Text("Playback Error")
+            Text("Stream Unavailable")
                 .font(.title2)
                 .fontWeight(.bold)
                 .foregroundColor(.white)
@@ -836,19 +617,34 @@ struct FullscreenHLSPlayerView: View {
                 .font(.subheadline)
                 .foregroundColor(.white.opacity(0.8))
                 .multilineTextAlignment(.center)
-                .padding(.horizontal)
-            
-            if camera.webrtcStreamURL != nil && streamType == .hls {
-                Button(action: switchStreamType) {
-                    Text("Try WebRTC")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 32)
-                        .padding(.vertical, 12)
-                        .background(Color.blue)
-                        .cornerRadius(10)
-                }
+                .padding(.horizontal, 40)
+        }
+    }
+    
+    private func switchToHLS() {
+        playerState = .loading
+        withAnimation {
+            streamType = .hls
+        }
+    }
+    
+    private func switchToWebRTC() {
+        playerState = .loading
+        withAnimation {
+            streamType = .webrtc
+        }
+    }
+    
+    private func scheduleHideControls() {
+        hideControlsTask?.cancel()
+        
+        let task = DispatchWorkItem {
+            withAnimation {
+                showControls = false
             }
         }
+        
+        hideControlsTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: task)
     }
 }

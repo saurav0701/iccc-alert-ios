@@ -318,7 +318,6 @@ struct CameraStreamsView: View {
 struct AreaCamerasView: View {
     let area: String
     @StateObject private var cameraManager = CameraManager.shared
-    @StateObject private var playerManager = HLSPlayerManager.shared
     
     @State private var searchText = ""
     @State private var showOnlineOnly = true
@@ -346,10 +345,6 @@ struct AreaCamerasView: View {
             statsBar
             filterBar
             
-            if playerManager.activePlayerCount >= 4 {
-                playerLimitWarning
-            }
-            
             cameras.isEmpty ? AnyView(emptyView) : AnyView(cameraGridView)
         }
         .navigationTitle(area)
@@ -368,40 +363,14 @@ struct AreaCamerasView: View {
             }
         }
         .fullScreenCover(item: $selectedCamera) { camera in
-            FullscreenHLSPlayerView(camera: camera)
-        }
-        .onDisappear { 
-            playerManager.releaseAllPlayers()
+            UnifiedCameraPlayerView(camera: camera)
         }
         .onChange(of: scenePhase) { phase in
             if phase == .background || phase == .inactive {
-                playerManager.pauseAllPlayers()
+                // App going to background
+                print("📱 App entering background - cleaning up")
             }
         }
-    }
-    
-    private var playerLimitWarning: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundColor(.orange)
-            
-            Text("4 cameras playing. Close some before opening more.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-            
-            Spacer()
-            
-            Button("Close All") {
-                playerManager.releaseAllPlayers()
-            }
-            .font(.caption)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Color.orange.opacity(0.2))
-            .cornerRadius(6)
-        }
-        .padding()
-        .background(Color.orange.opacity(0.1))
     }
     
     private var statsBar: some View {
@@ -489,11 +458,10 @@ struct AreaCamerasView: View {
                     CameraGridCard(camera: camera, mode: gridMode)
                         .onTapGesture {
                             if camera.isOnline {
-                                if playerManager.activePlayerCount >= 4 {
-                                    UINotificationFeedbackGenerator().notificationOccurred(.warning)
-                                } else {
-                                    selectedCamera = camera
-                                }
+                                print("📹 Opening camera: \(camera.displayName)")
+                                print("   HLS: \(camera.streamURL ?? "nil")")
+                                print("   WebRTC: \(camera.webrtcStreamURL ?? "nil")")
+                                selectedCamera = camera
                             } else {
                                 UINotificationFeedbackGenerator().notificationOccurred(.warning)
                             }
@@ -705,6 +673,63 @@ struct CameraGridCard: View {
         case .list: return 6
         case .grid2x2: return 5
         case .grid3x3: return 4
+        }
+    }
+}
+
+// MARK: - Camera Thumbnail
+struct CameraThumbnailView: View {
+    let camera: Camera
+    let isGridView: Bool
+    
+    var body: some View {
+        ZStack {
+            if camera.isOnline {
+                playButtonView
+            } else {
+                offlineView
+            }
+        }
+    }
+    
+    private var playButtonView: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color.blue.opacity(0.3), Color.blue.opacity(0.1)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            
+            VStack(spacing: 8) {
+                Image(systemName: "play.circle.fill")
+                    .font(.system(size: isGridView ? 32 : 40))
+                    .foregroundColor(.blue)
+                
+                Text("Tap to view")
+                    .font(.caption)
+                    .foregroundColor(.blue)
+                    .fontWeight(.medium)
+            }
+        }
+    }
+    
+    private var offlineView: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color.gray.opacity(0.3), Color.gray.opacity(0.1)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            
+            VStack(spacing: 6) {
+                Image(systemName: "video.slash.fill")
+                    .font(.system(size: isGridView ? 24 : 28))
+                    .foregroundColor(.gray)
+                
+                Text("Offline")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
         }
     }
 }

@@ -109,7 +109,7 @@ struct Camera: Codable, Identifiable, Equatable {
         return Name.isEmpty ? "Camera \(id)" : Name
     }
     
-    // ✅ HLS Stream URL (for compatibility)
+    // ✅ HLS Stream URL (Port 8888)
     var streamURL: String? {
         return getStreamURL(for: groupId, cameraIp: ip, cameraId: id)
     }
@@ -132,30 +132,29 @@ struct Camera: Codable, Identifiable, Equatable {
         ]
         
         guard let serverURL = serverURLs[groupId] else {
-            print("❌ No server URL for groupId: \(groupId)")
+            print("❌ No HLS server URL for groupId: \(groupId)")
             return nil
         }
         
         // Use camera IP as stream path (MediaMTX format)
         if !cameraIp.isEmpty {
             let url = "\(serverURL)/\(cameraIp)/index.m3u8"
-            print("✅ Stream URL (IP-based): \(url)")
+            print("✅ HLS Stream URL: \(url)")
             return url
         }
         
         // Fallback to camera ID if IP is missing
         let fallbackUrl = "\(serverURL)/\(cameraId)/index.m3u8"
-        print("⚠️ Stream URL (ID-based fallback): \(fallbackUrl)")
+        print("⚠️ HLS Stream URL (ID-based fallback): \(fallbackUrl)")
         return fallbackUrl
     }
     
-    // ✅ WebRTC Stream URL (HTTP endpoint on port 8889)
+    // ✅ WebRTC Stream URL (Port 8889) - MediaMTX direct stream
     var webrtcStreamURL: String? {
         return getWebRTCStreamURL(for: groupId, cameraIp: ip, cameraId: id)
     }
     
     private func getWebRTCStreamURL(for groupId: Int, cameraIp: String, cameraId: String) -> String? {
-        // WebRTC endpoints on port 8889
         let serverURLs: [Int: String] = [
             5: "http://103.208.173.131:8889",
             6: "http://103.208.173.147:8889",
@@ -178,15 +177,16 @@ struct Camera: Codable, Identifiable, Equatable {
         }
         
         // Use camera IP as stream path
+        // MediaMTX serves WebRTC directly at http://server:8889/stream_path/
         if !cameraIp.isEmpty {
             let url = "\(serverURL)/\(cameraIp)/"
-            print("✅ WebRTC URL: \(url)")
+            print("✅ WebRTC Stream URL: \(url)")
             return url
         }
         
-        // Fallback to camera ID
+        // Fallback to camera ID if IP is missing
         let fallbackUrl = "\(serverURL)/\(cameraId)/"
-        print("⚠️ WebRTC URL (fallback): \(fallbackUrl)")
+        print("⚠️ WebRTC Stream URL (ID-based fallback): \(fallbackUrl)")
         return fallbackUrl
     }
     
