@@ -40,7 +40,6 @@ struct DebugView: View {
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @StateObject private var webSocketService = WebSocketService.shared
     @StateObject private var cameraManager = CameraManager.shared
-    // @StateObject private var playerManager = HLSPlayerManager.shared
     @StateObject private var logger = DebugLogger.shared
     
     @State private var refreshTrigger = UUID()
@@ -106,56 +105,6 @@ struct DebugView: View {
                 }
             }
             
-            // HLS Player Status
-            Section(header: Text("HLS Video Players")) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Active Players")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Text("\(playerManager.activePlayerCount) / 2")
-                            .font(.title2)
-                            .fontWeight(.bold)
-                            .foregroundColor(playerManager.activePlayerCount >= 2 ? .orange : .green)
-                    }
-                    
-                    Spacer()
-                    
-                    if playerManager.activePlayerCount > 0 {
-                        Button("Release All") {
-                            playerManager.releaseAllPlayers()
-                        }
-                        .font(.caption)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.red.opacity(0.2))
-                        .cornerRadius(6)
-                    }
-                }
-                .padding(.vertical, 4)
-                
-                if playerManager.activePlayerCount >= 2 {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Divider()
-                        HStack(alignment: .top, spacing: 8) {
-                            Text("⚠️")
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Player Limit Reached")
-                                    .font(.caption)
-                                    .fontWeight(.bold)
-                                    .foregroundColor(.orange)
-                                Text("Maximum 2 concurrent streams allowed. Release a player before opening another.")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .padding(8)
-                        .background(Color.orange.opacity(0.1))
-                        .cornerRadius(8)
-                    }
-                }
-            }
-            
             // Camera Statistics
             Section(header: Text("Camera Status")) {
                 HStack {
@@ -214,7 +163,7 @@ struct DebugView: View {
                             .foregroundColor(.green)
                     }
                     
-                    Text("App will automatically release video players on memory warnings")
+                    Text("App will automatically manage video player resources")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
@@ -252,13 +201,13 @@ struct DebugView: View {
                         Text("Protocol")
                             .font(.caption)
                         Spacer()
-                        Text("HLS (HTTP Live Streaming)")
+                        Text("HLS & WebRTC")
                             .font(.caption)
                             .fontWeight(.bold)
                             .foregroundColor(.blue)
                     }
                     
-                    Text("Using native iOS AVPlayer with HLS for maximum stability and battery efficiency")
+                    Text("Using AVPlayer for HLS and WKWebView for WebRTC streaming")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
