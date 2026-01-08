@@ -36,8 +36,7 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
         
         // ✅ Simplified asset configuration for MediaMTX
         let asset = AVURLAsset(url: streamURL, options: [
-            AVURLAssetPreferPreciseDurationAndTimingKey: false,
-            AVURLAssetReferenceRestrictionsKey: AVAssetReferenceRestrictions.forbidNone.rawValue
+            AVURLAssetPreferPreciseDurationAndTimingKey: false
         ])
         
         let playerItem = AVPlayerItem(asset: asset)
@@ -92,7 +91,6 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
         private var timeControlObserver: NSKeyValueObservation?
         private var bufferEmptyObserver: NSKeyValueObservation?
         private var likelyToKeepUpObserver: NSKeyValueObservation?
-        private var errorLogObserver: NSKeyValueObservation?
         private weak var player: AVPlayer?
         private var retryCount = 0
         private let maxRetries = 3
@@ -171,36 +169,13 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
                 }
             }
             
-            // ✅ ERROR LOG OBSERVER
-            errorLogObserver = player.observe(\.currentItem?.errorLog, options: [.new]) { [weak self] player, _ in
-                guard let errorLog = player.currentItem?.errorLog() else { return }
-                
-                for event in errorLog.events {
-                    DebugLogger.shared.log("❌ HLS Error Event:", emoji: "❌", color: .red)
-                    DebugLogger.shared.log("   URI: \(event.uri ?? "nil")", emoji: "🔗", color: .orange)
-                    DebugLogger.shared.log("   Server: \(event.serverAddress ?? "nil")", emoji: "🖥️", color: .orange)
-                    DebugLogger.shared.log("   Domain: \(event.errorDomain)", emoji: "🔍", color: .orange)
-                    DebugLogger.shared.log("   Code: \(event.errorStatusCode)", emoji: "🔢", color: .orange)
-                    
-                    if let comment = event.errorComment {
-                        DebugLogger.shared.log("   Comment: \(comment)", emoji: "💬", color: .orange)
-                    }
-                    
-                    // Common HTTP errors
-                    switch event.errorStatusCode {
-                    case 404:
-                        DebugLogger.shared.log("   ⚠️ STREAM NOT FOUND (404)", emoji: "🔍", color: .red)
-                    case 403:
-                        DebugLogger.shared.log("   ⚠️ ACCESS FORBIDDEN (403)", emoji: "🚫", color: .red)
-                    case 500:
-                        DebugLogger.shared.log("   ⚠️ SERVER ERROR (500)", emoji: "🖥️", color: .red)
-                    case 503:
-                        DebugLogger.shared.log("   ⚠️ SERVICE UNAVAILABLE (503)", emoji: "🖥️", color: .red)
-                    default:
-                        break
-                    }
-                }
-            }
+            // ✅ ERROR LOG OBSERVER - Monitor for HLS errors
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(playerItemNewErrorLogEntry),
+                name: .AVPlayerItemNewErrorLogEntry,
+                object: player.currentItem
+            )
             
             // Time control observer
             timeControlObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
@@ -263,6 +238,37 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
             )
         }
         
+        @objc private func playerItemNewErrorLogEntry(notification: Notification) {
+            guard let item = notification.object as? AVPlayerItem,
+                  let errorLog = item.errorLog() else { return }
+            
+            for event in errorLog.events {
+                DebugLogger.shared.log("❌ HLS Error Event:", emoji: "❌", color: .red)
+                DebugLogger.shared.log("   URI: \(event.uri ?? "nil")", emoji: "🔗", color: .orange)
+                DebugLogger.shared.log("   Server: \(event.serverAddress ?? "nil")", emoji: "🖥️", color: .orange)
+                DebugLogger.shared.log("   Domain: \(event.errorDomain)", emoji: "🔍", color: .orange)
+                DebugLogger.shared.log("   Code: \(event.errorStatusCode)", emoji: "🔢", color: .orange)
+                
+                if let comment = event.errorComment {
+                    DebugLogger.shared.log("   Comment: \(comment)", emoji: "💬", color: .orange)
+                }
+                
+                // Common HTTP errors
+                switch event.errorStatusCode {
+                case 404:
+                    DebugLogger.shared.log("   ⚠️ STREAM NOT FOUND (404)", emoji: "🔍", color: .red)
+                case 403:
+                    DebugLogger.shared.log("   ⚠️ ACCESS FORBIDDEN (403)", emoji: "🚫", color: .red)
+                case 500:
+                    DebugLogger.shared.log("   ⚠️ SERVER ERROR (500)", emoji: "🖥️", color: .red)
+                case 503:
+                    DebugLogger.shared.log("   ⚠️ SERVICE UNAVAILABLE (503)", emoji: "🖥️", color: .red)
+                default:
+                    break
+                }
+            }
+        }
+        
         @objc private func newAccessLogEntry(notification: Notification) {
             guard let item = notification.object as? AVPlayerItem,
                   let accessLog = item.accessLog() else { return }
@@ -271,7 +277,7 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
                 DebugLogger.shared.log("📊 HLS Stats: \(cameraId)", emoji: "📊", color: .blue)
                 DebugLogger.shared.log("   Bitrate: \(lastEvent.indicatedBitrate)", emoji: "📶", color: .blue)
                 DebugLogger.shared.log("   Stalls: \(lastEvent.numberOfStalls)", emoji: "⏸️", color: .blue)
-                DebugLogger.shared.log("   Segments: \(lastEvent.numberOfSegmentsDownloaded)", emoji: "📦", color: .blue)
+                DebugLogger.shared.log("   Media Requests: \(lastEvent.numberOfMediaRequests)", emoji: "📦", color: .blue)
             }
         }
         
@@ -330,8 +336,7 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
                 DebugLogger.shared.log("🔄 Recreating player item...", emoji: "🔄", color: .yellow)
                 
                 let newAsset = AVURLAsset(url: self.streamURL, options: [
-                    AVURLAssetPreferPreciseDurationAndTimingKey: false,
-                    AVURLAssetReferenceRestrictionsKey: AVAssetReferenceRestrictions.forbidNone.rawValue
+                    AVURLAssetPreferPreciseDurationAndTimingKey: false
                 ])
                 
                 let newItem = AVPlayerItem(asset: newAsset)
@@ -357,7 +362,6 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
             timeControlObserver?.invalidate()
             bufferEmptyObserver?.invalidate()
             likelyToKeepUpObserver?.invalidate()
-            errorLogObserver?.invalidate()
             NotificationCenter.default.removeObserver(self)
         }
         
