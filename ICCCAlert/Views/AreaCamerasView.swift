@@ -1,4 +1,5 @@
 import SwiftUI
+import MapKit  // ← ADD THIS LINE
 
 // MARK: - Area Cameras Detail View
 struct AreaCamerasView: View {
