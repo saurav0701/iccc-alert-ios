@@ -725,9 +725,9 @@ struct CameraThumbnailView: View {
                         .font(.system(size: 10))
                     Text("WebRTC")
                         .font(.caption2)
+                        .fontWeight(.medium)  // ✅ FIXED: Use .fontWeight(_:) on Text instead of view modifier
                 }
                 .foregroundColor(.green)
-                .fontWeight(.medium)
             }
         }
     }
