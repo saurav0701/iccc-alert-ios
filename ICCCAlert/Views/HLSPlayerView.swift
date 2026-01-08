@@ -18,7 +18,6 @@ enum PlayerState {
     case retrying(Int)
 }
 
-// MARK: - FIXED HLS Player View with Debug Logging
 struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
     let streamURL: URL
     let cameraId: String
@@ -34,27 +33,43 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
         DebugLogger.shared.log("🎬 Creating HLS player for: \(cameraId)", emoji: "🎬", color: .blue)
         DebugLogger.shared.log("   URL: \(streamURL.absoluteString)", emoji: "🔗", color: .blue)
         
-        // ✅ Simplified asset configuration for MediaMTX
+        // ✅ FIX 1: Proper asset configuration for Low-Latency HLS
         let asset = AVURLAsset(url: streamURL, options: [
-            AVURLAssetPreferPreciseDurationAndTimingKey: false
+            // Critical for live streams
+            AVURLAssetPreferPreciseDurationAndTimingKey: false,
+            // Allow HTTP (already in Info.plist but reinforcing)
+            "AVURLAssetHTTPHeaderFieldsKey": [:] as [String: String]
         ])
         
         let playerItem = AVPlayerItem(asset: asset)
-        playerItem.preferredForwardBufferDuration = 3.0
-        playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
         
+        // ✅ FIX 2: Configure for Low-Latency HLS (MediaMTX default)
         if #available(iOS 14.0, *) {
-            playerItem.preferredMaximumResolution = CGSize(width: 2592, height: 1944)
+            // Allow low-latency mode
+            playerItem.preferredMaximumResolution = .zero  // Auto-select best quality
             playerItem.startsOnFirstEligibleVariant = true
+            
+            // ✅ CRITICAL: Configure for live edge seeking
+            playerItem.automaticallyPreservesTimeOffsetFromLive = true
+            playerItem.configuredTimeOffsetFromLive = .zero  // Stay at live edge
         }
         
+        // ✅ FIX 3: Relaxed buffering for live streams
+        playerItem.preferredForwardBufferDuration = 2.0  // Reduced from 3.0
+        playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+        
+        // ✅ FIX 4: Create player with proper configuration
         let player = AVPlayer(playerItem: playerItem)
         player.allowsExternalPlayback = false
-        player.automaticallyWaitsToMinimizeStalling = false
+        player.automaticallyWaitsToMinimizeStalling = true  // Changed to true
         
+        // ✅ FIX 5: Configure for live playback
         if #available(iOS 15.0, *) {
             player.audiovisualBackgroundPlaybackPolicy = .pauses
         }
+        
+        // ✅ FIX 6: Set initial playback rate (important for live streams)
+        player.rate = 1.0
         
         controller.player = player
         context.coordinator.setupObservers(player: player, controller: controller)
@@ -93,8 +108,9 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
         private var likelyToKeepUpObserver: NSKeyValueObservation?
         private weak var player: AVPlayer?
         private var retryCount = 0
-        private let maxRetries = 3
+        private let maxRetries = 5  // Increased from 3
         private var retryTimer: Timer?
+        private var stallRecoveryTimer: Timer?
         
         init(cameraId: String, playerState: Binding<PlayerState>, streamURL: URL) {
             self.cameraId = cameraId
@@ -105,7 +121,7 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
         func setupObservers(player: AVPlayer, controller: AVPlayerViewController) {
             self.player = player
             
-            // ✅ DETAILED STATUS OBSERVER
+            // Status observer with detailed error handling
             statusObserver = player.observe(\.currentItem?.status, options: [.new, .old]) { [weak self] player, change in
                 guard let self = self, let item = player.currentItem else { return }
                 
@@ -113,11 +129,9 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
                 case .readyToPlay:
                     DebugLogger.shared.log("✅ PLAYER READY: \(self.cameraId)", emoji: "✅", color: .green)
                     
-                    if let asset = item.asset as? AVURLAsset {
-                        DebugLogger.shared.log("   Asset playable: \(asset.isPlayable)", emoji: "📊", color: .blue)
-                        DebugLogger.shared.log("   Asset readable: \(asset.isReadable)", emoji: "📊", color: .blue)
-                        DebugLogger.shared.log("   Duration: \(item.duration.seconds)s", emoji: "⏱️", color: .blue)
-                        DebugLogger.shared.log("   Tracks: \(item.tracks.count)", emoji: "🎞️", color: .blue)
+                    // ✅ FIX: Check if it's a live stream
+                    if item.duration.isIndefinite {
+                        DebugLogger.shared.log("📡 LIVE STREAM detected", emoji: "📡", color: .blue)
                     }
                     
                     self.retryCount = 0
@@ -126,39 +140,7 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
                     }
                     
                 case .failed:
-                    if let error = item.error as NSError? {
-                        DebugLogger.shared.log("❌ PLAYER FAILED: \(self.cameraId)", emoji: "❌", color: .red)
-                        DebugLogger.shared.log("   Error: \(error.localizedDescription)", emoji: "❌", color: .red)
-                        DebugLogger.shared.log("   Domain: \(error.domain)", emoji: "🔍", color: .orange)
-                        DebugLogger.shared.log("   Code: \(error.code)", emoji: "🔢", color: .orange)
-                        
-                        if let underlyingError = error.userInfo[NSUnderlyingErrorKey] as? NSError {
-                            DebugLogger.shared.log("   Underlying: \(underlyingError.localizedDescription)", emoji: "⚠️", color: .orange)
-                            DebugLogger.shared.log("   Under-Code: \(underlyingError.code)", emoji: "🔢", color: .orange)
-                        }
-                        
-                        // Decode common errors
-                        switch error.code {
-                        case -1022:
-                            DebugLogger.shared.log("   ⚠️ HTTP BLOCKED - Check Info.plist", emoji: "🚫", color: .red)
-                        case -1003:
-                            DebugLogger.shared.log("   ⚠️ SERVER NOT FOUND - Check URL", emoji: "🔍", color: .red)
-                        case -1009:
-                            DebugLogger.shared.log("   ⚠️ NO INTERNET CONNECTION", emoji: "📡", color: .red)
-                        case -11800:
-                            DebugLogger.shared.log("   ⚠️ AVPLAYER ERROR - Invalid format", emoji: "🎬", color: .red)
-                        case -12660:
-                            DebugLogger.shared.log("   ⚠️ STREAM NOT AVAILABLE", emoji: "📺", color: .red)
-                        default:
-                            DebugLogger.shared.log("   ⚠️ Unknown error code: \(error.code)", emoji: "❓", color: .red)
-                        }
-                        
-                        DispatchQueue.main.async {
-                            self.playerState = .failed(error.localizedDescription)
-                        }
-                        
-                        self.attemptRetry()
-                    }
+                    self.handlePlayerError(item: item)
                     
                 case .unknown:
                     DebugLogger.shared.log("⚠️ Player status UNKNOWN: \(self.cameraId)", emoji: "❓", color: .yellow)
@@ -169,14 +151,6 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
                 }
             }
             
-            // ✅ ERROR LOG OBSERVER - Monitor for HLS errors
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(playerItemNewErrorLogEntry),
-                name: .AVPlayerItemNewErrorLogEntry,
-                object: player.currentItem
-            )
-            
             // Time control observer
             timeControlObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
                 guard let self = self else { return }
@@ -184,6 +158,10 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
                 switch player.timeControlStatus {
                 case .playing:
                     DebugLogger.shared.log("▶️ PLAYING: \(self.cameraId)", emoji: "▶️", color: .green)
+                    DispatchQueue.main.async {
+                        self.playerState = .playing
+                    }
+                    self.stallRecoveryTimer?.invalidate()
                     
                 case .paused:
                     DebugLogger.shared.log("⏸️ PAUSED: \(self.cameraId)", emoji: "⏸️", color: .gray)
@@ -197,6 +175,9 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
                         self.playerState = .loading
                     }
                     
+                    // ✅ FIX: Start stall recovery timer
+                    self.startStallRecoveryTimer()
+                    
                 @unknown default:
                     break
                 }
@@ -206,12 +187,14 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
             bufferEmptyObserver = player.observe(\.currentItem?.isPlaybackBufferEmpty, options: [.new]) { [weak self] player, _ in
                 if player.currentItem?.isPlaybackBufferEmpty == true {
                     DebugLogger.shared.log("⚠️ Buffer EMPTY: \(self?.cameraId ?? "")", emoji: "📦", color: .orange)
+                    self?.startStallRecoveryTimer()
                 }
             }
             
             likelyToKeepUpObserver = player.observe(\.currentItem?.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] player, _ in
                 if player.currentItem?.isPlaybackLikelyToKeepUp == true {
                     DebugLogger.shared.log("✅ Likely to keep up: \(self?.cameraId ?? "")", emoji: "✅", color: .green)
+                    self?.stallRecoveryTimer?.invalidate()
                 }
             }
             
@@ -232,10 +215,98 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
             
             NotificationCenter.default.addObserver(
                 self,
+                selector: #selector(playerItemNewErrorLogEntry),
+                name: .AVPlayerItemNewErrorLogEntry,
+                object: player.currentItem
+            )
+            
+            NotificationCenter.default.addObserver(
+                self,
                 selector: #selector(newAccessLogEntry),
                 name: .AVPlayerItemNewAccessLogEntry,
                 object: player.currentItem
             )
+        }
+        
+        private func handlePlayerError(item: AVPlayerItem) {
+            if let error = item.error as NSError? {
+                DebugLogger.shared.log("❌ PLAYER FAILED: \(self.cameraId)", emoji: "❌", color: .red)
+                DebugLogger.shared.log("   Error: \(error.localizedDescription)", emoji: "❌", color: .red)
+                DebugLogger.shared.log("   Domain: \(error.domain)", emoji: "🔍", color: .orange)
+                DebugLogger.shared.log("   Code: \(error.code)", emoji: "🔢", color: .orange)
+                
+                // ✅ FIX: Better error analysis
+                let errorMessage = self.analyzeError(error)
+                
+                DispatchQueue.main.async {
+                    self.playerState = .failed(errorMessage)
+                }
+                
+                self.attemptRetry()
+            }
+        }
+        
+        private func analyzeError(_ error: NSError) -> String {
+            switch error.code {
+            case -1022:
+                return "HTTP connection blocked. Check network settings."
+            case -1003:
+                return "Server not reachable. Check URL: \(streamURL.absoluteString)"
+            case -1009:
+                return "No internet connection"
+            case -11800:
+                return "Stream format not supported. MediaMTX may not be transcoding correctly."
+            case -11867:
+                return "Cannot decode stream. Possible codec issue with MediaMTX output."
+            case -12660:
+                return "Stream not available. Camera may be offline."
+            case -12880:
+                return "Media data corrupted. MediaMTX may be having issues."
+            default:
+                return error.localizedDescription
+            }
+        }
+        
+        // ✅ FIX: Stall recovery timer
+        private func startStallRecoveryTimer() {
+            stallRecoveryTimer?.invalidate()
+            
+            stallRecoveryTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: false) { [weak self] _ in
+                guard let self = self else { return }
+                DebugLogger.shared.log("⚠️ Stall timeout - attempting recovery", emoji: "⚠️", color: .orange)
+                self.recoverFromStall()
+            }
+        }
+        
+        // ✅ FIX: Smart stall recovery
+        private func recoverFromStall() {
+            guard let player = player, let item = player.currentItem else { return }
+            
+            if item.duration.isIndefinite {
+                // Live stream - seek to live edge
+                DebugLogger.shared.log("📡 Seeking to live edge...", emoji: "📡", color: .yellow)
+                
+                let seekableRanges = item.seekableTimeRanges
+                if let lastRange = seekableRanges.last?.timeRangeValue {
+                    let livePosition = CMTimeAdd(lastRange.start, lastRange.duration)
+                    
+                    player.seek(to: livePosition, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                        if finished {
+                            DebugLogger.shared.log("✅ Seeked to live edge", emoji: "✅", color: .green)
+                            player.play()
+                        } else {
+                            DebugLogger.shared.log("❌ Seek failed", emoji: "❌", color: .red)
+                            self?.attemptRetry()
+                        }
+                    }
+                } else {
+                    DebugLogger.shared.log("⚠️ No seekable ranges", emoji: "⚠️", color: .orange)
+                    attemptRetry()
+                }
+            } else {
+                // VOD stream - just retry
+                attemptRetry()
+            }
         }
         
         @objc private func playerItemNewErrorLogEntry(notification: Notification) {
@@ -246,25 +317,10 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
                 DebugLogger.shared.log("❌ HLS Error Event:", emoji: "❌", color: .red)
                 DebugLogger.shared.log("   URI: \(event.uri ?? "nil")", emoji: "🔗", color: .orange)
                 DebugLogger.shared.log("   Server: \(event.serverAddress ?? "nil")", emoji: "🖥️", color: .orange)
-                DebugLogger.shared.log("   Domain: \(event.errorDomain)", emoji: "🔍", color: .orange)
                 DebugLogger.shared.log("   Code: \(event.errorStatusCode)", emoji: "🔢", color: .orange)
                 
                 if let comment = event.errorComment {
                     DebugLogger.shared.log("   Comment: \(comment)", emoji: "💬", color: .orange)
-                }
-                
-                // Common HTTP errors
-                switch event.errorStatusCode {
-                case 404:
-                    DebugLogger.shared.log("   ⚠️ STREAM NOT FOUND (404)", emoji: "🔍", color: .red)
-                case 403:
-                    DebugLogger.shared.log("   ⚠️ ACCESS FORBIDDEN (403)", emoji: "🚫", color: .red)
-                case 500:
-                    DebugLogger.shared.log("   ⚠️ SERVER ERROR (500)", emoji: "🖥️", color: .red)
-                case 503:
-                    DebugLogger.shared.log("   ⚠️ SERVICE UNAVAILABLE (503)", emoji: "🖥️", color: .red)
-                default:
-                    break
                 }
             }
         }
@@ -277,7 +333,6 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
                 DebugLogger.shared.log("📊 HLS Stats: \(cameraId)", emoji: "📊", color: .blue)
                 DebugLogger.shared.log("   Bitrate: \(lastEvent.indicatedBitrate)", emoji: "📶", color: .blue)
                 DebugLogger.shared.log("   Stalls: \(lastEvent.numberOfStalls)", emoji: "⏸️", color: .blue)
-                DebugLogger.shared.log("   Media Requests: \(lastEvent.numberOfMediaRequests)", emoji: "📦", color: .blue)
             }
         }
         
@@ -290,27 +345,7 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
         
         @objc private func playerItemPlaybackStalled() {
             DebugLogger.shared.log("⚠️ Playback STALLED: \(cameraId)", emoji: "⚠️", color: .orange)
-            
-            guard let player = player, let item = player.currentItem else { return }
-            
-            let seekableRanges = item.seekableTimeRanges
-            if let lastRange = seekableRanges.last?.timeRangeValue {
-                let livePosition = CMTimeAdd(lastRange.start, lastRange.duration)
-                DebugLogger.shared.log("🔄 Seeking to live edge...", emoji: "🔄", color: .yellow)
-                
-                player.seek(to: livePosition, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
-                    if finished {
-                        DebugLogger.shared.log("✅ Seeked successfully", emoji: "✅", color: .green)
-                        player.play()
-                    } else {
-                        DebugLogger.shared.log("❌ Seek failed", emoji: "❌", color: .red)
-                        self.attemptRetry()
-                    }
-                }
-            } else {
-                DebugLogger.shared.log("⚠️ No seekable ranges, retrying...", emoji: "⚠️", color: .orange)
-                attemptRetry()
-            }
+            recoverFromStall()
         }
         
         private func attemptRetry() {
@@ -330,7 +365,7 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
             }
             
             retryTimer?.invalidate()
-            retryTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
+            retryTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
                 guard let self = self, let player = self.player else { return }
                 
                 DebugLogger.shared.log("🔄 Recreating player item...", emoji: "🔄", color: .yellow)
@@ -340,13 +375,16 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
                 ])
                 
                 let newItem = AVPlayerItem(asset: newAsset)
-                newItem.preferredForwardBufferDuration = 3.0
-                newItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
                 
                 if #available(iOS 14.0, *) {
-                    newItem.preferredMaximumResolution = CGSize(width: 2592, height: 1944)
+                    newItem.preferredMaximumResolution = .zero
                     newItem.startsOnFirstEligibleVariant = true
+                    newItem.automaticallyPreservesTimeOffsetFromLive = true
+                    newItem.configuredTimeOffsetFromLive = .zero
                 }
+                
+                newItem.preferredForwardBufferDuration = 2.0
+                newItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
                 
                 player.replaceCurrentItem(with: newItem)
                 
@@ -358,6 +396,7 @@ struct OptimizedHLSPlayerView: UIViewControllerRepresentable {
         
         func cleanup() {
             retryTimer?.invalidate()
+            stallRecoveryTimer?.invalidate()
             statusObserver?.invalidate()
             timeControlObserver?.invalidate()
             bufferEmptyObserver?.invalidate()
