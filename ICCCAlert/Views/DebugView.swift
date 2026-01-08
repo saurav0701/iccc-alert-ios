@@ -40,7 +40,7 @@ struct DebugView: View {
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @StateObject private var webSocketService = WebSocketService.shared
     @StateObject private var cameraManager = CameraManager.shared
-    @StateObject private var playerManager = HLSPlayerManager.shared
+    // @StateObject private var playerManager = HLSPlayerManager.shared
     @StateObject private var logger = DebugLogger.shared
     
     @State private var refreshTrigger = UUID()
