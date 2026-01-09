@@ -71,9 +71,9 @@ struct CameraStreamsView: View {
                     .ignoresSafeArea()
                 
                 VStack(spacing: 0) {
-                    // Loading progress bar
-                    if cameraManager.isLoading && cameraManager.loadingProgress > 0 {
-                        loadingProgressView
+                    // Loading indicator
+                    if cameraManager.isLoading {
+                        loadingIndicatorView
                             .transition(.move(edge: .top).combined(with: .opacity))
                     }
                     
@@ -126,7 +126,7 @@ struct CameraStreamsView: View {
                                 .font(.system(size: 18, weight: .medium))
                                 .foregroundColor(.blue)
                                 .rotationEffect(.degrees(isRefreshing ? 360 : 0))
-                                .animation(isRefreshing ? Animation.linear(duration: 1).repeatForever(autoreverses: false) : .default)
+                                .animation(isRefreshing ? Animation.linear(duration: 1).repeatForever(autoreverses: false) : .default, value: isRefreshing)
                         }
                         .disabled(isRefreshing || cameraManager.isLoading)
                         
@@ -273,18 +273,19 @@ struct CameraStreamsView: View {
         .padding(.horizontal)
     }
     
-    // MARK: - Loading Progress
-    private var loadingProgressView: some View {
+    // MARK: - Loading Indicator (FIXED - No Progress Bar)
+    private var loadingIndicatorView: some View {
         VStack(spacing: 12) {
-            ProgressView(value: cameraManager.loadingProgress)
-                .accentColor(.blue)
-                .padding(.horizontal)
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: .blue))
+                .scaleEffect(1.2)
             
-            Text("Loading cameras: \(Int(cameraManager.loadingProgress * 100))%")
+            Text("Loading cameras...")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundColor(.secondary)
         }
         .padding(.vertical, 16)
+        .frame(maxWidth: .infinity)
         .background(
             Color(.systemBackground)
                 .shadow(color: .black.opacity(0.04), radius: 8, x: 0, y: 2)

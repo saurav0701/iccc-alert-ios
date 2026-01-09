@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - Camera API Service (Simplified)
+// MARK: - Camera API Service (Simplified for Backend Cache)
 class CameraAPIService {
     static let shared = CameraAPIService()
     
