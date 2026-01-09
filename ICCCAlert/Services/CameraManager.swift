@@ -16,10 +16,11 @@ class CameraManager: ObservableObject {
     private let hasInitialDataKey = "has_initial_camera_data"
     private let saveQueue = DispatchQueue(label: "com.iccc.camerasSaveQueue", qos: .background)
     
-    // ✅ NEW: Parallel fetching configuration
-    private let parallelFetchCount = 4 // Fetch 4 areas at once
+    // ✅ NEW: Enhanced parallel fetching configuration
+    private let parallelFetchCount = 6 // Increased from 4 to 6 for faster loading
     private var isFetching = false
     private var cancellables = Set<AnyCancellable>()
+    private var backgroundFetchTimer: Timer?
     
     private var hasInitialData: Bool {
         get { userDefaults.bool(forKey: hasInitialDataKey) }
@@ -46,22 +47,39 @@ class CameraManager: ObservableObject {
         
         if !hasInitialData || cameras.isEmpty {
             fetchAllCamerasParallel()
+        } else {
+            // ✅ NEW: Even if we have cached data, fetch in background
+            startBackgroundFetch()
         }
     }
     
-    // MARK: - ✅ NEW: Parallel Camera Fetch by Area
+    // MARK: - ✅ NEW: Background Fetch Strategy
     
-    func fetchAllCamerasParallel() {
+    private func startBackgroundFetch() {
+        // Wait 5 seconds after initialization, then fetch all cameras
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            guard let self = self else { return }
+            print("🔄 Starting background camera fetch...")
+            self.fetchAllCamerasParallel(silent: true)
+        }
+    }
+    
+    // MARK: - ✅ ENHANCED: Parallel Camera Fetch by Area
+    
+    func fetchAllCamerasParallel(silent: Bool = false) {
         guard !isFetching else {
             print("⏳ Fetch already in progress")
             return
         }
         
         isFetching = true
-        isLoading = true
-        loadingProgress = 0.0
         
-        print("📡 Starting PARALLEL camera fetch (4 areas at a time)...")
+        if !silent {
+            isLoading = true
+            loadingProgress = 0.0
+        }
+        
+        print("📡 Starting PARALLEL camera fetch (\(parallelFetchCount) areas at a time)...")
         
         // Get all unique areas from backend
         fetchAvailableAreas { [weak self] areas in
@@ -69,57 +87,59 @@ class CameraManager: ObservableObject {
             
             if areas.isEmpty {
                 print("⚠️ No areas found, falling back to paginated fetch")
-                self.fetchAllCamerasPaginated()
+                self.fetchAllCamerasPaginated(silent: silent)
                 return
             }
             
             print("📋 Found \(areas.count) areas to fetch")
-            self.fetchAreasInParallel(areas: areas)
+            self.fetchAreasInParallel(areas: areas, silent: silent)
         }
     }
     
     private func fetchAvailableAreas(completion: @escaping ([String]) -> Void) {
-        // Get areas from cached cameras or fetch from API
-        let cachedAreas = Array(Set(cameras.map { $0.area }))
-        
-        if !cachedAreas.isEmpty {
-            completion(cachedAreas)
-            return
-        }
-        
-        // If no cached areas, fetch stats endpoint to get area list
+        // Fetch stats endpoint to get area list
         CameraAPIService.shared.fetchCameraStats { result in
             switch result {
             case .success(let stats):
                 let areas = Array(stats.keys).sorted()
+                print("✅ Found \(areas.count) areas from stats API")
                 completion(areas)
-            case .failure:
-                // Fallback to known areas
-                let knownAreas = [
-                    "BARORA", "BLOCK2", "GOVINDPUR", "KATRAS", 
-                    "SIJUA", "KUSUNDA", "PB Area", "BASTACOLLA", 
-                    "LODNA", "EJ Area", "CV Area", "CCWO Area", "WJ Area"
-                ]
-                completion(knownAreas)
+            case .failure(let error):
+                print("⚠️ Failed to fetch stats: \(error.localizedDescription)")
+                // Fallback to known areas from cache or hardcoded list
+                let cachedAreas = Array(Set(self.cameras.map { $0.area }))
+                if !cachedAreas.isEmpty {
+                    completion(cachedAreas)
+                } else {
+                    // Last resort: hardcoded area list
+                    let knownAreas = [
+                        "BARORA", "BLOCK2", "GOVINDPUR", "KATRAS", 
+                        "SIJUA", "KUSUNDA", "PB Area", "BASTACOLLA", 
+                        "LODNA", "EJ Area", "CV Area", "CCWO Area", "WJ Area"
+                    ]
+                    completion(knownAreas)
+                }
             }
         }
     }
     
-    private func fetchAreasInParallel(areas: [String]) {
+    private func fetchAreasInParallel(areas: [String], silent: Bool) {
         let totalAreas = areas.count
         var allCameras: [Camera] = []
         var completedAreas = 0
         let lock = NSLock()
         
-        // Process areas in batches of 4
+        // Process areas in batches
         let batches = stride(from: 0, to: areas.count, by: parallelFetchCount).map {
             Array(areas[$0..<min($0 + parallelFetchCount, areas.count)])
         }
         
+        print("📦 Total batches to fetch: \(batches.count)")
+        
         func fetchNextBatch(batchIndex: Int) {
             guard batchIndex < batches.count else {
                 // All batches complete
-                self.handleFetchComplete(allCameras)
+                self.handleFetchComplete(allCameras, silent: silent)
                 return
             }
             
@@ -140,12 +160,14 @@ class CameraManager: ObservableObject {
                         allCameras.append(contentsOf: cameras)
                         completedAreas += 1
                         
-                        DispatchQueue.main.async {
-                            self.loadingProgress = Double(completedAreas) / Double(totalAreas)
+                        if !silent {
+                            DispatchQueue.main.async {
+                                self.loadingProgress = Double(completedAreas) / Double(totalAreas)
+                            }
                         }
                         lock.unlock()
                         
-                        print("✅ Fetched \(area): \(cameras.count) cameras")
+                        print("✅ Fetched \(area): \(cameras.count) cameras (total: \(allCameras.count))")
                         
                     case .failure(let error):
                         lock.lock()
@@ -160,8 +182,8 @@ class CameraManager: ObservableObject {
             group.notify(queue: .main) {
                 print("📋 Batch \(batchIndex + 1) complete (\(completedAreas)/\(totalAreas) areas)")
                 
-                // Small delay before next batch to avoid overwhelming server
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                // Reduced delay between batches for faster loading
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     fetchNextBatch(batchIndex: batchIndex + 1)
                 }
             }
@@ -170,24 +192,187 @@ class CameraManager: ObservableObject {
         fetchNextBatch(batchIndex: 0)
     }
     
-    // MARK: - Fallback: Paginated Fetch
+    // MARK: - Fallback: Paginated Fetch (Full Implementation)
     
-    func fetchAllCamerasPaginated() {
+    func fetchAllCamerasPaginated(silent: Bool = false) {
         guard !isFetching else {
             print("⏳ Fetch already in progress")
             return
         }
         
         isFetching = true
-        isLoading = true
-        loadingProgress = 0.0
+        
+        if !silent {
+            isLoading = true
+            loadingProgress = 0.0
+        }
         
         var allCameras: [Camera] = []
         var currentPage = 1
         let pageSize = 100
         var hasMore = true
         
-        print("📡 Starting paginated camera fetch...")
+        print("📡 Starting PAGINATED camera fetch (will fetch ALL pages)...")
+        
+        func fetchNextPage() {
+            CameraAPIService.shared.fetchCameras(page: currentPage, pageSize: pageSize) { [weak self] result in
+                guard let self = self else { return }
+                
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let response):
+                        allCameras.append(contentsOf: response.cameras)
+                        
+                        if !silent {
+                            self.loadingProgress = Double(allCameras.count) / Double(response.total)
+                        }
+                        
+                        print("📦 Fetched page \(currentPage): \(response.cameras.count) cameras (total: \(allCameras.count)/\(response.total))")
+                        
+                        hasMore = response.hasMore
+                        currentPage += 1
+                        
+                        if hasMore {
+                            // Continue fetching next page with small delay
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                fetchNextPage()
+                            }
+                        } else {
+                            print("✅ Paginated fetch complete: \(allCameras.count) cameras")
+                            self.handleFetchComplete(allCameras, silent: silent)
+                        }
+                        
+                    case .failure(let error):
+                        print("❌ Fetch failed on page \(currentPage): \(error.localizedDescription)")
+                        
+                        if !allCameras.isEmpty {
+                            // Save what we have
+                            print("⚠️ Saving \(allCameras.count) cameras fetched before error")
+                            self.handleFetchComplete(allCameras, silent: silent)
+                        } else {
+                            self.isFetching = false
+                            if !silent {
+                                self.isLoading = false
+                                self.loadingProgress = 0.0
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        fetchNextPage()
+    }
+    
+    private func handleFetchComplete(_ cameras: [Camera], silent: Bool) {
+        print("✅ Fetch complete: \(cameras.count) cameras")
+        
+        if !hasInitialData || self.cameras.isEmpty {
+            performInitialLoad(cameras)
+        } else {
+            performStatusUpdate(cameras)
+        }
+        
+        isFetching = false
+        
+        if !silent {
+            isLoading = false
+            loadingProgress = 1.0
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                self.loadingProgress = 0.0
+            }
+        }
+    }
+    
+    // MARK: - ✅ ENHANCED: Manual Refresh (Fetches Everything)
+    
+    func manualRefresh(completion: @escaping (Bool) -> Void) {
+        guard !isFetching else {
+            completion(false)
+            return
+        }
+        
+        print("🔄 Manual refresh triggered - fetching ALL cameras")
+        
+        isFetching = true
+        isLoading = true
+        loadingProgress = 0.0
+        
+        // Try parallel fetch first
+        fetchAvailableAreas { [weak self] areas in
+            guard let self = self else { return }
+            
+            if areas.isEmpty {
+                // Fallback to paginated
+                self.fetchAllCamerasPaginatedForRefresh(completion: completion)
+            } else {
+                self.fetchAreasForRefresh(areas: areas, completion: completion)
+            }
+        }
+    }
+    
+    private func fetchAreasForRefresh(areas: [String], completion: @escaping (Bool) -> Void) {
+        var allCameras: [Camera] = []
+        var completedAreas = 0
+        let lock = NSLock()
+        
+        let batches = stride(from: 0, to: areas.count, by: parallelFetchCount).map {
+            Array(areas[$0..<min($0 + parallelFetchCount, areas.count)])
+        }
+        
+        func fetchNextBatch(batchIndex: Int) {
+            guard batchIndex < batches.count else {
+                // All batches complete
+                DispatchQueue.main.async {
+                    self.handleFetchComplete(allCameras, silent: false)
+                    completion(true)
+                }
+                return
+            }
+            
+            let batch = batches[batchIndex]
+            let group = DispatchGroup()
+            
+            for area in batch {
+                group.enter()
+                
+                CameraAPIService.shared.fetchCamerasByArea(area) { result in
+                    defer { group.leave() }
+                    
+                    switch result {
+                    case .success(let cameras):
+                        lock.lock()
+                        allCameras.append(contentsOf: cameras)
+                        completedAreas += 1
+                        
+                        DispatchQueue.main.async {
+                            self.loadingProgress = Double(completedAreas) / Double(areas.count)
+                        }
+                        lock.unlock()
+                        
+                    case .failure:
+                        lock.lock()
+                        completedAreas += 1
+                        lock.unlock()
+                    }
+                }
+            }
+            
+            group.notify(queue: .main) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    fetchNextBatch(batchIndex: batchIndex + 1)
+                }
+            }
+        }
+        
+        fetchNextBatch(batchIndex: 0)
+    }
+    
+    private func fetchAllCamerasPaginatedForRefresh(completion: @escaping (Bool) -> Void) {
+        var allCameras: [Camera] = []
+        var currentPage = 1
+        let pageSize = 100
         
         func fetchNextPage() {
             CameraAPIService.shared.fetchCameras(page: currentPage, pageSize: pageSize) { [weak self] result in
@@ -200,85 +385,30 @@ class CameraManager: ObservableObject {
                         
                         self.loadingProgress = Double(allCameras.count) / Double(response.total)
                         
-                        print("📦 Fetched page \(currentPage): \(response.cameras.count) cameras (total: \(allCameras.count)/\(response.total))")
-                        
-                        hasMore = response.hasMore
-                        currentPage += 1
-                        
-                        if hasMore {
+                        if response.hasMore {
+                            currentPage += 1
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                                 fetchNextPage()
                             }
                         } else {
-                            self.handleFetchComplete(allCameras)
+                            self.handleFetchComplete(allCameras, silent: false)
+                            completion(true)
                         }
                         
-                    case .failure(let error):
-                        print("❌ Fetch failed on page \(currentPage): \(error.localizedDescription)")
-                        
+                    case .failure:
                         if !allCameras.isEmpty {
-                            self.handleFetchComplete(allCameras)
+                            self.handleFetchComplete(allCameras, silent: false)
                         } else {
                             self.isFetching = false
                             self.isLoading = false
-                            self.loadingProgress = 0.0
                         }
+                        completion(false)
                     }
                 }
             }
         }
         
         fetchNextPage()
-    }
-    
-    private func handleFetchComplete(_ cameras: [Camera]) {
-        print("✅ Fetch complete: \(cameras.count) cameras")
-        
-        if !hasInitialData || self.cameras.isEmpty {
-            performInitialLoad(cameras)
-        } else {
-            performStatusUpdate(cameras)
-        }
-        
-        isFetching = false
-        isLoading = false
-        loadingProgress = 1.0
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            self.loadingProgress = 0.0
-        }
-    }
-    
-    // MARK: - Manual Refresh (Status Only)
-    
-    func manualRefresh(completion: @escaping (Bool) -> Void) {
-        guard !isFetching else {
-            completion(false)
-            return
-        }
-        
-        print("🔄 Manual refresh triggered")
-        
-        isFetching = true
-        
-        CameraAPIService.shared.fetchCameras(page: 1, pageSize: 200) { [weak self] result in
-            guard let self = self else { return }
-            
-            DispatchQueue.main.async {
-                self.isFetching = false
-                
-                switch result {
-                case .success(let response):
-                    print("✅ Manual refresh: \(response.cameras.count) cameras")
-                    self.performStatusUpdate(response.cameras)
-                    completion(true)
-                    
-                case .failure(let error):
-                    print("❌ Manual refresh failed: \(error.localizedDescription)")
-                    completion(false)
-                }
-            }
-        }
     }
     
     // MARK: - Update Cameras (Smart Update Strategy)
@@ -419,12 +549,17 @@ class CameraManager: ObservableObject {
         userDefaults.removeObject(forKey: lastUpdateKey)
         userDefaults.removeObject(forKey: hasInitialDataKey)
         lastUpdateTime = nil
+        backgroundFetchTimer?.invalidate()
         print("🗑️ Cache cleared")
     }
     
     func forceRefresh() {
         print("🔄 Force refreshing camera list")
         NotificationCenter.default.post(name: NSNotification.Name("CamerasUpdated"), object: nil)
+    }
+    
+    deinit {
+        backgroundFetchTimer?.invalidate()
     }
 }
 
