@@ -1,7 +1,7 @@
 import SwiftUI
 import MapKit
 
-// MARK: - Camera Map View (Google Hybrid Tiles)
+// MARK: - Enhanced Camera Map View with Modern Aesthetics
 
 struct CameraMapView: View {
     @StateObject private var cameraManager = CameraManager.shared
@@ -13,9 +13,9 @@ struct CameraMapView: View {
     @State private var selectedArea: String? = nil
     @State private var showFullScreenPlayer = false
     @State private var showFilterSheet = false
+    @State private var mapStyle: MapDisplayStyle = .hybrid
     
     init() {
-        // Jharkhand state center (default region)
         _region = State(initialValue: MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: 23.6102, longitude: 85.2799),
             span: MKCoordinateSpan(latitudeDelta: 2.0, longitudeDelta: 2.0)
@@ -25,17 +25,14 @@ struct CameraMapView: View {
     var filteredCameras: [Camera] {
         var cameras = cameraManager.cameras
         
-        // Filter by online status
         if showOnlineOnly {
             cameras = cameras.filter { $0.isOnline }
         }
         
-        // Filter by area if selected
         if let area = selectedArea {
             cameras = cameras.filter { $0.area == area }
         }
         
-        // Only show cameras with valid coordinates
         return cameras.filter { camera in
             guard let lat = Double(camera.latitude),
                   let lng = Double(camera.longitude) else {
@@ -51,76 +48,55 @@ struct CameraMapView: View {
     
     var body: some View {
         ZStack {
-            // Map View
-            CameraGoogleHybridMapView(
+            // ✅ Enhanced Map with Custom Styling
+            EnhancedCameraMapView(
                 region: $region,
                 cameras: filteredCameras,
-                selectedCamera: $selectedCamera
+                selectedCamera: $selectedCamera,
+                mapStyle: mapStyle
             )
             .edgesIgnoringSafeArea(.all)
             
-            // Top Controls
+            // ✅ Modern Gradient Overlay (Top)
             VStack {
-                HStack {
-                    // Back Button
-                    Button(action: { presentationMode.wrappedValue.dismiss() }) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundColor(.primary)
-                            .frame(width: 44, height: 44)
-                            .background(Color(.systemBackground))
-                            .clipShape(Circle())
-                            .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 2)
-                    }
-                    
-                    Spacer()
-                    
-                    // Stats Badge
-                    HStack(spacing: 8) {
-                        Image(systemName: "video.fill")
-                            .foregroundColor(.blue)
-                        Text("\(filteredCameras.count)")
-                            .fontWeight(.bold)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color(.systemBackground).opacity(0.95))
-                    .cornerRadius(20)
-                    .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 2)
-                    
-                    Spacer()
-                    
-                    // Filter Button
-                    Button(action: { showFilterSheet = true }) {
-                        Image(systemName: selectedArea != nil ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
-                            .font(.system(size: 22))
-                            .foregroundColor(.white)
-                            .frame(width: 44, height: 44)
-                            .background(selectedArea != nil ? Color.green : Color.blue)
-                            .clipShape(Circle())
-                            .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 2)
-                    }
-                }
-                .padding(.horizontal)
-                .padding(.top, 50)
+                LinearGradient(
+                    colors: [
+                        Color.black.opacity(0.4),
+                        Color.black.opacity(0.2),
+                        Color.clear
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 200)
+                .allowsHitTesting(false)
+                
+                Spacer()
+            }
+            
+            // ✅ Modern Control Panel
+            VStack(spacing: 0) {
+                topControlPanel
                 
                 Spacer()
                 
-                // Legend at Bottom
-                HStack {
-                    legendView
-                    Spacer()
+                // Bottom Controls
+                if selectedCamera == nil {
+                    bottomLegendPanel
                 }
-                .padding()
             }
             
-            // Camera Info Card (when camera selected)
+            // ✅ Enhanced Camera Info Card
             if let camera = selectedCamera {
                 VStack {
                     Spacer()
-                    CameraInfoCard(
+                    ModernCameraInfoCard(
                         camera: camera,
-                        onClose: { selectedCamera = nil },
+                        onClose: {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                selectedCamera = nil
+                            }
+                        },
                         onView: {
                             if camera.isOnline && camera.webrtcStreamURL != nil {
                                 showFullScreenPlayer = true
@@ -134,7 +110,7 @@ struct CameraMapView: View {
         }
         .navigationBarHidden(true)
         .sheet(isPresented: $showFilterSheet) {
-            filterSheet
+            modernFilterSheet
         }
         .fullScreenCover(isPresented: $showFullScreenPlayer) {
             if let camera = selectedCamera {
@@ -146,94 +122,242 @@ struct CameraMapView: View {
         }
     }
     
-    private var legendView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(Color.green)
-                    .frame(width: 12, height: 12)
-                Text("Online")
-                    .font(.caption)
-                    .fontWeight(.medium)
-            }
-            
-            if !showOnlineOnly {
+    // MARK: - Top Control Panel (Modern Design)
+    
+    private var topControlPanel: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 12) {
+                // ✅ Glassmorphic Back Button
+                Button(action: { presentationMode.wrappedValue.dismiss() }) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(width: 44, height: 44)
+                        .background(
+                            ZStack {
+                                Color.black.opacity(0.3)
+                                BlurView(style: .systemUltraThinMaterialDark)
+                            }
+                        )
+                        .clipShape(Circle())
+                        .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 4)
+                }
+                
+                Spacer()
+                
+                // ✅ Stats Badge (Modern)
                 HStack(spacing: 8) {
-                    Circle()
-                        .fill(Color.gray)
-                        .frame(width: 12, height: 12)
-                    Text("Offline")
-                        .font(.caption)
-                        .fontWeight(.medium)
+                    Image(systemName: "video.fill")
+                        .foregroundColor(.white)
+                        .font(.system(size: 14, weight: .semibold))
+                    
+                    Text("\(filteredCameras.count)")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(.white)
+                    
+                    if showOnlineOnly {
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 8, height: 8)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(
+                    ZStack {
+                        Color.black.opacity(0.4)
+                        BlurView(style: .systemUltraThinMaterialDark)
+                    }
+                )
+                .clipShape(Capsule())
+                .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 4)
+                
+                Spacer()
+                
+                // ✅ Filter Button
+                Button(action: { showFilterSheet = true }) {
+                    ZStack {
+                        Image(systemName: selectedArea != nil ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                            .font(.system(size: 22))
+                            .foregroundColor(.white)
+                        
+                        if selectedArea != nil {
+                            Circle()
+                                .fill(Color.green)
+                                .frame(width: 12, height: 12)
+                                .offset(x: 14, y: -14)
+                        }
+                    }
+                    .frame(width: 44, height: 44)
+                    .background(
+                        ZStack {
+                            Color.black.opacity(0.3)
+                            BlurView(style: .systemUltraThinMaterialDark)
+                        }
+                    )
+                    .clipShape(Circle())
+                    .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 4)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 50)
+            
+            // ✅ Map Style Selector
+            mapStylePicker
+        }
+    }
+    
+    // MARK: - Map Style Picker
+    
+    private var mapStylePicker: some View {
+        HStack(spacing: 8) {
+            ForEach(MapDisplayStyle.allCases, id: \.self) { style in
+                Button(action: {
+                    withAnimation(.spring(response: 0.3)) {
+                        mapStyle = style
+                    }
+                }) {
+                    Text(style.rawValue)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(mapStyle == style ? .white : .white.opacity(0.7))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(
+                            ZStack {
+                                if mapStyle == style {
+                                    Color.blue
+                                } else {
+                                    Color.white.opacity(0.2)
+                                }
+                            }
+                        )
+                        .clipShape(Capsule())
                 }
             }
         }
-        .padding(12)
-        .background(Color(.systemBackground).opacity(0.95))
-        .cornerRadius(10)
-        .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 2)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            ZStack {
+                Color.black.opacity(0.3)
+                BlurView(style: .systemUltraThinMaterialDark)
+            }
+        )
+        .clipShape(Capsule())
+        .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 2)
+        .padding(.horizontal, 20)
     }
     
-    private var filterSheet: some View {
-        NavigationView {
-            List {
-                Section(header: Text("Camera Status")) {
-                    Toggle(isOn: $showOnlineOnly) {
-                        HStack(spacing: 8) {
-                            Image(systemName: showOnlineOnly ? "checkmark.circle.fill" : "circle")
-                                .foregroundColor(showOnlineOnly ? .green : .gray)
-                            Text("Show Online Only")
-                        }
-                    }
-                    .toggleStyle(SwitchToggleStyle(tint: .green))
-                }
+    // MARK: - Bottom Legend Panel
+    
+    private var bottomLegendPanel: some View {
+        HStack(spacing: 20) {
+            // Legend
+            HStack(spacing: 16) {
+                LegendItem(color: .green, label: "Online", count: filteredCameras.filter { $0.isOnline }.count)
                 
-                Section(header: Text("Filter by Area")) {
-                    Button(action: {
-                        selectedArea = nil
-                        adjustMapToShowAllCameras()
-                        showFilterSheet = false
-                    }) {
-                        HStack {
-                            Text("All Areas")
-                            Spacer()
-                            if selectedArea == nil {
-                                Image(systemName: "checkmark")
-                                    .foregroundColor(.blue)
-                            }
-                        }
-                    }
-                    
-                    ForEach(availableAreas, id: \.self) { area in
-                        Button(action: {
-                            selectedArea = area
-                            adjustMapToArea(area)
-                            showFilterSheet = false
-                        }) {
-                            HStack {
-                                Text(area)
-                                Spacer()
-                                if selectedArea == area {
-                                    Image(systemName: "checkmark")
-                                        .foregroundColor(.blue)
-                                }
-                            }
-                        }
-                        .foregroundColor(.primary)
-                    }
+                if !showOnlineOnly {
+                    LegendItem(color: .gray, label: "Offline", count: filteredCameras.filter { !$0.isOnline }.count)
                 }
             }
-            .navigationTitle("Filter Cameras")
+            .padding(16)
+            .background(
+                ZStack {
+                    Color.black.opacity(0.4)
+                    BlurView(style: .systemUltraThinMaterialDark)
+                }
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 4)
+            
+            Spacer()
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 30)
+    }
+    
+    // MARK: - Modern Filter Sheet
+    
+    private var modernFilterSheet: some View {
+        NavigationView {
+            ZStack {
+                Color(.systemGroupedBackground)
+                    .edgesIgnoringSafeArea(.all)
+                
+                ScrollView {
+                    VStack(spacing: 24) {
+                        // Status Filter
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Camera Status")
+                                .font(.headline)
+                                .foregroundColor(.primary)
+                            
+                            Toggle(isOn: $showOnlineOnly) {
+                                HStack(spacing: 12) {
+                                    Circle()
+                                        .fill(showOnlineOnly ? Color.green : Color.gray)
+                                        .frame(width: 12, height: 12)
+                                    Text("Show Online Cameras Only")
+                                        .font(.subheadline)
+                                }
+                            }
+                            .toggleStyle(SwitchToggleStyle(tint: .green))
+                            .padding()
+                            .background(Color(.systemBackground))
+                            .cornerRadius(12)
+                        }
+                        .padding(.horizontal)
+                        
+                        // Area Filter
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Filter by Area")
+                                .font(.headline)
+                                .foregroundColor(.primary)
+                                .padding(.horizontal)
+                            
+                            VStack(spacing: 8) {
+                                AreaFilterButton(
+                                    title: "All Areas",
+                                    isSelected: selectedArea == nil,
+                                    count: cameraManager.cameras.count
+                                ) {
+                                    selectedArea = nil
+                                    adjustMapToShowAllCameras()
+                                    showFilterSheet = false
+                                }
+                                
+                                ForEach(availableAreas, id: \.self) { area in
+                                    AreaFilterButton(
+                                        title: area,
+                                        isSelected: selectedArea == area,
+                                        count: cameraManager.getCameras(forArea: area).count
+                                    ) {
+                                        selectedArea = area
+                                        adjustMapToArea(area)
+                                        showFilterSheet = false
+                                    }
+                                }
+                            }
+                            .padding(.horizontal)
+                        }
+                    }
+                    .padding(.vertical, 20)
+                }
+            }
+            .navigationTitle("Map Filters")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
                         showFilterSheet = false
                     }
+                    .fontWeight(.semibold)
                 }
             }
         }
     }
+    
+    // MARK: - Map Adjustment Functions
     
     private func adjustMapToShowAllCameras() {
         guard !filteredCameras.isEmpty else { return }
@@ -265,7 +389,7 @@ struct CameraMapView: View {
             longitudeDelta: max((maxLng - minLng) * 1.3, 0.1)
         )
         
-        withAnimation {
+        withAnimation(.easeInOut(duration: 0.5)) {
             region = MKCoordinateRegion(center: center, span: span)
         }
     }
@@ -302,260 +426,97 @@ struct CameraMapView: View {
             longitudeDelta: max((maxLng - minLng) * 1.5, 0.05)
         )
         
-        withAnimation {
+        withAnimation(.easeInOut(duration: 0.5)) {
             region = MKCoordinateRegion(center: center, span: span)
         }
     }
 }
 
-// MARK: - Camera Info Card
+// MARK: - Supporting Views
 
-struct CameraInfoCard: View {
-    let camera: Camera
-    let onClose: () -> Void
-    let onView: () -> Void
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // Header
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(camera.displayName)
-                        .font(.headline)
-                        .fontWeight(.bold)
-                    
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(camera.isOnline ? Color.green : Color.gray)
-                            .frame(width: 8, height: 8)
-                        Text(camera.isOnline ? "Online" : "Offline")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                
-                Spacer()
-                
-                Button(action: onClose) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 24))
-                        .foregroundColor(.gray)
-                }
-            }
-            
-            Divider()
-            
-            // Details
-            VStack(alignment: .leading, spacing: 12) {
-                InfoRowCompact(icon: "map.fill", label: "Area", value: camera.area)
-                InfoRowCompact(icon: "location.fill", label: "Location", value: camera.location.isEmpty ? "Unknown" : camera.location)
-                
-                if camera.isOnline && camera.webrtcStreamURL != nil {
-                    InfoRowCompact(icon: "antenna.radiowaves.left.and.right", label: "Stream", value: "WebRTC Available")
-                        .foregroundColor(.green)
-                }
-            }
-            
-            // Action Button
-            if camera.isOnline && camera.webrtcStreamURL != nil {
-                Button(action: onView) {
-                    HStack {
-                        Image(systemName: "play.circle.fill")
-                        Text("View Live Stream")
-                    }
-                    .font(.headline)
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(Color.blue)
-                    .cornerRadius(12)
-                }
-            } else {
-                HStack {
-                    Image(systemName: "video.slash.fill")
-                    Text(camera.isOnline ? "Stream Unavailable" : "Camera Offline")
-                }
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(Color(.systemGray6))
-                .cornerRadius(12)
-            }
-        }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(16)
-        .shadow(color: .black.opacity(0.2), radius: 10, x: 0, y: 5)
-    }
-}
-
-struct InfoRowCompact: View {
-    let icon: String
+struct LegendItem: View {
+    let color: Color
     let label: String
-    let value: String
+    let count: Int
     
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: icon)
-                .foregroundColor(.blue)
-                .frame(width: 20)
+            Circle()
+                .fill(color)
+                .frame(width: 12, height: 12)
+                .shadow(color: color.opacity(0.5), radius: 4, x: 0, y: 2)
             
-            Text("\(label):")
-                .font(.caption)
-                .foregroundColor(.secondary)
-            
-            Text(value)
-                .font(.subheadline)
-                .fontWeight(.medium)
-            
-            Spacer()
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(.white)
+                
+                Text("\(count)")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.7))
+            }
         }
     }
 }
 
-// MARK: - Camera Google Hybrid Map View
-
-struct CameraGoogleHybridMapView: UIViewRepresentable {
-    @Binding var region: MKCoordinateRegion
-    let cameras: [Camera]
-    @Binding var selectedCamera: Camera?
+struct AreaFilterButton: View {
+    let title: String
+    let isSelected: Bool
+    let count: Int
+    let action: () -> Void
     
-    func makeUIView(context: Context) -> MKMapView {
-        let mapView = MKMapView()
-        mapView.delegate = context.coordinator
-        
-        // Use Google Hybrid tile overlay (same as GPS events)
-        let overlay = GoogleHybridTileOverlay()
-        overlay.canReplaceMapContent = true
-        mapView.addOverlay(overlay, level: .aboveLabels)
-        
-        return mapView
-    }
-    
-    func updateUIView(_ mapView: MKMapView, context: Context) {
-        // Update region
-        mapView.setRegion(region, animated: true)
-        
-        // Remove old annotations
-        mapView.removeAnnotations(mapView.annotations)
-        
-        // Add camera annotations
-        for camera in cameras {
-            guard let lat = Double(camera.latitude),
-                  let lng = Double(camera.longitude),
-                  lat != 0, lng != 0 else {
-                continue
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Text(title)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundColor(.primary)
+                
+                Spacer()
+                
+                Text("\(count)")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color(.systemGray6))
+                    .clipShape(Capsule())
+                
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.blue)
+                }
             }
-            
-            let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lng)
-            let annotation = CameraMapAnnotation(
-                coordinate: coordinate,
-                camera: camera
+            .padding()
+            .background(isSelected ? Color.blue.opacity(0.1) : Color(.systemBackground))
+            .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 2)
             )
-            mapView.addAnnotation(annotation)
-        }
-    }
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
-    
-    class Coordinator: NSObject, MKMapViewDelegate {
-        var parent: CameraGoogleHybridMapView
-        
-        init(_ parent: CameraGoogleHybridMapView) {
-            self.parent = parent
-        }
-        
-        func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
-            guard let cameraAnnotation = annotation as? CameraMapAnnotation else { return nil }
-            
-            let identifier = "CameraPin"
-            var annotationView = mapView.dequeueReusableAnnotationView(withIdentifier: identifier)
-            
-            if annotationView == nil {
-                annotationView = MKAnnotationView(annotation: annotation, reuseIdentifier: identifier)
-                annotationView?.canShowCallout = false // We use custom card
-            } else {
-                annotationView?.annotation = annotation
-            }
-            
-            // Custom camera icon
-            let size = CGSize(width: 40, height: 40)
-            let renderer = UIGraphicsImageRenderer(size: size)
-            
-            let image = renderer.image { ctx in
-                // Background circle
-                let bgColor = cameraAnnotation.camera.isOnline ? UIColor.systemGreen : UIColor.systemGray
-                bgColor.setFill()
-                
-                let bgRect = CGRect(x: 0, y: 0, width: size.width, height: size.height)
-                ctx.cgContext.fillEllipse(in: bgRect)
-                
-                // White border
-                UIColor.white.setStroke()
-                ctx.cgContext.setLineWidth(3)
-                ctx.cgContext.strokeEllipse(in: bgRect)
-                
-                // Camera icon
-                let iconSize: CGFloat = 20
-                let iconRect = CGRect(
-                    x: (size.width - iconSize) / 2,
-                    y: (size.height - iconSize) / 2,
-                    width: iconSize,
-                    height: iconSize
-                )
-                
-                if let cameraIcon = UIImage(systemName: "video.fill")?.withTintColor(.white, renderingMode: .alwaysOriginal) {
-                    cameraIcon.draw(in: iconRect)
-                }
-            }
-            
-            annotationView?.image = image
-            annotationView?.centerOffset = CGPoint(x: 0, y: -size.height / 2)
-            
-            return annotationView
-        }
-        
-        func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
-            guard let cameraAnnotation = view.annotation as? CameraMapAnnotation else { return }
-            
-            DispatchQueue.main.async {
-                withAnimation {
-                    self.parent.selectedCamera = cameraAnnotation.camera
-                }
-            }
-            
-            // Deselect to allow re-selection
-            mapView.deselectAnnotation(view.annotation, animated: false)
-        }
-        
-        func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
-            if let tileOverlay = overlay as? MKTileOverlay {
-                return MKTileOverlayRenderer(tileOverlay: tileOverlay)
-            }
-            return MKOverlayRenderer(overlay: overlay)
         }
     }
 }
 
-// MARK: - Camera Map Annotation
+// MARK: - Blur View for iOS Compatibility
 
-class CameraMapAnnotation: NSObject, MKAnnotation {
-    let coordinate: CLLocationCoordinate2D
-    let camera: Camera
+struct BlurView: UIViewRepresentable {
+    let style: UIBlurEffect.Style
     
-    var title: String? {
-        return camera.displayName
+    func makeUIView(context: Context) -> UIVisualEffectView {
+        UIVisualEffectView(effect: UIBlurEffect(style: style))
     }
     
-    var subtitle: String? {
-        return camera.area
-    }
-    
-    init(coordinate: CLLocationCoordinate2D, camera: Camera) {
-        self.coordinate = coordinate
-        self.camera = camera
-    }
+    func updateUIView(_ uiView: UIVisualEffectView, context: Context) {}
+}
+
+// MARK: - Map Display Style
+
+enum MapDisplayStyle: String, CaseIterable {
+    case hybrid = "Hybrid"
+    case satellite = "Satellite"
+    case standard = "Standard"
 }

@@ -16,9 +16,10 @@ class CameraManager: ObservableObject {
     private let hasInitialDataKey = "has_initial_camera_data"
     private let saveQueue = DispatchQueue(label: "com.iccc.camerasSaveQueue", qos: .background)
     
-    // Pagination settings
-    private let pageSize = 100
+    // ✅ NEW: Parallel fetching configuration
+    private let parallelFetchCount = 4 // Fetch 4 areas at once
     private var isFetching = false
+    private var cancellables = Set<AnyCancellable>()
     
     private var hasInitialData: Bool {
         get { userDefaults.bool(forKey: hasInitialDataKey) }
@@ -44,11 +45,132 @@ class CameraManager: ObservableObject {
         print("   Cameras loaded: \(cameras.count)")
         
         if !hasInitialData || cameras.isEmpty {
-            fetchAllCamerasPaginated()
+            fetchAllCamerasParallel()
         }
     }
     
-    // MARK: - Paginated Camera Fetch
+    // MARK: - ✅ NEW: Parallel Camera Fetch by Area
+    
+    func fetchAllCamerasParallel() {
+        guard !isFetching else {
+            print("⏳ Fetch already in progress")
+            return
+        }
+        
+        isFetching = true
+        isLoading = true
+        loadingProgress = 0.0
+        
+        print("📡 Starting PARALLEL camera fetch (4 areas at a time)...")
+        
+        // Get all unique areas from backend
+        fetchAvailableAreas { [weak self] areas in
+            guard let self = self else { return }
+            
+            if areas.isEmpty {
+                print("⚠️ No areas found, falling back to paginated fetch")
+                self.fetchAllCamerasPaginated()
+                return
+            }
+            
+            print("📋 Found \(areas.count) areas to fetch")
+            self.fetchAreasInParallel(areas: areas)
+        }
+    }
+    
+    private func fetchAvailableAreas(completion: @escaping ([String]) -> Void) {
+        // Get areas from cached cameras or fetch from API
+        let cachedAreas = Array(Set(cameras.map { $0.area }))
+        
+        if !cachedAreas.isEmpty {
+            completion(cachedAreas)
+            return
+        }
+        
+        // If no cached areas, fetch stats endpoint to get area list
+        CameraAPIService.shared.fetchCameraStats { result in
+            switch result {
+            case .success(let stats):
+                let areas = Array(stats.keys).sorted()
+                completion(areas)
+            case .failure:
+                // Fallback to known areas
+                let knownAreas = [
+                    "BARORA", "BLOCK2", "GOVINDPUR", "KATRAS", 
+                    "SIJUA", "KUSUNDA", "PB Area", "BASTACOLLA", 
+                    "LODNA", "EJ Area", "CV Area", "CCWO Area", "WJ Area"
+                ]
+                completion(knownAreas)
+            }
+        }
+    }
+    
+    private func fetchAreasInParallel(areas: [String]) {
+        let totalAreas = areas.count
+        var allCameras: [Camera] = []
+        var completedAreas = 0
+        let lock = NSLock()
+        
+        // Process areas in batches of 4
+        let batches = stride(from: 0, to: areas.count, by: parallelFetchCount).map {
+            Array(areas[$0..<min($0 + parallelFetchCount, areas.count)])
+        }
+        
+        func fetchNextBatch(batchIndex: Int) {
+            guard batchIndex < batches.count else {
+                // All batches complete
+                self.handleFetchComplete(allCameras)
+                return
+            }
+            
+            let batch = batches[batchIndex]
+            print("📦 Fetching batch \(batchIndex + 1)/\(batches.count): \(batch.joined(separator: ", "))")
+            
+            let group = DispatchGroup()
+            
+            for area in batch {
+                group.enter()
+                
+                CameraAPIService.shared.fetchCamerasByArea(area) { result in
+                    defer { group.leave() }
+                    
+                    switch result {
+                    case .success(let cameras):
+                        lock.lock()
+                        allCameras.append(contentsOf: cameras)
+                        completedAreas += 1
+                        
+                        DispatchQueue.main.async {
+                            self.loadingProgress = Double(completedAreas) / Double(totalAreas)
+                        }
+                        lock.unlock()
+                        
+                        print("✅ Fetched \(area): \(cameras.count) cameras")
+                        
+                    case .failure(let error):
+                        lock.lock()
+                        completedAreas += 1
+                        lock.unlock()
+                        
+                        print("❌ Failed to fetch \(area): \(error.localizedDescription)")
+                    }
+                }
+            }
+            
+            group.notify(queue: .main) {
+                print("📋 Batch \(batchIndex + 1) complete (\(completedAreas)/\(totalAreas) areas)")
+                
+                // Small delay before next batch to avoid overwhelming server
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    fetchNextBatch(batchIndex: batchIndex + 1)
+                }
+            }
+        }
+        
+        fetchNextBatch(batchIndex: 0)
+    }
+    
+    // MARK: - Fallback: Paginated Fetch
     
     func fetchAllCamerasPaginated() {
         guard !isFetching else {
@@ -62,6 +184,7 @@ class CameraManager: ObservableObject {
         
         var allCameras: [Camera] = []
         var currentPage = 1
+        let pageSize = 100
         var hasMore = true
         
         print("📡 Starting paginated camera fetch...")
@@ -257,40 +380,6 @@ class CameraManager: ObservableObject {
     
     func getOnlineCameras() -> [Camera] {
         return cameras.filter { $0.isOnline }
-    }
-    
-    // MARK: - Statistics
-    
-    func getStatistics() -> CameraStatistics {
-        let total = cameras.count
-        let online = onlineCamerasCount
-        let offline = total - online
-        
-        var areaStats: [String: AreaStatistics] = [:]
-        for area in availableAreas {
-            let areaCameras = getCameras(forArea: area)
-            areaStats[area] = AreaStatistics(
-                total: areaCameras.count,
-                online: areaCameras.filter { $0.isOnline }.count,
-                offline: areaCameras.filter { !$0.isOnline }.count
-            )
-        }
-        
-        return CameraStatistics(
-            totalCameras: total,
-            onlineCameras: online,
-            offlineCameras: offline,
-            areaStatistics: areaStats
-        )
-    }
-    
-    func getAreaStatistics(forArea area: String) -> AreaStatistics {
-        let areaCameras = getCameras(forArea: area)
-        return AreaStatistics(
-            total: areaCameras.count,
-            online: areaCameras.filter { $0.isOnline }.count,
-            offline: areaCameras.filter { !$0.isOnline }.count
-        )
     }
     
     // MARK: - Persistence
