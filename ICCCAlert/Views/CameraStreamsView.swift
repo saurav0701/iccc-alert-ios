@@ -111,7 +111,6 @@ struct CameraStreamsView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 16) {
-                        // Map View Button
                         Button(action: { 
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                                 showMapView = true
@@ -119,23 +118,22 @@ struct CameraStreamsView: View {
                         }) {
                             Image(systemName: "map.fill")
                                 .font(.system(size: 18, weight: .medium))
-                                .foregroundStyle(.blue)
+                                .foregroundColor(.blue)
                         }
                         
-                        // Manual refresh button
                         Button(action: manualRefresh) {
                             Image(systemName: "arrow.clockwise")
                                 .font(.system(size: 18, weight: .medium))
-                                .foregroundStyle(.blue)
+                                .foregroundColor(.blue)
                                 .rotationEffect(.degrees(isRefreshing ? 360 : 0))
-                                .animation(isRefreshing ? Animation.linear(duration: 1).repeatForever(autoreverses: false) : .default, value: isRefreshing)
+                                .animation(isRefreshing ? Animation.linear(duration: 1).repeatForever(autoreverses: false) : .default)
                         }
                         .disabled(isRefreshing || cameraManager.isLoading)
                         
                         NavigationLink(destination: DebugView()) {
                             Image(systemName: "ladybug.fill")
                                 .font(.system(size: 18, weight: .medium))
-                                .foregroundStyle(.orange)
+                                .foregroundColor(.orange)
                         }
                     }
                 }
@@ -184,10 +182,9 @@ struct CameraStreamsView: View {
         HStack(spacing: 12) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundColor(.secondary)
             
             TextField("Search areas", text: $searchText)
-                .textFieldStyle(.plain)
                 .font(.system(size: 16))
             
             if !searchText.isEmpty {
@@ -198,7 +195,7 @@ struct CameraStreamsView: View {
                 }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.tertiary)
+                        .foregroundColor(.gray.opacity(0.6))
                 }
                 .transition(.scale.combined(with: .opacity))
             }
@@ -227,19 +224,19 @@ struct CameraStreamsView: View {
                     
                     Image(systemName: showOnlineOnly ? "checkmark.circle.fill" : "circle")
                         .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(showOnlineOnly ? .green : .secondary)
+                        .foregroundColor(showOnlineOnly ? .green : .secondary)
                 }
                 
                 Text("Show Online Only")
                     .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.primary)
+                    .foregroundColor(.primary)
                 
                 Spacer()
                 
                 if showOnlineOnly {
                     Text("\(onlineCameras)")
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.green)
+                        .foregroundColor(.green)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 4)
                         .background(
@@ -257,7 +254,7 @@ struct CameraStreamsView: View {
                     .shadow(color: .black.opacity(0.04), radius: 8, x: 0, y: 2)
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PlainButtonStyle())
     }
     
     // MARK: - Areas Grid
@@ -270,7 +267,7 @@ struct CameraStreamsView: View {
                         cameras: getCameras(for: area)
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PlainButtonStyle())
             }
         }
         .padding(.horizontal)
@@ -280,12 +277,12 @@ struct CameraStreamsView: View {
     private var loadingProgressView: some View {
         VStack(spacing: 12) {
             ProgressView(value: cameraManager.loadingProgress)
-                .tint(.blue)
+                .accentColor(.blue)
                 .padding(.horizontal)
             
             Text("Loading cameras: \(Int(cameraManager.loadingProgress * 100))%")
                 .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundColor(.secondary)
         }
         .padding(.vertical, 16)
         .background(
@@ -301,7 +298,7 @@ struct CameraStreamsView: View {
                 Circle()
                     .fill(
                         LinearGradient(
-                            colors: [.blue.opacity(0.2), .blue.opacity(0.05)],
+                            gradient: Gradient(colors: [.blue.opacity(0.2), .blue.opacity(0.05)]),
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
@@ -310,7 +307,7 @@ struct CameraStreamsView: View {
                 
                 Image(systemName: "video.slash")
                     .font(.system(size: 50, weight: .light))
-                    .foregroundStyle(.blue)
+                    .foregroundColor(.blue)
             }
             
             VStack(spacing: 8) {
@@ -319,7 +316,7 @@ struct CameraStreamsView: View {
                 
                 Text("Camera data will appear here when available")
                     .font(.system(size: 16))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 40)
                 
@@ -330,7 +327,7 @@ struct CameraStreamsView: View {
                     
                     Text(webSocketService.isConnected ? "Connected" : "Disconnected")
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(webSocketService.isConnected ? .green : .red)
+                        .foregroundColor(webSocketService.isConnected ? .green : .red)
                 }
                 .padding(.top, 4)
             }
@@ -342,7 +339,7 @@ struct CameraStreamsView: View {
                     Text(isRefreshing ? "Refreshing..." : "Refresh Cameras")
                         .font(.system(size: 16, weight: .semibold))
                 }
-                .foregroundStyle(.white)
+                .foregroundColor(.white)
                 .padding(.horizontal, 24)
                 .padding(.vertical, 14)
                 .background(
@@ -360,7 +357,7 @@ struct CameraStreamsView: View {
         VStack(spacing: 24) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 50, weight: .light))
-                .foregroundStyle(.secondary)
+                .foregroundColor(.secondary)
             
             VStack(spacing: 8) {
                 Text("No Results Found")
@@ -368,7 +365,7 @@ struct CameraStreamsView: View {
                 
                 Text("Try adjusting your search or filters")
                     .font(.system(size: 16))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
             }
             
             Button(action: {
@@ -379,7 +376,7 @@ struct CameraStreamsView: View {
             }) {
                 Text("Clear Filters")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundColor(.white)
                     .padding(.horizontal, 24)
                     .padding(.vertical, 14)
                     .background(
@@ -434,7 +431,7 @@ struct StatCard: View {
                 Circle()
                     .fill(
                         LinearGradient(
-                            colors: gradient,
+                            gradient: Gradient(colors: gradient),
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
@@ -443,17 +440,17 @@ struct StatCard: View {
                 
                 Image(systemName: icon)
                     .font(.system(size: 24, weight: .semibold))
-                    .foregroundStyle(color)
+                    .foregroundColor(color)
             }
             
             VStack(spacing: 4) {
                 Text(value)
                     .font(.system(size: 22, weight: .bold))
-                    .foregroundStyle(.primary)
+                    .foregroundColor(.primary)
                 
                 Text(label)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
             }
         }
         .frame(maxWidth: .infinity)
@@ -496,7 +493,7 @@ struct ModernAreaRow: View {
                 RoundedRectangle(cornerRadius: 14)
                     .fill(
                         LinearGradient(
-                            colors: [.blue.opacity(0.2), .blue.opacity(0.1)],
+                            gradient: Gradient(colors: [.blue.opacity(0.2), .blue.opacity(0.1)]),
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
@@ -505,27 +502,25 @@ struct ModernAreaRow: View {
                 
                 Image(systemName: "map.fill")
                     .font(.system(size: 26, weight: .semibold))
-                    .foregroundStyle(.blue)
+                    .foregroundColor(.blue)
             }
             
             // Content
             VStack(alignment: .leading, spacing: 8) {
                 Text(area)
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.primary)
+                    .foregroundColor(.primary)
                 
                 HStack(spacing: 16) {
-                    // Online cameras
                     HStack(spacing: 6) {
                         Circle()
                             .fill(Color.green)
                             .frame(width: 8, height: 8)
                         Text("\(onlineCount)")
                             .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                     }
                     
-                    // Offline cameras (if any)
                     if offlineCount > 0 {
                         HStack(spacing: 6) {
                             Circle()
@@ -533,11 +528,10 @@ struct ModernAreaRow: View {
                                 .frame(width: 8, height: 8)
                             Text("\(offlineCount)")
                                 .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(.secondary)
+                                .foregroundColor(.secondary)
                         }
                     }
                     
-                    // Map availability
                     if camerasWithLocation > 0 {
                         HStack(spacing: 4) {
                             Image(systemName: "map")
@@ -545,7 +539,7 @@ struct ModernAreaRow: View {
                             Text("\(camerasWithLocation)")
                                 .font(.system(size: 14, weight: .medium))
                         }
-                        .foregroundStyle(.purple)
+                        .foregroundColor(.purple)
                     }
                 }
             }
@@ -556,17 +550,17 @@ struct ModernAreaRow: View {
             VStack(spacing: 4) {
                 Text("\(cameras.count)")
                     .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(.blue)
+                    .foregroundColor(.blue)
                 
                 Text("total")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
             }
             
             // Chevron
             Image(systemName: "chevron.right")
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.tertiary)
+                .foregroundColor(.gray.opacity(0.6))
         }
         .padding(16)
         .background(

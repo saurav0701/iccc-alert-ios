@@ -42,7 +42,6 @@ struct AreaCamerasView: View {
                 .ignoresSafeArea()
             
             VStack(spacing: 0) {
-                // Stats and filters
                 VStack(spacing: 16) {
                     statsBar
                     searchBar
@@ -56,7 +55,6 @@ struct AreaCamerasView: View {
                         .shadow(color: .black.opacity(0.03), radius: 8, x: 0, y: 2)
                 )
                 
-                // Camera grid
                 if cameras.isEmpty {
                     emptyView
                 } else {
@@ -69,7 +67,6 @@ struct AreaCamerasView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 16) {
-                    // Map button
                     if camerasWithLocation > 0 {
                         Button(action: { 
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
@@ -78,11 +75,10 @@ struct AreaCamerasView: View {
                         }) {
                             Image(systemName: "map.fill")
                                 .font(.system(size: 18, weight: .medium))
-                                .foregroundStyle(.blue)
+                                .foregroundColor(.blue)
                         }
                     }
                     
-                    // Layout menu
                     Menu {
                         Picker("Layout", selection: $gridMode) {
                             ForEach(GridViewMode.allCases) { mode in
@@ -92,7 +88,7 @@ struct AreaCamerasView: View {
                     } label: {
                         Image(systemName: gridMode.icon)
                             .font(.system(size: 18, weight: .medium))
-                            .foregroundStyle(.blue)
+                            .foregroundColor(.blue)
                     }
                 }
             }
@@ -118,7 +114,6 @@ struct AreaCamerasView: View {
     // MARK: - Stats Bar
     private var statsBar: some View {
         HStack(spacing: 12) {
-            // Total cameras
             StatPill(
                 icon: "video.fill",
                 value: "\(cameras.count)",
@@ -127,14 +122,12 @@ struct AreaCamerasView: View {
             
             Spacer()
             
-            // Online
             StatPill(
                 icon: "circle.fill",
                 value: "\(cameras.filter { $0.isOnline }.count)",
                 color: .green
             )
             
-            // Offline
             if cameras.filter({ !$0.isOnline }).count > 0 {
                 StatPill(
                     icon: "circle.fill",
@@ -143,7 +136,6 @@ struct AreaCamerasView: View {
                 )
             }
             
-            // Map availability
             if camerasWithLocation > 0 {
                 StatPill(
                     icon: "map",
@@ -159,10 +151,9 @@ struct AreaCamerasView: View {
         HStack(spacing: 12) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundColor(.secondary)
             
             TextField("Search cameras", text: $searchText)
-                .textFieldStyle(.plain)
                 .font(.system(size: 16))
             
             if !searchText.isEmpty {
@@ -173,7 +164,7 @@ struct AreaCamerasView: View {
                 }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.tertiary)
+                        .foregroundColor(.gray.opacity(0.6))
                 }
                 .transition(.scale.combined(with: .opacity))
             }
@@ -201,19 +192,19 @@ struct AreaCamerasView: View {
                     
                     Image(systemName: showOnlineOnly ? "checkmark.circle.fill" : "circle")
                         .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(showOnlineOnly ? .green : .secondary)
+                        .foregroundColor(showOnlineOnly ? .green : .secondary)
                 }
                 
                 Text("Show Online Only")
                     .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.primary)
+                    .foregroundColor(.primary)
                 
                 Spacer()
                 
                 if showOnlineOnly {
                     Text("\(cameras.filter { $0.isOnline }.count)")
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.green)
+                        .foregroundColor(.green)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 4)
                         .background(
@@ -230,7 +221,7 @@ struct AreaCamerasView: View {
                     .fill(Color(.systemBackground))
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PlainButtonStyle())
     }
     
     // MARK: - Camera Grid
@@ -260,7 +251,7 @@ struct AreaCamerasView: View {
                 Circle()
                     .fill(
                         LinearGradient(
-                            colors: [Color.gray.opacity(0.2), Color.gray.opacity(0.05)],
+                            gradient: Gradient(colors: [Color.gray.opacity(0.2), Color.gray.opacity(0.05)]),
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
@@ -269,7 +260,7 @@ struct AreaCamerasView: View {
                 
                 Image(systemName: searchText.isEmpty ? "video.slash" : "magnifyingglass")
                     .font(.system(size: 50, weight: .light))
-                    .foregroundStyle(.gray)
+                    .foregroundColor(.gray)
             }
             
             VStack(spacing: 8) {
@@ -280,7 +271,7 @@ struct AreaCamerasView: View {
                      (showOnlineOnly ? "No online cameras in this area" : "No cameras found in this area") : 
                      "No cameras match your search")
                     .font(.system(size: 16))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 40)
             }
@@ -321,11 +312,11 @@ struct StatPill: View {
         HStack(spacing: 6) {
             Image(systemName: icon)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(color)
+                .foregroundColor(color)
             
             Text(value)
                 .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(.primary)
+                .foregroundColor(.primary)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -351,7 +342,6 @@ struct ModernCameraGridCard: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // Thumbnail
             CameraThumbnailView(camera: camera, isGridView: mode != .list)
                 .frame(height: thumbnailHeight)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -363,16 +353,14 @@ struct ModernCameraGridCard: View {
                         )
                 )
             
-            // Info
             VStack(alignment: .leading, spacing: 6) {
                 Text(camera.displayName)
                     .font(titleFont)
                     .fontWeight(.semibold)
                     .lineLimit(mode == .list ? 2 : 1)
-                    .foregroundStyle(.primary)
+                    .foregroundColor(.primary)
                 
                 HStack(spacing: 8) {
-                    // Status indicator
                     HStack(spacing: 4) {
                         Circle()
                             .fill(camera.isOnline ? Color.green : Color.gray)
@@ -380,24 +368,23 @@ struct ModernCameraGridCard: View {
                         
                         Text(camera.location.isEmpty ? camera.area : camera.location)
                             .font(subtitleFont)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                             .lineLimit(1)
                     }
                     
                     Spacer()
                     
-                    // Badges
                     HStack(spacing: 6) {
                         if hasLocation {
                             Image(systemName: "map")
                                 .font(.system(size: badgeSize, weight: .medium))
-                                .foregroundStyle(.purple)
+                                .foregroundColor(.purple)
                         }
                         
                         if camera.isOnline && camera.webrtcStreamURL != nil {
                             Image(systemName: "antenna.radiowaves.left.and.right")
                                 .font(.system(size: badgeSize, weight: .medium))
-                                .foregroundStyle(.green)
+                                .foregroundColor(.green)
                         }
                     }
                 }
@@ -413,7 +400,6 @@ struct ModernCameraGridCard: View {
         .opacity(camera.isOnline ? 1 : 0.5)
     }
     
-    // MARK: - Computed Properties
     private var thumbnailHeight: CGFloat {
         switch mode {
         case .list: return 160
@@ -481,7 +467,7 @@ struct CameraThumbnailView: View {
     private var playButtonView: some View {
         ZStack {
             LinearGradient(
-                colors: [Color.green.opacity(0.25), Color.green.opacity(0.08)],
+                gradient: Gradient(colors: [Color.green.opacity(0.25), Color.green.opacity(0.08)]),
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -489,7 +475,7 @@ struct CameraThumbnailView: View {
             VStack(spacing: 10) {
                 Image(systemName: "play.circle.fill")
                     .font(.system(size: isGridView ? 40 : 50, weight: .light))
-                    .foregroundStyle(.green)
+                    .foregroundColor(.green)
                 
                 HStack(spacing: 6) {
                     Image(systemName: "antenna.radiowaves.left.and.right")
@@ -497,7 +483,7 @@ struct CameraThumbnailView: View {
                     Text("WebRTC")
                         .font(.system(size: 12, weight: .semibold))
                 }
-                .foregroundStyle(.green)
+                .foregroundColor(.green)
             }
         }
     }
@@ -505,7 +491,7 @@ struct CameraThumbnailView: View {
     private var offlineView: some View {
         ZStack {
             LinearGradient(
-                colors: [Color.gray.opacity(0.2), Color.gray.opacity(0.08)],
+                gradient: Gradient(colors: [Color.gray.opacity(0.2), Color.gray.opacity(0.08)]),
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -513,11 +499,11 @@ struct CameraThumbnailView: View {
             VStack(spacing: 8) {
                 Image(systemName: "video.slash.fill")
                     .font(.system(size: isGridView ? 30 : 36, weight: .light))
-                    .foregroundStyle(.gray)
+                    .foregroundColor(.gray)
                 
                 Text("Offline")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
             }
         }
     }
@@ -566,14 +552,13 @@ struct AreaCameraMapView: View {
             .edgesIgnoringSafeArea(.all)
             
             VStack {
-                // Top badge
                 HStack {
                     Spacer()
                     
                     HStack(spacing: 8) {
                         Image(systemName: "video.fill")
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.blue)
+                            .foregroundColor(.blue)
                         Text("\(filteredCameras.count)")
                             .font(.system(size: 16, weight: .bold))
                     }
@@ -590,7 +575,6 @@ struct AreaCameraMapView: View {
                 
                 Spacer()
                 
-                // Legend
                 HStack {
                     VStack(alignment: .leading, spacing: 10) {
                         LegendItem(color: .green, label: "Online")
@@ -610,7 +594,6 @@ struct AreaCameraMapView: View {
                 .padding()
             }
             
-            // Camera info card
             if let camera = selectedCamera {
                 VStack {
                     Spacer()
