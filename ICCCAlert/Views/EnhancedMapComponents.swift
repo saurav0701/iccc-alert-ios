@@ -309,7 +309,8 @@ struct ModernCameraInfoCard: View {
             VStack(alignment: .leading, spacing: 16) {
                 // Location Info
                 VStack(alignment: .leading, spacing: 12) {
-                    InfoRow(icon: "map.fill", label: "Area", value: camera.area, color: .blue)
+                    CameraInfoRow(icon: "map.fill", label: "Area", value: camera.area, color: .blue)
+
                     InfoRow(icon: "location.fill", label: "Location", value: camera.location.isEmpty ? "Unknown" : camera.location, color: .purple)
                     
                     if camera.isOnline && camera.webrtcStreamURL != nil {
@@ -360,7 +361,7 @@ struct ModernCameraInfoCard: View {
     }
 }
 
-struct InfoRow: View {
+struct CameraInfoRow: View {
     let icon: String
     let label: String
     let value: String

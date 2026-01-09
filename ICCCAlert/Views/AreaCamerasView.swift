@@ -1,7 +1,6 @@
 import SwiftUI
-import MapKit  // ← ADD THIS LINE
+import MapKit  
 
-// MARK: - Area Cameras Detail View
 struct AreaCamerasView: View {
     let area: String
     @StateObject private var cameraManager = CameraManager.shared
@@ -277,10 +276,11 @@ struct AreaCameraMapView: View {
     
     var body: some View {
         ZStack {
-            CameraGoogleHybridMapView(
+            EnhancedCameraMapView(
                 region: $region,
                 cameras: filteredCameras,
-                selectedCamera: $selectedCamera
+                selectedCamera: $selectedCamera,
+                mapStyle: .hybrid
             )
             .edgesIgnoringSafeArea(.all)
             
@@ -340,7 +340,7 @@ struct AreaCameraMapView: View {
             if let camera = selectedCamera {
                 VStack {
                     Spacer()
-                    CameraInfoCard(
+                    ModernCameraInfoCard(
                         camera: camera,
                         onClose: { selectedCamera = nil },
                         onView: {
