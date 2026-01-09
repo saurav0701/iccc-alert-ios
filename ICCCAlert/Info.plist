@@ -30,6 +30,7 @@
         <key>UIUserNotificationTypesSound</key>
         <true/>
     </dict>
+    
 
     <key>UIApplicationSceneManifest</key>
     <dict>
@@ -48,11 +49,29 @@
     <key>NSLocationWhenInUseUsageDescription</key>
     <string>We need your location to show nearby events</string>
 
+    <!-- Photo Library Access (for saving screenshots) -->
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>ICCC Alert needs access to save camera screenshots to your photo library.</string>
+
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>ICCC Alert needs access to save and manage camera screenshots.</string>
+
+    <!-- Camera access (if you want to add camera capture in future) -->
+    <key>NSCameraUsageDescription</key>
+    <string>ICCC Alert may need camera access for advanced features.</string>
+
+    <key>UIBackgroundModes</key>
+<array>
+    <string>audio</string>
+    <string>fetch</string>
+</array>
+
     <key>UISupportedInterfaceOrientations</key>
     <array>
         <string>UIInterfaceOrientationPortrait</string>
         <string>UIInterfaceOrientationLandscapeLeft</string>
         <string>UIInterfaceOrientationLandscapeRight</string>
+        <string>UIInterfaceOrientationPortraitUpsideDown</string>
     </array>
 
     <key>BGTaskSchedulerPermittedIdentifiers</key>
