@@ -544,10 +544,11 @@ struct AreaCameraMapView: View {
     
     var body: some View {
         ZStack {
-            CameraGoogleHybridMapView(
+            EnhancedCameraMapView(
                 region: $region,
                 cameras: filteredCameras,
-                selectedCamera: $selectedCamera
+                selectedCamera: $selectedCamera,
+                mapStyle: .hybrid
             )
             .edgesIgnoringSafeArea(.all)
             
@@ -557,18 +558,15 @@ struct AreaCameraMapView: View {
                     
                     HStack(spacing: 8) {
                         Image(systemName: "video.fill")
-                            .font(.system(size: 14, weight: .semibold))
                             .foregroundColor(.blue)
                         Text("\(filteredCameras.count)")
-                            .font(.system(size: 16, weight: .bold))
+                            .fontWeight(.bold)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(
-                        Capsule()
-                            .fill(Color(.systemBackground).opacity(0.95))
-                            .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 2)
-                    )
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color(.systemBackground).opacity(0.95))
+                    .cornerRadius(20)
+                    .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 2)
                 }
                 .padding(.horizontal)
                 .padding(.top, 16)
@@ -576,18 +574,31 @@ struct AreaCameraMapView: View {
                 Spacer()
                 
                 HStack {
-                    VStack(alignment: .leading, spacing: 10) {
-                        LegendItem(color: .green, label: "Online")
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(Color.green)
+                                .frame(width: 12, height: 12)
+                            Text("Online")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                        }
+                        
                         if !showOnlineOnly {
-                            LegendItem(color: .gray, label: "Offline")
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(Color.gray)
+                                    .frame(width: 12, height: 12)
+                                Text("Offline")
+                                    .font(.caption)
+                                    .fontWeight(.medium)
+                            }
                         }
                     }
-                    .padding(16)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(Color(.systemBackground).opacity(0.95))
-                            .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 2)
-                    )
+                    .padding(12)
+                    .background(Color(.systemBackground).opacity(0.95))
+                    .cornerRadius(10)
+                    .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 2)
                     
                     Spacer()
                 }
@@ -597,7 +608,7 @@ struct AreaCameraMapView: View {
             if let camera = selectedCamera {
                 VStack {
                     Spacer()
-                    CameraInfoCard(
+                    ModernCameraInfoCard(
                         camera: camera,
                         onClose: { selectedCamera = nil },
                         onView: {
@@ -658,18 +669,137 @@ struct AreaCameraMapView: View {
     }
 }
 
-// MARK: - Legend Item
-struct LegendItem: View {
-    let color: Color
-    let label: String
+// MARK: - Modern Camera Info Card
+struct ModernCameraInfoCard: View {
+    let camera: Camera
+    let onClose: () -> Void
+    let onView: () -> Void
     
     var body: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(color)
-                .frame(width: 12, height: 12)
-            Text(label)
-                .font(.system(size: 13, weight: .medium))
+        VStack(spacing: 0) {
+            ZStack {
+                LinearGradient(
+                    gradient: Gradient(colors: camera.isOnline ? 
+                        [Color.green.opacity(0.8), Color.green] :
+                        [Color.gray.opacity(0.8), Color.gray]),
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                
+                HStack {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(Color.white)
+                                .frame(width: 10, height: 10)
+                                .shadow(color: .white.opacity(0.8), radius: 4)
+                            
+                            Text(camera.isOnline ? "LIVE" : "OFFLINE")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                        }
+                        
+                        Text(camera.displayName)
+                            .font(.title3)
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                    }
+                    
+                    Spacer()
+                    
+                    Button(action: onClose) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 28))
+                            .foregroundColor(.white.opacity(0.9))
+                    }
+                }
+                .padding()
+            }
+            .frame(height: 80)
+            
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 12) {
+                    CameraDetailRow(icon: "map.fill", label: "Area", value: camera.area, color: .blue)
+                    CameraDetailRow(icon: "location.fill", label: "Location", value: camera.location.isEmpty ? "Unknown" : camera.location, color: .purple)
+                    
+                    if camera.isOnline && camera.webrtcStreamURL != nil {
+                        CameraDetailRow(icon: "antenna.radiowaves.left.and.right", label: "Stream", value: "WebRTC Available", color: .green)
+                    }
+                }
+                
+                if camera.isOnline && camera.webrtcStreamURL != nil {
+                    Button(action: onView) {
+                        HStack {
+                            Image(systemName: "play.circle.fill")
+                                .font(.system(size: 20))
+                            Text("View Live Stream")
+                                .fontWeight(.semibold)
+                        }
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(
+                            LinearGradient(
+                                gradient: Gradient(colors: [Color.blue, Color.blue.opacity(0.8)]),
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .cornerRadius(12)
+                        .shadow(color: .blue.opacity(0.3), radius: 8, x: 0, y: 4)
+                    }
+                } else {
+                    HStack {
+                        Image(systemName: "video.slash.fill")
+                        Text(camera.isOnline ? "Stream Unavailable" : "Camera Offline")
+                    }
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(12)
+                }
+            }
+            .padding()
+            .background(Color(.systemBackground))
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+        .shadow(color: .black.opacity(0.3), radius: 20, x: 0, y: 10)
+    }
+}
+
+struct CameraDetailRow: View {
+    let icon: String
+    let label: String
+    let value: String
+    let color: Color
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(color.opacity(0.15))
+                    .frame(width: 36, height: 36)
+                
+                Image(systemName: icon)
+                    .font(.system(size: 16))
+                    .foregroundColor(color)
+            }
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
+                Text(value)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.primary)
+            }
+            
+            Spacer()
         }
     }
 }
