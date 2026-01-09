@@ -310,11 +310,10 @@ struct ModernCameraInfoCard: View {
                 // Location Info
                 VStack(alignment: .leading, spacing: 12) {
                     CameraInfoRow(icon: "map.fill", label: "Area", value: camera.area, color: .blue)
-
-                    InfoRow(icon: "location.fill", label: "Location", value: camera.location.isEmpty ? "Unknown" : camera.location, color: .purple)
+                    CameraInfoRow(icon: "location.fill", label: "Location", value: camera.location.isEmpty ? "Unknown" : camera.location, color: .purple)
                     
                     if camera.isOnline && camera.webrtcStreamURL != nil {
-                        InfoRow(icon: "antenna.radiowaves.left.and.right", label: "Stream", value: "WebRTC Available", color: .green)
+                        CameraInfoRow(icon: "antenna.radiowaves.left.and.right", label: "Stream", value: "WebRTC Available", color: .green)
                     }
                 }
                 
