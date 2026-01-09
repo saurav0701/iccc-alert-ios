@@ -170,10 +170,12 @@ struct MultiCameraViewsListView: View {
                     selectedView = view
                 }
                 .contextMenu {
-                    Button(role: .destructive) {
+                    // iOS 14 compatible delete button
+                    Button(action: {
                         multiCameraManager.deleteView(view)
-                    } label: {
+                    }) {
                         Label("Delete", systemImage: "trash")
+                            .foregroundColor(.red)
                     }
                 }
             }
@@ -426,7 +428,8 @@ struct CreateMultiCameraViewSheet: View {
                         // Selected Count
                         HStack {
                             Text("Selected Cameras: \(selectedCameraIds.count)/4")
-                                .font(.system(size: 14, weight: .semibold))
+                                .font(.system(size: 14))
+                                .bold()
                                 .foregroundColor(selectedCameraIds.count > 4 ? .red : .secondary)
                             
                             Spacer()
@@ -499,7 +502,7 @@ struct CreateMultiCameraViewSheet: View {
                         createView()
                     }
                     .disabled(!canCreate)
-                    .fontWeight(.semibold)
+                    .font(.system(size: 17, weight: .semibold))
                 }
             }
         }

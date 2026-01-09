@@ -81,7 +81,7 @@ struct QuadCameraPlayerView: View {
         .frame(width: geometry.size.width, height: geometry.size.height)
     }
     
-    private func twoC ameraView(geometry: GeometryProxy) -> some View {
+    private func twoCameraView(geometry: GeometryProxy) -> some View {
         Group {
             QuadCameraCell(
                 camera: cameras[0],
