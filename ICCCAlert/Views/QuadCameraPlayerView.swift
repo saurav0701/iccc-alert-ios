@@ -35,7 +35,10 @@ struct QuadCameraPlayerView: View {
                     }
                 }
                 
-                // Controls Overlay
+                // PERMANENT Back Button (Always Visible)
+                permanentBackButton
+                
+                // Controls Overlay (Optional)
                 if showControls {
                     controlsOverlay
                         .transition(.opacity)
@@ -67,6 +70,39 @@ struct QuadCameraPlayerView: View {
         }
     }
     
+    // MARK: - Permanent Back Button (Always Visible)
+    
+    private var permanentBackButton: some View {
+        VStack {
+            HStack {
+                Button(action: {
+                    presentationMode.wrappedValue.dismiss()
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 16, weight: .semibold))
+                        Text("Back")
+                            .font(.system(size: 17, weight: .medium))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(
+                        Capsule()
+                            .fill(Color.black.opacity(0.7))
+                            .shadow(color: .black.opacity(0.4), radius: 10, x: 0, y: 2)
+                    )
+                }
+                .padding(.leading, 16)
+                .padding(.top, 16)
+                
+                Spacer()
+            }
+            
+            Spacer()
+        }
+    }
+    
     // MARK: - Camera Layouts
     
     private func singleCameraView(camera: Camera, geometry: GeometryProxy) -> some View {
@@ -75,6 +111,9 @@ struct QuadCameraPlayerView: View {
             index: 0,
             selectedIndex: $selectedCameraIndex,
             onDoubleTap: {
+                showFullscreenCamera = camera
+            },
+            onSingleTap: {
                 showFullscreenCamera = camera
             }
         )
@@ -89,6 +128,9 @@ struct QuadCameraPlayerView: View {
                 selectedIndex: $selectedCameraIndex,
                 onDoubleTap: {
                     showFullscreenCamera = cameras[0]
+                },
+                onSingleTap: {
+                    showFullscreenCamera = cameras[0]
                 }
             )
             .frame(height: (geometry.size.height - 2) / 2)
@@ -98,6 +140,9 @@ struct QuadCameraPlayerView: View {
                 index: 1,
                 selectedIndex: $selectedCameraIndex,
                 onDoubleTap: {
+                    showFullscreenCamera = cameras[1]
+                },
+                onSingleTap: {
                     showFullscreenCamera = cameras[1]
                 }
             )
@@ -114,6 +159,9 @@ struct QuadCameraPlayerView: View {
                     selectedIndex: $selectedCameraIndex,
                     onDoubleTap: {
                         showFullscreenCamera = cameras[0]
+                    },
+                    onSingleTap: {
+                        showFullscreenCamera = cameras[0]
                     }
                 )
                 
@@ -123,6 +171,9 @@ struct QuadCameraPlayerView: View {
                         index: 1,
                         selectedIndex: $selectedCameraIndex,
                         onDoubleTap: {
+                            showFullscreenCamera = cameras[1]
+                        },
+                        onSingleTap: {
                             showFullscreenCamera = cameras[1]
                         }
                     )
@@ -140,6 +191,9 @@ struct QuadCameraPlayerView: View {
                         selectedIndex: $selectedCameraIndex,
                         onDoubleTap: {
                             showFullscreenCamera = cameras[2]
+                        },
+                        onSingleTap: {
+                            showFullscreenCamera = cameras[2]
                         }
                     )
                 } else {
@@ -152,6 +206,9 @@ struct QuadCameraPlayerView: View {
                         index: 3,
                         selectedIndex: $selectedCameraIndex,
                         onDoubleTap: {
+                            showFullscreenCamera = cameras[3]
+                        },
+                        onSingleTap: {
                             showFullscreenCamera = cameras[3]
                         }
                     )
@@ -185,15 +242,6 @@ struct QuadCameraPlayerView: View {
         VStack {
             // Top controls
             HStack {
-                Button(action: {
-                    presentationMode.wrappedValue.dismiss()
-                }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 32))
-                        .foregroundColor(.white)
-                        .shadow(radius: 3)
-                }
-                
                 Spacer()
                 
                 VStack(alignment: .trailing, spacing: 4) {
@@ -210,11 +258,13 @@ struct QuadCameraPlayerView: View {
                     }
                     .foregroundColor(.white.opacity(0.9))
                 }
+                .padding(.trailing)
             }
             .padding()
+            .padding(.top, 40) // Add space for back button
             .background(
                 LinearGradient(
-                    colors: [Color.black.opacity(0.7), Color.clear],
+                    colors: [Color.black.opacity(0.5), Color.clear],
                     startPoint: .top,
                     endPoint: .bottom
                 )
@@ -306,7 +356,7 @@ struct QuadCameraPlayerView: View {
                     .shadow(radius: 10)
             )
             .padding(.horizontal)
-            .padding(.top, 60)
+            .padding(.top, 80) // Moved down to avoid back button
             
             Spacer()
         }
@@ -451,10 +501,12 @@ struct QuadCameraCell: View {
     let index: Int
     @Binding var selectedIndex: Int?
     let onDoubleTap: () -> Void
+    let onSingleTap: () -> Void
     
     @State private var playerState: PlayerState = .loading
     @State private var isLoading = true
     @State private var webView: WKWebView?
+    @State private var tapCount = 0
     
     var isSelected: Bool {
         selectedIndex == index
@@ -514,6 +566,20 @@ struct QuadCameraCell: View {
                 .padding(8)
                 
                 Spacer()
+                
+                // Tap to expand hint
+                if !isLoading {
+                    Text("Tap to expand")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.white.opacity(0.7))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            Capsule()
+                                .fill(Color.black.opacity(0.5))
+                        )
+                        .padding(.bottom, 8)
+                }
             }
             
             // Selection border
@@ -522,11 +588,10 @@ struct QuadCameraCell: View {
                     .strokeBorder(Color.blue, lineWidth: 3)
             }
         }
+        .contentShape(Rectangle())
         .onTapGesture {
             selectedIndex = index
-        }
-        .onTapGesture(count: 2) {
-            onDoubleTap()
+            onSingleTap()
         }
     }
     
