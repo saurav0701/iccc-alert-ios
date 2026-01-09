@@ -84,6 +84,13 @@ struct CameraStreamsView: View {
                                 .padding(.horizontal)
                                 .padding(.top, 8)
                             
+                            // Multi-View Button
+                            NavigationLink(destination: MultiCameraViewsListView()) {
+                                multiViewButton
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            .padding(.horizontal)
+                            
                             // Search and Filters
                             VStack(spacing: 16) {
                                 searchBar
@@ -146,6 +153,49 @@ struct CameraStreamsView: View {
         .onAppear {
             DebugLogger.shared.log("📹 CameraStreamsView appeared", emoji: "📹", color: .blue)
         }
+    }
+    
+    // MARK: - Multi-View Button
+    private var multiViewButton: some View {
+        HStack(spacing: 16) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(
+                        LinearGradient(
+                            gradient: Gradient(colors: [.purple.opacity(0.2), .purple.opacity(0.1)]),
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 50, height: 50)
+                
+                Image(systemName: "square.grid.2x2.fill")
+                    .font(.system(size: 24))
+                    .foregroundColor(.purple)
+            }
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Multi-Camera Views")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.primary)
+                
+                Text("Watch up to 4 cameras at once")
+                    .font(.system(size: 13))
+                    .foregroundColor(.secondary)
+            }
+            
+            Spacer()
+            
+            Image(systemName: "chevron.right")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(.gray.opacity(0.6))
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color(.systemBackground))
+                .shadow(color: .black.opacity(0.04), radius: 8, x: 0, y: 2)
+        )
     }
     
     // MARK: - Stats Section
@@ -273,7 +323,7 @@ struct CameraStreamsView: View {
         .padding(.horizontal)
     }
     
-    // MARK: - Loading Indicator (FIXED - No Progress Bar)
+    // MARK: - Loading Indicator
     private var loadingIndicatorView: some View {
         VStack(spacing: 12) {
             ProgressView()

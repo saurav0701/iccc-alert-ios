@@ -159,44 +159,46 @@ struct UnifiedCameraPlayerView: View {
     @State private var playbackSpeed: Float = 1.0
     
     var body: some View {
-        ZStack {
-            Color.black.edgesIgnoringSafeArea(.all)
-            
-            if let urlString = camera.webrtcStreamURL, let url = URL(string: urlString) {
-                EnhancedWebRTCPlayerView(
-                    streamURL: url,
-                    cameraId: camera.id,
-                    playerState: $playerState,
-                    isLoading: $isLoading,
-                    webView: $webView
-                )
-                .edgesIgnoringSafeArea(.all)
-            } else {
-                errorView(message: "Camera stream not available")
-            }
-            
-            if isLoading {
-                loadingOverlay
-            }
-            
-            if case .failed(let message) = playerState {
-                failedOverlay(message: message)
-            }
-            
-            if showControls && !isLoading {
-                controlsOverlay
-                    .transition(.opacity)
-            }
-            
-            // Screenshot preview
-            if screenshotManager.showScreenshotPreview, let screenshot = screenshotManager.lastScreenshot {
-                screenshotPreviewOverlay(screenshot: screenshot)
-            }
-            
-            // Screenshot saved indicator
-            if screenshotManager.screenshotSaved {
-                screenshotSavedIndicator
-                    .transition(.move(edge: .top).combined(with: .opacity))
+        GeometryReader { geometry in
+            ZStack {
+                Color.black.edgesIgnoringSafeArea(.all)
+                
+                if let urlString = camera.webrtcStreamURL, let url = URL(string: urlString) {
+                    EnhancedWebRTCPlayerView(
+                        streamURL: url,
+                        cameraId: camera.id,
+                        playerState: $playerState,
+                        isLoading: $isLoading,
+                        webView: $webView
+                    )
+                    .edgesIgnoringSafeArea(.all)
+                } else {
+                    errorView(message: "Camera stream not available")
+                }
+                
+                if isLoading {
+                    loadingOverlay
+                }
+                
+                if case .failed(let message) = playerState {
+                    failedOverlay(message: message)
+                }
+                
+                if showControls && !isLoading {
+                    controlsOverlay(geometry: geometry)
+                        .transition(.opacity)
+                }
+                
+                // Screenshot preview
+                if screenshotManager.showScreenshotPreview, let screenshot = screenshotManager.lastScreenshot {
+                    screenshotPreviewOverlay(screenshot: screenshot)
+                }
+                
+                // Screenshot saved indicator
+                if screenshotManager.screenshotSaved {
+                    screenshotSavedIndicator
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
             }
         }
         .navigationBarHidden(true)
@@ -218,9 +220,9 @@ struct UnifiedCameraPlayerView: View {
         }
     }
     
-    // MARK: - Enhanced Controls Overlay
+    // MARK: - Enhanced Controls Overlay (UPDATED - Removed Quality & Info buttons)
     
-    private var controlsOverlay: some View {
+    private func controlsOverlay(geometry: GeometryProxy) -> some View {
         VStack {
             // Top controls
             HStack {
@@ -243,6 +245,8 @@ struct UnifiedCameraPlayerView: View {
                         .font(.headline)
                         .foregroundColor(.white)
                         .shadow(radius: 2)
+                        .lineLimit(1)
+                        .frame(maxWidth: geometry.size.width * 0.5, alignment: .trailing)
                     
                     HStack(spacing: 8) {
                         Circle()
@@ -252,6 +256,7 @@ struct UnifiedCameraPlayerView: View {
                         Text(camera.area)
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.9))
+                            .lineLimit(1)
                     }
                 }
                 
@@ -281,8 +286,8 @@ struct UnifiedCameraPlayerView: View {
             
             // Bottom controls
             VStack(spacing: 16) {
-                // Action buttons row
-                HStack(spacing: 20) {
+                // Action buttons row (ONLY Screenshot and PiP)
+                HStack(spacing: 40) {
                     // Screenshot button
                     ControlButton(
                         icon: "camera.fill",
@@ -298,26 +303,8 @@ struct UnifiedCameraPlayerView: View {
                         label: "PiP",
                         action: togglePiP
                     )
-                    
-                    Spacer()
-                    
-                    // Quality toggle (placeholder for future feature)
-                    ControlButton(
-                        icon: "waveform",
-                        label: "Quality",
-                        action: { /* Future: Quality selection */ }
-                    )
-                    
-                    Spacer()
-                    
-                    // Info button
-                    ControlButton(
-                        icon: "info.circle",
-                        label: "Info",
-                        action: showCameraInfo
-                    )
                 }
-                .padding(.horizontal, 30)
+                .padding(.horizontal, 60)
                 
                 // LIVE indicator
                 HStack {
@@ -348,7 +335,7 @@ struct UnifiedCameraPlayerView: View {
                 }
                 .padding(.horizontal)
             }
-            .padding(.bottom)
+            .padding(.bottom, max(20, geometry.safeAreaInsets.bottom))
             .background(
                 LinearGradient(
                     colors: [Color.clear, Color.black.opacity(0.7)],
@@ -626,27 +613,6 @@ struct UnifiedCameraPlayerView: View {
         }
     }
     
-    private func showCameraInfo() {
-        // Show camera info alert
-        let alert = UIAlertController(
-            title: camera.displayName,
-            message: """
-            Area: \(camera.area)
-            Location: \(camera.location.isEmpty ? "Unknown" : camera.location)
-            IP: \(camera.ip)
-            Group: \(camera.groupId)
-            Status: \(camera.isOnline ? "Online" : "Offline")
-            """,
-            preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(title: "OK", style: .default))
-        
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let rootViewController = windowScene.windows.first?.rootViewController {
-            rootViewController.present(alert, animated: true)
-        }
-    }
-    
     private func logCameraInfo() {
         DebugLogger.shared.log("━━━━━━━━━━━━━━━━━━━━━━━━━━", emoji: "📹", color: .blue)
         DebugLogger.shared.log("📹 Opening Camera (WebRTC)", emoji: "📹", color: .blue)
@@ -688,7 +654,7 @@ struct ControlButton: View {
                     .font(.caption2)
                     .foregroundColor(.white.opacity(0.9))
             }
-            .frame(width: 60)
+            .frame(width: 70)
         }
     }
 }
