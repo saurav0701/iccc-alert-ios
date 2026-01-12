@@ -909,24 +909,18 @@ struct QuadWebRTCPlayer: UIViewRepresentable {
         }
         
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                self.playerState = .playing
-                self.isLoading = false
-            }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            self.playerState = .playing
+            self.isLoading = false
         }
-        
-        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            DispatchQueue.main.async {
-                self.playerState = .failed("Connection failed")
-                self.isLoading = false
-            }
-             StreamHealthMonitor.shared.updateStreamPacket(cameraId: cameraId, bitrateKbps: 1500)
-        
-        // Schedule periodic updates (simulate packet reception)
-        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            StreamHealthMonitor.shared.updateStreamPacket(cameraId: self.cameraId)
+    }
+    
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        DispatchQueue.main.async {
+            self.playerState = .failed("Connection failed")
+            self.isLoading = false
         }
-        
-        }
+    }
+    
     }
 }
