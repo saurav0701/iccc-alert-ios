@@ -48,6 +48,16 @@ struct CameraMapView: View {
         }
     }
     
+    var allCamerasWithValidLocation: Int {
+        cameraManager.cameras.filter { camera in
+            guard let lat = Double(camera.latitude),
+                  let lng = Double(camera.longitude) else {
+                return false
+            }
+            return lat != 0 && lng != 0
+        }.count
+    }
+    
     var body: some View {
         ZStack {
             // Enhanced Map with Clustering
@@ -247,11 +257,7 @@ struct CameraMapView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("All Areas")
                                     .font(.body)
-                                Text("\(cameraManager.cameras.filter { camera in
-                                    guard let lat = Double(camera.latitude),
-                                          let lng = Double(camera.longitude) else { return false }
-                                    return lat != 0 && lng != 0
-                                }.count) cameras")
+                                Text("\(allCamerasWithValidLocation) cameras")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
