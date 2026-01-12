@@ -1,13 +1,73 @@
 import SwiftUI
 import MapKit
 
-// MARK: - Enhanced Map Configuration
-struct MapConfiguration {
-    var showClustering: Bool = true
-    var showHeatmap: Bool = false
-    var animateMarkers: Bool = true
-    var showTraffic: Bool = false
-    var clusterRadius: Double = 50 // pixels
+// MARK: - Map Display Style
+enum MapDisplayStyle: String, CaseIterable {
+    case hybrid = "Hybrid"
+    case satellite = "Satellite"
+    case standard = "Standard"
+    
+    var icon: String {
+        switch self {
+        case .hybrid: return "map.fill"
+        case .satellite: return "globe.americas.fill"
+        case .standard: return "map"
+        }
+    }
+}
+
+// MARK: - Google Tile Overlays
+class GoogleHybridTileOverlay: MKTileOverlay {
+    override func url(forTilePath path: MKTileOverlayPath) -> URL {
+        let urlString = "https://mt1.google.com/vt/lyrs=y&x=\(path.x)&y=\(path.y)&z=\(path.z)"
+        return URL(string: urlString)!
+    }
+}
+
+class GoogleSatelliteTileOverlay: MKTileOverlay {
+    override func url(forTilePath path: MKTileOverlayPath) -> URL {
+        let urlString = "https://mt1.google.com/vt/lyrs=s&x=\(path.x)&y=\(path.y)&z=\(path.z)"
+        return URL(string: urlString)!
+    }
+}
+
+// MARK: - Blur View
+struct BlurView: UIViewRepresentable {
+    let style: UIBlurEffect.Style
+    
+    func makeUIView(context: Context) -> UIVisualEffectView {
+        UIVisualEffectView(effect: UIBlurEffect(style: style))
+    }
+    
+    func updateUIView(_ uiView: UIVisualEffectView, context: Context) {}
+}
+
+// MARK: - UIColor Extension
+extension UIColor {
+    func darker(by percentage: CGFloat = 0.2) -> UIColor {
+        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        self.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+        return UIColor(hue: h, saturation: s, brightness: max(b * (1 - percentage), 0), alpha: a)
+    }
+}
+
+// MARK: - Enhanced Camera Annotation
+class EnhancedCameraAnnotation: NSObject, MKAnnotation {
+    let coordinate: CLLocationCoordinate2D
+    let camera: Camera
+    
+    var title: String? {
+        return camera.displayName
+    }
+    
+    var subtitle: String? {
+        return "\(camera.area) • \(camera.isOnline ? "Online" : "Offline")"
+    }
+    
+    init(coordinate: CLLocationCoordinate2D, camera: Camera) {
+        self.coordinate = coordinate
+        self.camera = camera
+    }
 }
 
 // MARK: - Camera Cluster Annotation
@@ -30,7 +90,16 @@ class CameraClusterAnnotation: NSObject, MKAnnotation {
     }
 }
 
-// MARK: - Enhanced Map View with Clustering
+// MARK: - Map Configuration
+struct MapConfiguration {
+    var showClustering: Bool = true
+    var showHeatmap: Bool = false
+    var animateMarkers: Bool = true
+    var showTraffic: Bool = false
+    var clusterRadius: Double = 50
+}
+
+// MARK: - Enhanced Clustered Map View
 struct EnhancedClusteredMapView: UIViewRepresentable {
     @Binding var region: MKCoordinateRegion
     let cameras: [Camera]
@@ -42,7 +111,6 @@ struct EnhancedClusteredMapView: UIViewRepresentable {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
         
-        // Enable all gestures
         mapView.isZoomEnabled = true
         mapView.isScrollEnabled = true
         mapView.isRotateEnabled = true
@@ -51,19 +119,12 @@ struct EnhancedClusteredMapView: UIViewRepresentable {
         mapView.showsScale = true
         mapView.showsUserLocation = false
         
-        // Register custom annotation views
-        mapView.register(
-            ClusterAnnotationView.self,
-            forAnnotationViewWithReuseIdentifier: MKMapViewDefaultClusterAnnotationViewReuseIdentifier
-        )
-        
         applyMapStyle(mapView, style: mapStyle)
         
         return mapView
     }
     
     func updateUIView(_ mapView: MKMapView, context: Context) {
-        // Update region smoothly
         if abs(mapView.region.center.latitude - region.center.latitude) > 0.001 ||
            abs(mapView.region.center.longitude - region.center.longitude) > 0.001 {
             mapView.setRegion(region, animated: true)
@@ -71,8 +132,6 @@ struct EnhancedClusteredMapView: UIViewRepresentable {
         
         applyMapStyle(mapView, style: mapStyle)
         context.coordinator.configuration = configuration
-        
-        // Update annotations with clustering
         updateAnnotations(mapView, context: context)
     }
     
@@ -81,12 +140,10 @@ struct EnhancedClusteredMapView: UIViewRepresentable {
         mapView.removeAnnotations(existingAnnotations)
         
         if configuration.showClustering && mapView.camera.centerCoordinateDistance > 50000 {
-            // Use clustering for zoomed out view
             let clusters = clusterCameras(cameras, mapView: mapView)
             
             for cluster in clusters {
                 if cluster.cameras.count == 1 {
-                    // Single camera - show individual annotation
                     let camera = cluster.cameras[0]
                     guard let lat = Double(camera.latitude),
                           let lng = Double(camera.longitude),
@@ -96,12 +153,10 @@ struct EnhancedClusteredMapView: UIViewRepresentable {
                     let annotation = EnhancedCameraAnnotation(coordinate: coordinate, camera: camera)
                     mapView.addAnnotation(annotation)
                 } else {
-                    // Multiple cameras - show cluster
                     mapView.addAnnotation(cluster)
                 }
             }
         } else {
-            // Show individual cameras
             for camera in cameras {
                 guard let lat = Double(camera.latitude),
                       let lng = Double(camera.longitude),
@@ -118,7 +173,6 @@ struct EnhancedClusteredMapView: UIViewRepresentable {
         var clusters: [CameraClusterAnnotation] = []
         var processedCameras: Set<String> = []
         
-        let screenRect = mapView.bounds
         let radiusInPoints = configuration.clusterRadius
         
         for camera in cameras {
@@ -130,7 +184,6 @@ struct EnhancedClusteredMapView: UIViewRepresentable {
             let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lng)
             let point = mapView.convert(coordinate, toPointTo: mapView)
             
-            // Find nearby cameras
             var clusterCameras: [Camera] = [camera]
             processedCameras.insert(camera.id)
             
@@ -151,7 +204,6 @@ struct EnhancedClusteredMapView: UIViewRepresentable {
                 }
             }
             
-            // Calculate cluster center
             let avgLat = clusterCameras.compactMap { Double($0.latitude) }.reduce(0, +) / Double(clusterCameras.count)
             let avgLng = clusterCameras.compactMap { Double($0.longitude) }.reduce(0, +) / Double(clusterCameras.count)
             let clusterCoord = CLLocationCoordinate2D(latitude: avgLat, longitude: avgLng)
@@ -186,7 +238,6 @@ struct EnhancedClusteredMapView: UIViewRepresentable {
     class Coordinator: NSObject, MKMapViewDelegate {
         var parent: EnhancedClusteredMapView
         var configuration: MapConfiguration
-        private var animationTimer: Timer?
         
         init(_ parent: EnhancedClusteredMapView) {
             self.parent = parent
@@ -194,7 +245,6 @@ struct EnhancedClusteredMapView: UIViewRepresentable {
         }
         
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
-            // Handle cluster annotations
             if let cluster = annotation as? CameraClusterAnnotation {
                 let identifier = "ClusterAnnotation"
                 var view = mapView.dequeueReusableAnnotationView(withIdentifier: identifier) as? ClusterAnnotationView
@@ -211,7 +261,6 @@ struct EnhancedClusteredMapView: UIViewRepresentable {
                 return view
             }
             
-            // Handle individual camera annotations
             if let cameraAnnotation = annotation as? EnhancedCameraAnnotation {
                 let identifier = "EnhancedCameraPin"
                 var view = mapView.dequeueReusableAnnotationView(withIdentifier: identifier)
@@ -230,7 +279,6 @@ struct EnhancedClusteredMapView: UIViewRepresentable {
                 view?.image = image
                 view?.centerOffset = CGPoint(x: 0, y: -size.height / 2)
                 
-                // Animate marker on appear
                 if configuration.animateMarkers {
                     view?.alpha = 0
                     view?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
@@ -245,7 +293,6 @@ struct EnhancedClusteredMapView: UIViewRepresentable {
                     }
                 }
                 
-                // Pulse animation for online cameras
                 if camera.isOnline && configuration.animateMarkers {
                     startPulseAnimation(view: view)
                 }
@@ -257,10 +304,8 @@ struct EnhancedClusteredMapView: UIViewRepresentable {
         }
         
         func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
-            // Handle cluster selection
             if let cluster = view.annotation as? CameraClusterAnnotation {
                 if cluster.cameras.count > 1 {
-                    // Zoom into cluster
                     zoomToCluster(cluster, mapView: mapView)
                     mapView.deselectAnnotation(view.annotation, animated: false)
                 } else if let camera = cluster.cameras.first {
@@ -269,7 +314,6 @@ struct EnhancedClusteredMapView: UIViewRepresentable {
                 return
             }
             
-            // Handle individual camera selection
             if let cameraAnnotation = view.annotation as? EnhancedCameraAnnotation {
                 selectCamera(cameraAnnotation.camera, view: view, mapView: mapView)
             }
@@ -298,10 +342,8 @@ struct EnhancedClusteredMapView: UIViewRepresentable {
             let cameras = cluster.cameras
             guard cameras.count > 1 else { return }
             
-            var minLat = 90.0
-            var maxLat = -90.0
-            var minLng = 180.0
-            var maxLng = -180.0
+            var minLat = 90.0, maxLat = -90.0
+            var minLng = 180.0, maxLng = -180.0
             
             for camera in cameras {
                 guard let lat = Double(camera.latitude),
@@ -332,13 +374,6 @@ struct EnhancedClusteredMapView: UIViewRepresentable {
             }
         }
         
-        func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
-            // Re-cluster when zoom level changes significantly
-            if configuration.showClustering {
-                parent.updateAnnotations(mapView, context: Context(coordinator: self))
-            }
-        }
-        
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let tileOverlay = overlay as? MKTileOverlay {
                 return MKTileOverlayRenderer(tileOverlay: tileOverlay)
@@ -364,7 +399,6 @@ struct EnhancedClusteredMapView: UIViewRepresentable {
             let renderer = UIGraphicsImageRenderer(size: size)
             
             return renderer.image { ctx in
-                // Shadow
                 ctx.cgContext.setShadow(
                     offset: CGSize(width: 0, height: 3),
                     blur: 10,
@@ -373,7 +407,6 @@ struct EnhancedClusteredMapView: UIViewRepresentable {
                 
                 let outerCircle = CGRect(x: 2, y: 2, width: size.width - 4, height: size.height - 4)
                 
-                // Gradient background
                 let gradient: CGGradient
                 if camera.isOnline {
                     let colors = [
@@ -408,17 +441,14 @@ struct EnhancedClusteredMapView: UIViewRepresentable {
                 )
                 ctx.cgContext.restoreGState()
                 
-                // White border
                 UIColor.white.setStroke()
                 ctx.cgContext.setLineWidth(3)
                 ctx.cgContext.strokeEllipse(in: outerCircle)
                 
-                // Inner circle
                 let innerCircle = CGRect(x: 10, y: 10, width: size.width - 20, height: size.height - 20)
                 UIColor.white.setFill()
                 ctx.cgContext.fillEllipse(in: innerCircle)
                 
-                // Camera icon
                 let iconSize: CGFloat = 20
                 let iconRect = CGRect(
                     x: (size.width - iconSize) / 2,
@@ -432,7 +462,6 @@ struct EnhancedClusteredMapView: UIViewRepresentable {
                     icon.draw(in: iconRect)
                 }
                 
-                // Online indicator
                 if camera.isOnline {
                     let indicatorCircle = CGRect(x: 32, y: 2, width: 16, height: 16)
                     UIColor.white.setFill()
@@ -465,7 +494,6 @@ class ClusterAnnotationView: MKAnnotationView {
         frame = CGRect(x: 0, y: 0, width: 60, height: 60)
         centerOffset = CGPoint(x: 0, y: -30)
         
-        // Main circle with gradient
         let gradientLayer = CAGradientLayer()
         gradientLayer.frame = bounds
         gradientLayer.colors = [
@@ -475,25 +503,21 @@ class ClusterAnnotationView: MKAnnotationView {
         gradientLayer.cornerRadius = 30
         layer.insertSublayer(gradientLayer, at: 0)
         
-        // Shadow
         layer.shadowColor = UIColor.black.cgColor
         layer.shadowOffset = CGSize(width: 0, height: 3)
         layer.shadowRadius = 10
         layer.shadowOpacity = 0.5
         
-        // White border
         layer.borderColor = UIColor.white.cgColor
         layer.borderWidth = 3
         layer.cornerRadius = 30
         
-        // Count label
         countLabel.textAlignment = .center
         countLabel.font = UIFont.systemFont(ofSize: 20, weight: .bold)
         countLabel.textColor = .white
         countLabel.frame = CGRect(x: 0, y: 15, width: 60, height: 30)
         addSubview(countLabel)
         
-        // Online indicator
         onlineIndicator.frame = CGRect(x: 42, y: 2, width: 16, height: 16)
         onlineIndicator.backgroundColor = .systemGreen
         onlineIndicator.layer.cornerRadius = 8
@@ -511,327 +535,138 @@ class ClusterAnnotationView: MKAnnotationView {
     }
 }
 
-// MARK: - Enhanced Camera Map View (Main Interface)
-struct SuperEnhancedCameraMapView: View {
-    @StateObject private var cameraManager = CameraManager.shared
-    @Environment(\.presentationMode) var presentationMode
-    
-    @State private var region: MKCoordinateRegion
-    @State private var selectedCamera: Camera? = nil
-    @State private var showOnlineOnly = true
-    @State private var selectedArea: String? = nil
-    @State private var showFullScreenPlayer = false
-    @State private var showFilterSheet = false
-    @State private var mapStyle: MapDisplayStyle = .hybrid
-    @State private var configuration = MapConfiguration()
-    @State private var showSettings = false
-    
-    init() {
-        _region = State(initialValue: MKCoordinateRegion(
-            center: CLLocationCoordinate2D(latitude: 23.6102, longitude: 85.2799),
-            span: MKCoordinateSpan(latitudeDelta: 2.0, longitudeDelta: 2.0)
-        ))
-    }
-    
-    var filteredCameras: [Camera] {
-        var cameras = cameraManager.cameras
-        
-        if showOnlineOnly {
-            cameras = cameras.filter { $0.isOnline }
-        }
-        
-        if let area = selectedArea {
-            cameras = cameras.filter { $0.area == area }
-        }
-        
-        return cameras.filter { camera in
-            guard let lat = Double(camera.latitude),
-                  let lng = Double(camera.longitude) else {
-                return false
-            }
-            return lat != 0 && lng != 0
-        }
-    }
+// MARK: - Modern Camera Info Card
+struct ModernCameraInfoCard: View {
+    let camera: Camera
+    let onClose: () -> Void
+    let onView: () -> Void
     
     var body: some View {
-        ZStack {
-            // Enhanced Map with Clustering
-            EnhancedClusteredMapView(
-                region: $region,
-                cameras: filteredCameras,
-                selectedCamera: $selectedCamera,
-                mapStyle: mapStyle,
-                configuration: configuration
-            )
-            .ignoresSafeArea()
-            
-            // Top Controls
-            VStack {
-                HStack(spacing: 12) {
-                    // Back Button
-                    MapControlButton(icon: "chevron.left") {
-                        presentationMode.wrappedValue.dismiss()
-                    }
-                    
-                    Spacer()
-                    
-                    // Stats Badge
-                    HStack(spacing: 8) {
-                        Image(systemName: "video.fill")
-                            .foregroundColor(.white)
-                        Text("\(filteredCameras.count)")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundColor(.white)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(
-                        ZStack {
-                            Color.black.opacity(0.4)
-                            BlurView(style: .systemUltraThinMaterialDark)
-                        }
-                    )
-                    .clipShape(Capsule())
-                    .shadow(color: .black.opacity(0.3), radius: 10)
-                    
-                    Spacer()
-                    
-                    // Settings Button
-                    MapControlButton(icon: "gearshape.fill") {
-                        showSettings = true
-                    }
-                    
-                    // Filter Button
-                    MapControlButton(icon: selectedArea != nil ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle") {
-                        showFilterSheet = true
-                    }
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 50)
+        VStack(spacing: 0) {
+            ZStack {
+                LinearGradient(
+                    colors: camera.isOnline ?
+                        [Color.green.opacity(0.8), Color.green] :
+                        [Color.gray.opacity(0.8), Color.gray],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
                 
-                Spacer()
-                
-                // Enhanced Legend
                 HStack {
-                    enhancedLegendView
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(Color.white)
+                                .frame(width: 10, height: 10)
+                                .shadow(color: .white.opacity(0.8), radius: 4)
+                            
+                            Text(camera.isOnline ? "LIVE" : "OFFLINE")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                        }
+                        
+                        Text(camera.displayName)
+                            .font(.title3)
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                    }
+                    
                     Spacer()
+                    
+                    Button(action: onClose) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 28))
+                            .foregroundColor(.white.opacity(0.9))
+                    }
                 }
                 .padding()
             }
+            .frame(height: 80)
             
-            // Camera Info Card
-            if let camera = selectedCamera {
-                VStack {
-                    Spacer()
-                    ModernCameraInfoCard(
-                        camera: camera,
-                        onClose: {
-                            withAnimation(.spring()) {
-                                selectedCamera = nil
-                            }
-                        },
-                        onView: {
-                            if camera.isOnline && camera.webrtcStreamURL != nil {
-                                showFullScreenPlayer = true
-                            }
-                        }
-                    )
-                    .padding()
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-            }
-        }
-        .navigationBarHidden(true)
-        .sheet(isPresented: $showFilterSheet) {
-            filterSheet
-        }
-        .sheet(isPresented: $showSettings) {
-            mapSettingsSheet
-        }
-        .fullScreenCover(isPresented: $showFullScreenPlayer) {
-            if let camera = selectedCamera {
-                UnifiedCameraPlayerView(camera: camera)
-            }
-        }
-        .onAppear {
-            adjustMapToShowAllCameras()
-        }
-    }
-    
-    private var enhancedLegendView: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(Color.green)
-                    .frame(width: 12, height: 12)
-                Text("Online")
-                    .font(.caption)
-                    .fontWeight(.medium)
-            }
-            
-            if !showOnlineOnly {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(Color.gray)
-                        .frame(width: 12, height: 12)
-                    Text("Offline")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                }
-            }
-            
-            if configuration.showClustering {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(Color.blue)
-                        .frame(width: 12, height: 12)
-                    Text("Cluster")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                }
-            }
-        }
-        .padding(12)
-        .background(
-            ZStack {
-                Color(.systemBackground).opacity(0.95)
-                BlurView(style: .systemMaterial)
-            }
-        )
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(0.15), radius: 10)
-    }
-    
-    private var filterSheet: some View {
-        NavigationView {
-            List {
-                Section(header: Text("Camera Status")) {
-                    Toggle(isOn: $showOnlineOnly) {
-                        HStack(spacing: 8) {
-                            Image(systemName: showOnlineOnly ? "checkmark.circle.fill" : "circle")
-                                .foregroundColor(showOnlineOnly ? .green : .gray)
-                            Text("Show Online Only")
-                        }
-                    }
-                }
-                
-                Section(header: Text("Filter by Area")) {
-                    Button(action: {
-                        selectedArea = nil
-                        adjustMapToShowAllCameras()
-                        showFilterSheet = false
-                    }) {
-                        HStack {
-                            Text("All Areas")
-                            Spacer()
-                            if selectedArea == nil {
-                                Image(systemName: "checkmark")
-                                    .foregroundColor(.blue)
-                            }
-                        }
-                    }
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 12) {
+                    CameraInfoRow(icon: "map.fill", label: "Area", value: camera.area, color: .blue)
+                    CameraInfoRow(icon: "location.fill", label: "Location", value: camera.location.isEmpty ? "Unknown" : camera.location, color: .purple)
                     
-                    ForEach(Array(Set(cameraManager.cameras.map { $0.area })).sorted(), id: \.self) { area in
-                        Button(action: {
-                            selectedArea = area
-                            showFilterSheet = false
-                        }) {
-                            HStack {
-                                Text(area)
-                                Spacer()
-                                if selectedArea == area {
-                                    Image(systemName: "checkmark")
-                                        .foregroundColor(.blue)
-                                }
-                            }
-                        }
-                        .foregroundColor(.primary)
-                    }
-                }
-            }
-            .navigationTitle("Filter Cameras")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { showFilterSheet = false }
-                }
-            }
-        }
-    }
-    
-    private var mapSettingsSheet: some View {
-        NavigationView {
-            List {
-                Section(header: Text("Map Style")) {
-                    ForEach(MapDisplayStyle.allCases, id: \.self) { style in
-                        Button(action: { mapStyle = style }) {
-                            HStack {
-                                Image(systemName: style.icon)
-                                Text(style.rawValue)
-                                Spacer()
-                                if mapStyle == style {
-                                    Image(systemName: "checkmark")
-                                        .foregroundColor(.blue)
-                                }
-                            }
-                        }
-                        .foregroundColor(.primary)
+                    if camera.isOnline && camera.webrtcStreamURL != nil {
+                        CameraInfoRow(icon: "antenna.radiowaves.left.and.right", label: "Stream", value: "WebRTC Available", color: .green)
                     }
                 }
                 
-                Section(header: Text("Display Options")) {
-                    Toggle("Show Clustering", isOn: $configuration.showClustering)
-                    Toggle("Animate Markers", isOn: $configuration.animateMarkers)
-                }
-                
-                if configuration.showClustering {
-                    Section(header: Text("Cluster Radius")) {
+                if camera.isOnline && camera.webrtcStreamURL != nil {
+                    Button(action: onView) {
                         HStack {
-                            Text("Radius: \(Int(configuration.clusterRadius))px")
-                            Spacer()
-                            Slider(value: $configuration.clusterRadius, in: 30...100, step: 10)
-                                .frame(width: 150)
+                            Image(systemName: "play.circle.fill")
+                                .font(.system(size: 20))
+                            Text("View Live Stream")
+                                .fontWeight(.semibold)
                         }
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(
+                            LinearGradient(
+                                colors: [Color.blue, Color.blue.opacity(0.8)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .cornerRadius(12)
+                        .shadow(color: .blue.opacity(0.3), radius: 8, x: 0, y: 4)
                     }
+                } else {
+                    HStack {
+                        Image(systemName: "video.slash.fill")
+                        Text(camera.isOnline ? "Stream Unavailable" : "Camera Offline")
+                    }
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(12)
                 }
             }
-            .navigationTitle("Map Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { showSettings = false }
-                }
-            }
+            .padding()
+            .background(Color(.systemBackground))
         }
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+        .shadow(color: .black.opacity(0.3), radius: 20, x: 0, y: 10)
     }
+}
+
+// MARK: - Camera Info Row
+struct CameraInfoRow: View {
+    let icon: String
+    let label: String
+    let value: String
+    let color: Color
     
-    private func adjustMapToShowAllCameras() {
-        guard !filteredCameras.isEmpty else { return }
-        
-        var minLat = 90.0, maxLat = -90.0
-        var minLng = 180.0, maxLng = -180.0
-        
-        for camera in filteredCameras {
-            guard let lat = Double(camera.latitude),
-                  let lng = Double(camera.longitude) else { continue }
-            minLat = min(minLat, lat)
-            maxLat = max(maxLat, lat)
-            minLng = min(minLng, lng)
-            maxLng = max(maxLng, lng)
-        }
-        
-        let center = CLLocationCoordinate2D(
-            latitude: (minLat + maxLat) / 2,
-            longitude: (minLng + maxLng) / 2
-        )
-        
-        let span = MKCoordinateSpan(
-            latitudeDelta: max((maxLat - minLat) * 1.3, 0.1),
-            longitudeDelta: max((maxLng - minLng) * 1.3, 0.1)
-        )
-        
-        withAnimation {
-            region = MKCoordinateRegion(center: center, span: span)
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(color.opacity(0.15))
+                    .frame(width: 36, height: 36)
+                
+                Image(systemName: icon)
+                    .font(.system(size: 16))
+                    .foregroundColor(color)
+            }
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
+                Text(value)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.primary)
+            }
+            
+            Spacer()
         }
     }
 }
