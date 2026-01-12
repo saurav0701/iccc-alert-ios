@@ -552,41 +552,6 @@ struct GoogleHybridMapView: UIViewRepresentable {
     }
 }
 
-// MARK: - Google Hybrid Tile Overlay (FREE - No API Key)
-
-class GoogleHybridTileOverlay: MKTileOverlay {
-    private let tileServers = [
-        "https://mt0.google.com/vt/lyrs=y&hl=en",
-        "https://mt1.google.com/vt/lyrs=y&hl=en",
-        "https://mt2.google.com/vt/lyrs=y&hl=en",
-        "https://mt3.google.com/vt/lyrs=y&hl=en"
-    ]
-    
-    override init(urlTemplate URLTemplate: String?) {
-        super.init(urlTemplate: URLTemplate)
-        self.minimumZ = 0
-        self.maximumZ = 22
-        self.tileSize = CGSize(width: 256, height: 256)
-    }
-    
-    override func url(forTilePath path: MKTileOverlayPath) -> URL {
-        let zoom = path.z
-        let x = path.x
-        let y = path.y
-        
-        // Load balance across servers (same as Android)
-        let serverIndex = (x + y) % tileServers.count
-        let baseUrl = tileServers[serverIndex]
-        
-        // Same URL format as Android MapActivity
-        let urlString = "\(baseUrl)&x=\(x)&y=\(y)&z=\(zoom)&s=Ga"
-        
-        return URL(string: urlString)!
-    }
-}
-
-
-
 class CustomMapAnnotation: NSObject, MKAnnotation {
     let coordinate: CLLocationCoordinate2D
     let title: String?
