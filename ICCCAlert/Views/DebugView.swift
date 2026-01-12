@@ -143,49 +143,6 @@ struct DebugView: View {
                     }
                 }
             }
-
-            Section(header: Text("Stream Health")) {
-    ForEach(Array(StreamHealthMonitor.shared.streamHealths.keys), id: \.self) { cameraId in
-        if let health = StreamHealthMonitor.shared.streamHealths[cameraId] {
-            VStack(alignment: .leading) {
-                Text(cameraId)
-                    .font(.caption)
-                    .bold()
-                
-                HStack {
-                    Circle()
-                        .fill(health.isHealthy ? Color.green : Color.red)
-                        .frame(width: 8, height: 8)
-                    Text(health.connectionQuality.rawValue)
-                    Text("•")
-                    Text("\(Int(health.latencyMs))ms")
-                }
-                .font(.caption2)
-            }
-        }
-    }
-}
-
-Section(header: Text("Performance")) {
-    HStack {
-        Text("Active Streams")
-        Spacer()
-        Text("\(MultiCameraOptimizer.shared.activeStreamCount)")
-    }
-    
-    HStack {
-        Text("Memory Usage")
-        Spacer()
-        Text("\(String(format: "%.0f", MultiCameraOptimizer.shared.memoryUsageMB)) MB")
-            .foregroundColor(MultiCameraOptimizer.shared.isMemoryWarning ? .red : .primary)
-    }
-    
-    HStack {
-        Text("Network Speed")
-        Spacer()
-        Text(BandwidthManager.shared.currentBandwidth.rawValue)
-    }
-}
             
             Section(header: Text("System")) {
                 VStack(alignment: .leading, spacing: 8) {
