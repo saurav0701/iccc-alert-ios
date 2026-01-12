@@ -890,11 +890,10 @@ struct QuadWebRTCPlayer: UIViewRepresentable {
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
         uiView.stopLoading()
         uiView.loadHTMLString("", baseURL: nil)
-        coordinator.stopHealthTracking()
     }
     
     func makeCoordinator() -> Coordinator {
-        Coordinator(cameraId: cameraId, playerState: $playerState, isLoading: $isLoading)
+        Coordinator(playerState: $playerState, isLoading: $isLoading)
     }
     
     class Coordinator: NSObject, WKNavigationDelegate {
@@ -907,18 +906,17 @@ struct QuadWebRTCPlayer: UIViewRepresentable {
         }
         
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            self.playerState = .playing
-            self.isLoading = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                self.playerState = .playing
+                self.isLoading = false
+            }
         }
-    }
-    
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        DispatchQueue.main.async {
-            self.playerState = .failed("Connection failed")
-            self.isLoading = false
+        
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            DispatchQueue.main.async {
+                self.playerState = .failed("Connection failed")
+                self.isLoading = false
+            }
         }
-    }
-
     }
 }
