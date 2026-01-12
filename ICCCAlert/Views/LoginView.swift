@@ -33,7 +33,7 @@ struct LoginView: View {
                         .blur(radius: 40)
                     
                     Circle()
-                        .fill(Color.cyan.opacity(0.1))
+                        .fill(Color.blue.opacity(0.08)) // Changed from .cyan
                         .frame(width: 250, height: 250)
                         .offset(x: geometry.size.width - 120, y: geometry.size.height - 150)
                         .blur(radius: 50)
@@ -64,13 +64,7 @@ struct LoginView: View {
                                 
                                 Image(systemName: "bell.badge.fill")
                                     .font(.system(size: 52))
-                                    .foregroundStyle(
-                                        LinearGradient(
-                                            colors: [.white, .white.opacity(0.9)],
-                                            startPoint: .top,
-                                            endPoint: .bottom
-                                        )
-                                    )
+                                    .foregroundColor(.white) // Changed from foregroundStyle
                                     .shadow(color: Color.black.opacity(0.2), radius: 2, x: 0, y: 2)
                             }
                             
@@ -83,7 +77,7 @@ struct LoginView: View {
                                 Text("Real-time monitoring & alerts")
                                     .font(.system(size: 16, weight: .medium))
                                     .foregroundColor(.white.opacity(0.85))
-                                    .tracking(0.5)
+                                    .kerning(0.5) // Changed from .tracking
                             }
                         }
                         .padding(.bottom, 50)
@@ -115,7 +109,7 @@ struct LoginView: View {
                                         Text("MOBILE NUMBER")
                                             .font(.system(size: 12, weight: .semibold))
                                             .foregroundColor(.secondary)
-                                            .tracking(0.8)
+                                            .kerning(0.8)
                                         
                                         HStack(spacing: 16) {
                                             // Country Code
@@ -157,7 +151,7 @@ struct LoginView: View {
                                         Text("VERIFICATION CODE")
                                             .font(.system(size: 12, weight: .semibold))
                                             .foregroundColor(.secondary)
-                                            .tracking(0.8)
+                                            .kerning(0.8)
                                         
                                         HStack(spacing: 12) {
                                             Image(systemName: "lock.shield.fill")
@@ -173,7 +167,7 @@ struct LoginView: View {
                                                 .keyboardType(.numberPad)
                                                 .textContentType(.oneTimeCode)
                                                 .font(.system(size: 20, weight: .semibold))
-                                                .tracking(3)
+                                                .kerning(3) // Changed from .tracking
                                                 .foregroundColor(.primary)
                                         }
                                         .padding(.vertical, 18)

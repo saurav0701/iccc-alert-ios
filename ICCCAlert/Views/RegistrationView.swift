@@ -45,7 +45,7 @@ struct RegistrationView: View {
                         .blur(radius: 40)
                     
                     Circle()
-                        .fill(Color.cyan.opacity(0.08))
+                        .fill(Color.blue.opacity(0.08)) // Changed from .cyan
                         .frame(width: 220, height: 220)
                         .offset(x: geometry.size.width - 100, y: geometry.size.height - 120)
                         .blur(radius: 50)
@@ -72,13 +72,7 @@ struct RegistrationView: View {
                                 
                                 Image(systemName: "person.crop.circle.badge.plus")
                                     .font(.system(size: 44))
-                                    .foregroundStyle(
-                                        LinearGradient(
-                                            colors: [.white, .white.opacity(0.9)],
-                                            startPoint: .top,
-                                            endPoint: .bottom
-                                        )
-                                    )
+                                    .foregroundColor(.white) // Changed from foregroundStyle
                             }
                             
                             VStack(spacing: 6) {
@@ -163,27 +157,23 @@ struct RegistrationView: View {
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: {
-                        presentationMode.wrappedValue.dismiss()
-                    }) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 20))
-                            Text("Close")
-                                .font(.system(size: 16, weight: .semibold))
-                        }
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(
-                            Capsule()
-                                .fill(Color.white.opacity(0.2))
-                        )
-                    }
+            .navigationBarItems(leading: Button(action: {
+                presentationMode.wrappedValue.dismiss()
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 20))
+                    Text("Close")
+                        .font(.system(size: 16, weight: .semibold))
                 }
-            }
+                .foregroundColor(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(
+                    Capsule()
+                        .fill(Color.white.opacity(0.2))
+                )
+            })
         }
     }
     
@@ -206,7 +196,7 @@ struct RegistrationView: View {
                     Text("FULL NAME")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundColor(.secondary)
-                        .tracking(0.5)
+                        .kerning(0.5)
                     
                     HStack(spacing: 14) {
                         Image(systemName: "person.fill")
@@ -238,7 +228,7 @@ struct RegistrationView: View {
                     Text("MOBILE NUMBER")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundColor(.secondary)
-                        .tracking(0.5)
+                        .kerning(0.5)
                     
                     HStack(spacing: 14) {
                         HStack(spacing: 6) {
@@ -303,7 +293,7 @@ struct RegistrationView: View {
                     Text("AREA / LOCATION")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundColor(.secondary)
-                        .tracking(0.5)
+                        .kerning(0.5)
                     
                     HStack(spacing: 14) {
                         Image(systemName: "location.fill")
@@ -334,7 +324,7 @@ struct RegistrationView: View {
                     Text("DESIGNATION")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundColor(.secondary)
-                        .tracking(0.5)
+                        .kerning(0.5)
                     
                     HStack(spacing: 14) {
                         Image(systemName: "briefcase.fill")
@@ -365,7 +355,7 @@ struct RegistrationView: View {
                     Text("ORGANISATION")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundColor(.secondary)
-                        .tracking(0.5)
+                        .kerning(0.5)
                     
                     HStack(spacing: 0) {
                         ForEach(organisations, id: \.self) { org in
@@ -470,13 +460,7 @@ struct RegistrationView: View {
                 
                 Image(systemName: "checkmark.seal.fill")
                     .font(.system(size: 52))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [Color.green, Color.green.opacity(0.8)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
+                    .foregroundColor(.green) // Changed from foregroundStyle
                     .shadow(color: Color.green.opacity(0.3), radius: 8, x: 0, y: 4)
             }
             .padding(.top, 20)
@@ -500,7 +484,7 @@ struct RegistrationView: View {
                 Text("VERIFICATION CODE")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundColor(.secondary)
-                    .tracking(0.5)
+                    .kerning(0.5)
                 
                 HStack(spacing: 14) {
                     Image(systemName: "lock.shield.fill")
@@ -516,7 +500,7 @@ struct RegistrationView: View {
                         .keyboardType(.numberPad)
                         .textContentType(.oneTimeCode)
                         .font(.system(size: 22, weight: .semibold))
-                        .tracking(4)
+                        .kerning(4) // Changed from .tracking
                         .multilineTextAlignment(.center)
                         .onChange(of: otp) { newValue in
                             if newValue.count > 6 {
