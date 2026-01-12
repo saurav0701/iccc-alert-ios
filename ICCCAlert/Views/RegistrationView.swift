@@ -196,7 +196,6 @@ struct RegistrationView: View {
                     Text("FULL NAME")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundColor(.secondary)
-                        .kerning(0.5)
                     
                     HStack(spacing: 14) {
                         Image(systemName: "person.fill")
@@ -228,7 +227,6 @@ struct RegistrationView: View {
                     Text("MOBILE NUMBER")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundColor(.secondary)
-                        .kerning(0.5)
                     
                     HStack(spacing: 14) {
                         HStack(spacing: 6) {
@@ -293,7 +291,6 @@ struct RegistrationView: View {
                     Text("AREA / LOCATION")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundColor(.secondary)
-                        .kerning(0.5)
                     
                     HStack(spacing: 14) {
                         Image(systemName: "location.fill")
@@ -324,7 +321,6 @@ struct RegistrationView: View {
                     Text("DESIGNATION")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundColor(.secondary)
-                        .kerning(0.5)
                     
                     HStack(spacing: 14) {
                         Image(systemName: "briefcase.fill")
@@ -355,7 +351,6 @@ struct RegistrationView: View {
                     Text("ORGANISATION")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundColor(.secondary)
-                        .kerning(0.5)
                     
                     HStack(spacing: 0) {
                         ForEach(organisations, id: \.self) { org in
@@ -484,7 +479,6 @@ struct RegistrationView: View {
                 Text("VERIFICATION CODE")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundColor(.secondary)
-                    .kerning(0.5)
                 
                 HStack(spacing: 14) {
                     Image(systemName: "lock.shield.fill")
@@ -500,7 +494,6 @@ struct RegistrationView: View {
                         .keyboardType(.numberPad)
                         .textContentType(.oneTimeCode)
                         .font(.system(size: 22, weight: .semibold))
-                        .kerning(4) // Changed from .tracking
                         .multilineTextAlignment(.center)
                         .onChange(of: otp) { newValue in
                             if newValue.count > 6 {

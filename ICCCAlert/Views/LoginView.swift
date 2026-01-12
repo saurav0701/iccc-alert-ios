@@ -77,7 +77,6 @@ struct LoginView: View {
                                 Text("Real-time monitoring & alerts")
                                     .font(.system(size: 16, weight: .medium))
                                     .foregroundColor(.white.opacity(0.85))
-                                    .kerning(0.5) // Changed from .tracking
                             }
                         }
                         .padding(.bottom, 50)
@@ -109,7 +108,6 @@ struct LoginView: View {
                                         Text("MOBILE NUMBER")
                                             .font(.system(size: 12, weight: .semibold))
                                             .foregroundColor(.secondary)
-                                            .kerning(0.8)
                                         
                                         HStack(spacing: 16) {
                                             // Country Code
@@ -151,7 +149,6 @@ struct LoginView: View {
                                         Text("VERIFICATION CODE")
                                             .font(.system(size: 12, weight: .semibold))
                                             .foregroundColor(.secondary)
-                                            .kerning(0.8)
                                         
                                         HStack(spacing: 12) {
                                             Image(systemName: "lock.shield.fill")
@@ -167,7 +164,6 @@ struct LoginView: View {
                                                 .keyboardType(.numberPad)
                                                 .textContentType(.oneTimeCode)
                                                 .font(.system(size: 20, weight: .semibold))
-                                                .kerning(3) // Changed from .tracking
                                                 .foregroundColor(.primary)
                                         }
                                         .padding(.vertical, 18)
