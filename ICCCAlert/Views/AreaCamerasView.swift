@@ -517,6 +517,7 @@ struct AreaCameraMapView: View {
     @State private var selectedCamera: Camera? = nil
     @State private var showOnlineOnly = true
     @State private var showFullScreenPlayer = false
+    @State private var configuration = MapConfiguration()
     
     init(area: String) {
         self.area = area
@@ -544,13 +545,15 @@ struct AreaCameraMapView: View {
     
     var body: some View {
         ZStack {
+            // Use EnhancedClusteredMapView instead of EnhancedCameraMapView
             EnhancedClusteredMapView(
                 region: $region,
                 cameras: filteredCameras,
                 selectedCamera: $selectedCamera,
-                mapStyle: .hybrid
+                mapStyle: .hybrid,
+                configuration: configuration
             )
-            .edgesIgnoringSafeArea(.all)
+            .ignoresSafeArea()
             
             VStack {
                 HStack {
@@ -594,6 +597,17 @@ struct AreaCameraMapView: View {
                                     .fontWeight(.medium)
                             }
                         }
+                        
+                        if configuration.showClustering {
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(Color.blue)
+                                    .frame(width: 12, height: 12)
+                                Text("Cluster")
+                                    .font(.caption)
+                                    .fontWeight(.medium)
+                            }
+                        }
                     }
                     .padding(12)
                     .background(Color(.systemBackground).opacity(0.95))
@@ -610,7 +624,11 @@ struct AreaCameraMapView: View {
                     Spacer()
                     ModernCameraInfoCard(
                         camera: camera,
-                        onClose: { selectedCamera = nil },
+                        onClose: { 
+                            withAnimation(.spring()) {
+                                selectedCamera = nil
+                            }
+                        },
                         onView: {
                             if camera.isOnline && camera.webrtcStreamURL != nil {
                                 showFullScreenPlayer = true
@@ -636,10 +654,8 @@ struct AreaCameraMapView: View {
     private func adjustMapToShowCameras() {
         guard !filteredCameras.isEmpty else { return }
         
-        var minLat = 90.0
-        var maxLat = -90.0
-        var minLng = 180.0
-        var maxLng = -180.0
+        var minLat = 90.0, maxLat = -90.0
+        var minLng = 180.0, maxLng = -180.0
         
         for camera in filteredCameras {
             guard let lat = Double(camera.latitude),
