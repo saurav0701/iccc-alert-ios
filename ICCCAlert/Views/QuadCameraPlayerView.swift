@@ -490,7 +490,7 @@ struct QuadCameraPlayerView: View {
         
         for strategy in strategies {
             DispatchQueue.main.asyncAfter(deadline: .now() + strategy.loadDelay) {
-                withAnimation(.easeIn(duration: 0.3)) {
+                _ = withAnimation(.easeIn(duration: 0.3)) {
                     loadedCameras.insert(strategy.cameraId)
                 }
                 
@@ -852,8 +852,6 @@ struct QuadCameraCell: View {
     }
 }
 
-// MARK: - Quad WebRTC Player with Health Tracking
-
 struct QuadWebRTCPlayer: UIViewRepresentable {
     let streamURL: URL
     let cameraId: String
@@ -921,6 +919,6 @@ struct QuadWebRTCPlayer: UIViewRepresentable {
             self.isLoading = false
         }
     }
-    
+
     }
 }
