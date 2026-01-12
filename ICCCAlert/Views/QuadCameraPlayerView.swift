@@ -1,7 +1,7 @@
 import SwiftUI
 import WebKit
 
-// MARK: - Quad Camera Player View (4 cameras simultaneously)
+// MARK: - Updated Quad Camera Player View with Optimization
 
 struct QuadCameraPlayerView: View {
     let multiView: MultiCameraView
@@ -9,11 +9,15 @@ struct QuadCameraPlayerView: View {
     @Environment(\.presentationMode) var presentationMode
     @StateObject private var cameraManager = CameraManager.shared
     @StateObject private var screenshotManager = ScreenshotManager.shared
+    @StateObject private var optimizer = MultiCameraOptimizer.shared
+    @StateObject private var bandwidthManager = BandwidthManager.shared
     
     @State private var showControls = true
     @State private var hideControlsTask: DispatchWorkItem?
     @State private var selectedCameraIndex: Int?
     @State private var showFullscreenCamera: Camera?
+    @State private var loadedCameras: Set<String> = []
+    @State private var selectedQuality: BandwidthManager.StreamQuality = .auto
     
     var cameras: [Camera] {
         multiView.cameraIds.compactMap { cameraManager.getCameraById($0) }
@@ -35,10 +39,18 @@ struct QuadCameraPlayerView: View {
                     }
                 }
                 
-                // PERMANENT Back Button (Always Visible)
+                // PERMANENT Back Button
                 permanentBackButton
                 
-                // Controls Overlay (Optional)
+                // NEW: Performance overlay
+                MultiCameraPerformanceOverlay()
+                
+                // NEW: Memory warning banner
+                if optimizer.isMemoryWarning {
+                    memoryWarningBanner
+                }
+                
+                // Controls Overlay
                 if showControls {
                     controlsOverlay
                         .transition(.opacity)
@@ -62,15 +74,20 @@ struct QuadCameraPlayerView: View {
         .navigationBarHidden(true)
         .statusBar(hidden: true)
         .onAppear {
+            setupMultiCameraOptimization()
+            loadCamerasProgressively()
             scheduleHideControls()
             logViewInfo()
+        }
+        .onDisappear {
+            cleanupOptimization()
         }
         .fullScreenCover(item: $showFullscreenCamera) { camera in
             UnifiedCameraPlayerView(camera: camera)
         }
     }
     
-    // MARK: - Permanent Back Button (Always Visible)
+    // MARK: - Permanent Back Button
     
     private var permanentBackButton: some View {
         VStack {
@@ -103,6 +120,52 @@ struct QuadCameraPlayerView: View {
         }
     }
     
+    // MARK: - NEW: Memory Warning Banner
+    
+    private var memoryWarningBanner: some View {
+        VStack {
+            HStack(spacing: 12) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 18))
+                    .foregroundColor(.orange)
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("High Memory Usage")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(.white)
+                    Text("Consider viewing fewer cameras")
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.8))
+                }
+                
+                Spacer()
+                
+                Button("Optimize") {
+                    withAnimation {
+                        optimizer.setOptimizationMode(.efficiency)
+                    }
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.blue)
+                .foregroundColor(.white)
+                .cornerRadius(8)
+            }
+            .padding()
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.black.opacity(0.9))
+                    .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 2)
+            )
+            .padding(.horizontal)
+            .padding(.top, 70)
+            
+            Spacer()
+        }
+        .transition(.move(edge: .top).combined(with: .opacity))
+    }
+    
     // MARK: - Camera Layouts
     
     private func singleCameraView(camera: Camera, geometry: GeometryProxy) -> some View {
@@ -110,6 +173,7 @@ struct QuadCameraPlayerView: View {
             camera: camera,
             index: 0,
             selectedIndex: $selectedCameraIndex,
+            shouldLoad: loadedCameras.contains(camera.id),
             onDoubleTap: {
                 showFullscreenCamera = camera
             },
@@ -126,6 +190,7 @@ struct QuadCameraPlayerView: View {
                 camera: cameras[0],
                 index: 0,
                 selectedIndex: $selectedCameraIndex,
+                shouldLoad: loadedCameras.contains(cameras[0].id),
                 onDoubleTap: {
                     showFullscreenCamera = cameras[0]
                 },
@@ -139,6 +204,7 @@ struct QuadCameraPlayerView: View {
                 camera: cameras[1],
                 index: 1,
                 selectedIndex: $selectedCameraIndex,
+                shouldLoad: loadedCameras.contains(cameras[1].id),
                 onDoubleTap: {
                     showFullscreenCamera = cameras[1]
                 },
@@ -157,6 +223,7 @@ struct QuadCameraPlayerView: View {
                     camera: cameras[0],
                     index: 0,
                     selectedIndex: $selectedCameraIndex,
+                    shouldLoad: loadedCameras.contains(cameras[0].id),
                     onDoubleTap: {
                         showFullscreenCamera = cameras[0]
                     },
@@ -170,6 +237,7 @@ struct QuadCameraPlayerView: View {
                         camera: cameras[1],
                         index: 1,
                         selectedIndex: $selectedCameraIndex,
+                        shouldLoad: loadedCameras.contains(cameras[1].id),
                         onDoubleTap: {
                             showFullscreenCamera = cameras[1]
                         },
@@ -189,6 +257,7 @@ struct QuadCameraPlayerView: View {
                         camera: cameras[2],
                         index: 2,
                         selectedIndex: $selectedCameraIndex,
+                        shouldLoad: loadedCameras.contains(cameras[2].id),
                         onDoubleTap: {
                             showFullscreenCamera = cameras[2]
                         },
@@ -205,6 +274,7 @@ struct QuadCameraPlayerView: View {
                         camera: cameras[3],
                         index: 3,
                         selectedIndex: $selectedCameraIndex,
+                        shouldLoad: loadedCameras.contains(cameras[3].id),
                         onDoubleTap: {
                             showFullscreenCamera = cameras[3]
                         },
@@ -240,7 +310,6 @@ struct QuadCameraPlayerView: View {
     
     private var controlsOverlay: some View {
         VStack {
-            // Top controls
             HStack {
                 Spacer()
                 
@@ -261,7 +330,7 @@ struct QuadCameraPlayerView: View {
                 .padding(.trailing)
             }
             .padding()
-            .padding(.top, 40) // Add space for back button
+            .padding(.top, 40)
             .background(
                 LinearGradient(
                     colors: [Color.black.opacity(0.5), Color.clear],
@@ -272,11 +341,8 @@ struct QuadCameraPlayerView: View {
             
             Spacer()
             
-            // Bottom controls
             VStack(spacing: 16) {
-                // Action buttons
                 HStack(spacing: 30) {
-                    // Screenshot all
                     ControlButton(
                         icon: "camera.fill",
                         label: "Screenshot",
@@ -285,7 +351,6 @@ struct QuadCameraPlayerView: View {
                     
                     Spacer()
                     
-                    // Refresh all
                     ControlButton(
                         icon: "arrow.clockwise",
                         label: "Refresh",
@@ -294,7 +359,6 @@ struct QuadCameraPlayerView: View {
                 }
                 .padding(.horizontal, 40)
                 
-                // LIVE indicator
                 HStack {
                     HStack(spacing: 4) {
                         Image(systemName: "circle.fill")
@@ -309,6 +373,15 @@ struct QuadCameraPlayerView: View {
                     .padding(.vertical, 5)
                     .background(Color.black.opacity(0.6))
                     .cornerRadius(12)
+                    
+                    // NEW: Quality indicator
+                    Text(selectedQuality.rawValue)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.blue.opacity(0.6))
+                        .cornerRadius(10)
                     
                     Spacer()
                     
@@ -356,7 +429,7 @@ struct QuadCameraPlayerView: View {
                     .shadow(radius: 10)
             )
             .padding(.horizontal)
-            .padding(.top, 80) // Moved down to avoid back button
+            .padding(.top, 80)
             
             Spacer()
         }
@@ -370,8 +443,79 @@ struct QuadCameraPlayerView: View {
         return formatter.string(from: Date())
     }
     
+    private func setupMultiCameraOptimization() {
+        let cameraCount = cameras.count
+        
+        // Register all streams with priorities
+        for (index, camera) in cameras.enumerated() {
+            let priority: MultiCameraOptimizer.StreamLoadingStrategy.LoadingPriority
+            switch index {
+            case 0:
+                priority = .immediate
+            case 1:
+                priority = .high
+            case 2:
+                priority = .normal
+            default:
+                priority = .low
+            }
+            
+            optimizer.registerStream(cameraId: camera.id, priority: priority)
+        }
+        
+        // Get and apply recommended quality
+        selectedQuality = bandwidthManager.getRecommendedQuality(forCameraCount: cameraCount)
+        
+        DebugLogger.shared.log(
+            "🎬 Quad view quality: \(selectedQuality.rawValue) for \(cameraCount) cameras",
+            emoji: "🎬",
+            color: .blue
+        )
+        
+        DebugLogger.shared.log(
+            "⚙️ Optimization: \(optimizer.optimizationMode.rawValue) mode",
+            emoji: "⚙️",
+            color: .blue
+        )
+    }
+    
+    private func loadCamerasProgressively() {
+        let strategies = optimizer.getProgressiveLoadingStrategy(for: cameras.map { $0.id })
+        
+        DebugLogger.shared.log(
+            "📋 Progressive loading: \(strategies.count) cameras",
+            emoji: "📋",
+            color: .blue
+        )
+        
+        for strategy in strategies {
+            DispatchQueue.main.asyncAfter(deadline: .now() + strategy.loadDelay) {
+                withAnimation(.easeIn(duration: 0.3)) {
+                    loadedCameras.insert(strategy.cameraId)
+                }
+                
+                DebugLogger.shared.log(
+                    "✅ Loaded camera: \(strategy.cameraId) (priority: \(strategy.priority))",
+                    emoji: "✅",
+                    color: .green
+                )
+            }
+        }
+    }
+    
+    private func cleanupOptimization() {
+        for camera in cameras {
+            optimizer.unregisterStream(cameraId: camera.id)
+        }
+        
+        DebugLogger.shared.log(
+            "🧹 Cleaned up \(cameras.count) streams",
+            emoji: "🧹",
+            color: .gray
+        )
+    }
+    
     private func captureScreenshot() {
-        // Capture screenshot of entire quad view
         guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
               let window = windowScene.windows.first else {
             return
@@ -382,22 +526,17 @@ struct QuadCameraPlayerView: View {
             window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
         }
         
-        // Add metadata overlay
         let annotatedImage = addMetadata(to: image)
         
-        // Save to photos
         UIImageWriteToSavedPhotosAlbum(annotatedImage, nil, nil, nil)
         
-        // Show success indicator
         screenshotManager.screenshotSaved = true
         
-        // Haptic feedback
         let generator = UINotificationFeedbackGenerator()
         generator.notificationOccurred(.success)
         
         DebugLogger.shared.log("📸 Quad view screenshot captured", emoji: "📸", color: .green)
         
-        // Reset indicator after 2 seconds
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             screenshotManager.screenshotSaved = false
         }
@@ -409,7 +548,6 @@ struct QuadCameraPlayerView: View {
         return renderer.image { context in
             image.draw(at: .zero)
             
-            // Add view name overlay
             let paragraphStyle = NSMutableParagraphStyle()
             paragraphStyle.alignment = .left
             
@@ -431,7 +569,6 @@ struct QuadCameraPlayerView: View {
             let padding: CGFloat = 16
             let textY: CGFloat = 40
             
-            // Semi-transparent background
             let backgroundRect = CGRect(
                 x: 0,
                 y: 0,
@@ -454,15 +591,17 @@ struct QuadCameraPlayerView: View {
     }
     
     private func refreshAllStreams() {
-        // Refresh all camera streams
         DebugLogger.shared.log("🔄 Refreshing all streams", emoji: "🔄", color: .blue)
         
-        // Trigger re-render by toggling controls
         withAnimation {
             showControls = false
         }
         
+        loadedCameras.removeAll()
+        
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            loadCamerasProgressively()
+            
             withAnimation {
                 showControls = true
             }
@@ -494,44 +633,65 @@ struct QuadCameraPlayerView: View {
     }
 }
 
-// MARK: - Quad Camera Cell
+// MARK: - Updated Quad Camera Cell with Health Monitoring
 
 struct QuadCameraCell: View {
     let camera: Camera
     let index: Int
     @Binding var selectedIndex: Int?
+    let shouldLoad: Bool
     let onDoubleTap: () -> Void
     let onSingleTap: () -> Void
     
+    @StateObject private var healthMonitor = StreamHealthMonitor.shared
     @State private var playerState: PlayerState = .loading
     @State private var isLoading = true
     @State private var webView: WKWebView?
-    @State private var tapCount = 0
+    @State private var shouldReconnect = false
     
     var isSelected: Bool {
         selectedIndex == index
     }
     
+    var streamHealth: StreamHealthMonitor.StreamHealth? {
+        healthMonitor.streamHealths[camera.id]
+    }
+    
     var body: some View {
         ZStack {
-            if let urlString = camera.webrtcStreamURL, let url = URL(string: urlString) {
-                QuadWebRTCPlayer(
-                    streamURL: url,
-                    cameraId: camera.id,
-                    playerState: $playerState,
-                    isLoading: $isLoading,
-                    webView: $webView
-                )
+            if shouldLoad {
+                if let urlString = camera.webrtcStreamURL, let url = URL(string: urlString) {
+                    QuadWebRTCPlayer(
+                        streamURL: url,
+                        cameraId: camera.id,
+                        playerState: $playerState,
+                        isLoading: $isLoading,
+                        webView: $webView
+                    )
+                } else {
+                    offlineView
+                }
             } else {
-                offlineView
+                loadingPlaceholder
             }
             
             // Loading indicator
-            if isLoading {
+            if isLoading && shouldLoad {
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
                     .scaleEffect(0.8)
             }
+            
+            // NEW: Compact status overlay
+            VStack {
+                HStack {
+                    StreamStatusOverlay(cameraId: camera.id, compact: true)
+                        .padding(6)
+                    Spacer()
+                }
+                Spacer()
+            }
+            .opacity(shouldLoad ? 1 : 0)
             
             // Camera label overlay
             VStack {
@@ -567,8 +727,24 @@ struct QuadCameraCell: View {
                 
                 Spacer()
                 
+                // NEW: Stalled/Reconnecting indicator
+                if let health = streamHealth, health.isStalled, shouldLoad {
+                    VStack(spacing: 6) {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(0.7)
+                        Text("Reconnecting...")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(.white)
+                    }
+                    .padding(8)
+                    .background(Color.black.opacity(0.7))
+                    .cornerRadius(6)
+                    .padding(.bottom, 8)
+                }
+                
                 // Tap to expand hint
-                if !isLoading {
+                if !isLoading && shouldLoad {
                     Text("Tap to expand")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundColor(.white.opacity(0.7))
@@ -593,6 +769,27 @@ struct QuadCameraCell: View {
             selectedIndex = index
             onSingleTap()
         }
+        .onAppear {
+            if shouldLoad {
+                setupHealthMonitoring()
+            }
+        }
+        .onDisappear {
+            cleanupHealthMonitoring()
+        }
+        .onChange(of: shouldLoad) { newValue in
+            if newValue {
+                setupHealthMonitoring()
+            } else {
+                cleanupHealthMonitoring()
+            }
+        }
+        .onChange(of: shouldReconnect) { _ in
+            if shouldReconnect {
+                reconnectStream()
+                shouldReconnect = false
+            }
+        }
     }
     
     private var offlineView: some View {
@@ -610,9 +807,52 @@ struct QuadCameraCell: View {
             }
         }
     }
+    
+    private var loadingPlaceholder: some View {
+        ZStack {
+            Color.black.opacity(0.5)
+            
+            VStack(spacing: 8) {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .scaleEffect(0.8)
+                
+                Text("Loading...")
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.7))
+            }
+        }
+    }
+    
+    // NEW: Health monitoring methods
+    private func setupHealthMonitoring() {
+        healthMonitor.registerStream(cameraId: camera.id) { [self] in
+            DispatchQueue.main.async {
+                self.shouldReconnect = true
+            }
+        }
+    }
+    
+    private func cleanupHealthMonitoring() {
+        healthMonitor.unregisterStream(cameraId: camera.id)
+    }
+    
+    private func reconnectStream() {
+        playerState = .loading
+        isLoading = true
+        
+        if let webView = webView, let urlString = camera.webrtcStreamURL, let url = URL(string: urlString) {
+            let request = URLRequest(
+                url: url,
+                cachePolicy: .reloadIgnoringLocalAndRemoteCacheData,
+                timeoutInterval: 30
+            )
+            webView.load(request)
+        }
+    }
 }
 
-// MARK: - Quad WebRTC Player
+// MARK: - Quad WebRTC Player with Health Tracking
 
 struct QuadWebRTCPlayer: UIViewRepresentable {
     let streamURL: URL
@@ -652,10 +892,11 @@ struct QuadWebRTCPlayer: UIViewRepresentable {
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
         uiView.stopLoading()
         uiView.loadHTMLString("", baseURL: nil)
+        coordinator.stopHealthTracking()
     }
     
     func makeCoordinator() -> Coordinator {
-        Coordinator(playerState: $playerState, isLoading: $isLoading)
+        Coordinator(cameraId: cameraId, playerState: $playerState, isLoading: $isLoading)
     }
     
     class Coordinator: NSObject, WKNavigationDelegate {
@@ -679,6 +920,13 @@ struct QuadWebRTCPlayer: UIViewRepresentable {
                 self.playerState = .failed("Connection failed")
                 self.isLoading = false
             }
+             StreamHealthMonitor.shared.updateStreamPacket(cameraId: cameraId, bitrateKbps: 1500)
+        
+        // Schedule periodic updates (simulate packet reception)
+        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            StreamHealthMonitor.shared.updateStreamPacket(cameraId: self.cameraId)
+        }
+        
         }
     }
 }

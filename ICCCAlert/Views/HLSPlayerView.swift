@@ -148,6 +148,8 @@ struct UnifiedCameraPlayerView: View {
     
     @StateObject private var pipManager = PiPManager.shared
     @StateObject private var screenshotManager = ScreenshotManager.shared
+    @StateObject private var healthMonitor = StreamHealthMonitor.shared
+    @StateObject private var bandwidthManager = BandwidthManager.shared
     
     @State private var playerState: PlayerState = .loading
     @State private var showControls = true
@@ -157,6 +159,9 @@ struct UnifiedCameraPlayerView: View {
     @State private var showScreenshotOptions = false
     @State private var showRecordingIndicator = false
     @State private var playbackSpeed: Float = 1.0
+    @State private var selectedQuality: BandwidthManager.StreamQuality = .auto
+    @State private var shouldReconnect = false
+    @State private var showQualitySelector = false
     
     var body: some View {
         GeometryReader { geometry in
@@ -176,12 +181,29 @@ struct UnifiedCameraPlayerView: View {
                     errorView(message: "Camera stream not available")
                 }
                 
+                // NEW: Stream status overlay
+                VStack {
+                    HStack {
+                        StreamStatusOverlay(cameraId: camera.id, compact: false)
+                            .padding(.top, 60)
+                            .padding(.leading, 16)
+                        Spacer()
+                    }
+                    Spacer()
+                }
+                .opacity(showControls ? 1 : 0)
+                
                 if isLoading {
                     loadingOverlay
                 }
                 
                 if case .failed(let message) = playerState {
                     failedOverlay(message: message)
+                }
+                
+                // NEW: Reconnecting overlay
+                if case .retrying(let attempt) = playerState {
+                    ReconnectingOverlay(attempt: attempt, maxAttempts: 3)
                 }
                 
                 if showControls && !isLoading {
@@ -199,6 +221,24 @@ struct UnifiedCameraPlayerView: View {
                     screenshotSavedIndicator
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
+                
+                // NEW: Quality selector sheet
+                if showQualitySelector {
+                    Color.black.opacity(0.4)
+                        .edgesIgnoringSafeArea(.all)
+                        .onTapGesture {
+                            withAnimation {
+                                showQualitySelector = false
+                            }
+                        }
+                    
+                    VStack {
+                        Spacer()
+                        StreamQualitySelector(selectedQuality: $selectedQuality)
+                            .padding()
+                            .transition(.move(edge: .bottom))
+                    }
+                }
             }
         }
         .navigationBarHidden(true)
@@ -211,16 +251,24 @@ struct UnifiedCameraPlayerView: View {
             }
         }
         .onAppear {
+            setupHealthMonitoring()
+            applyRecommendedQuality()
             scheduleHideControls()
             logCameraInfo()
         }
-        .statusBar(hidden: true)
-        .sheet(isPresented: $showScreenshotOptions) {
-            screenshotOptionsSheet
+        .onDisappear {
+            cleanupHealthMonitoring()
         }
+        .onChange(of: shouldReconnect) { _ in
+            if shouldReconnect {
+                reconnectStream()
+                shouldReconnect = false
+            }
+        }
+        .statusBar(hidden: true)
     }
     
-    // MARK: - Enhanced Controls Overlay (UPDATED - Removed Quality & Info buttons)
+    // MARK: - Enhanced Controls Overlay
     
     private func controlsOverlay(geometry: GeometryProxy) -> some View {
         VStack {
@@ -286,13 +334,26 @@ struct UnifiedCameraPlayerView: View {
             
             // Bottom controls
             VStack(spacing: 16) {
-                // Action buttons row (ONLY Screenshot and PiP)
+                // Action buttons row
                 HStack(spacing: 40) {
                     // Screenshot button
                     ControlButton(
                         icon: "camera.fill",
                         label: "Capture",
                         action: captureScreenshot
+                    )
+                    
+                    Spacer()
+                    
+                    // NEW: Quality button
+                    ControlButton(
+                        icon: "wand.and.stars",
+                        label: "Quality",
+                        action: {
+                            withAnimation {
+                                showQualitySelector.toggle()
+                            }
+                        }
                     )
                     
                     Spacer()
@@ -306,7 +367,7 @@ struct UnifiedCameraPlayerView: View {
                 }
                 .padding(.horizontal, 60)
                 
-                // LIVE indicator
+                // LIVE indicator with network badge
                 HStack {
                     HStack(spacing: 4) {
                         Image(systemName: "circle.fill")
@@ -321,6 +382,9 @@ struct UnifiedCameraPlayerView: View {
                     .padding(.vertical, 5)
                     .background(Color.black.opacity(0.6))
                     .cornerRadius(12)
+                    
+                    // NEW: Network status badge
+                    NetworkStatusBadge()
                     
                     Spacer()
                     
@@ -357,7 +421,6 @@ struct UnifiedCameraPlayerView: View {
                 }
             
             VStack(spacing: 20) {
-                // Preview title
                 HStack {
                     Text("Screenshot Preview")
                         .font(.title2)
@@ -374,7 +437,6 @@ struct UnifiedCameraPlayerView: View {
                 }
                 .padding(.horizontal)
                 
-                // Image preview
                 Image(uiImage: screenshot)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
@@ -382,9 +444,7 @@ struct UnifiedCameraPlayerView: View {
                     .cornerRadius(12)
                     .shadow(radius: 10)
                 
-                // Action buttons
                 HStack(spacing: 20) {
-                    // Save button
                     Button(action: { saveScreenshot(screenshot) }) {
                         VStack(spacing: 8) {
                             Image(systemName: "square.and.arrow.down.fill")
@@ -399,7 +459,6 @@ struct UnifiedCameraPlayerView: View {
                         .cornerRadius(12)
                     }
                     
-                    // Share button
                     Button(action: { shareScreenshot(screenshot) }) {
                         VStack(spacing: 8) {
                             Image(systemName: "square.and.arrow.up.fill")
@@ -420,8 +479,6 @@ struct UnifiedCameraPlayerView: View {
         }
         .transition(.opacity)
     }
-    
-    // MARK: - Screenshot Saved Indicator
     
     private var screenshotSavedIndicator: some View {
         VStack {
@@ -487,16 +544,30 @@ struct UnifiedCameraPlayerView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
             
-            Button(action: { presentationMode.wrappedValue.dismiss() }) {
-                HStack {
-                    Image(systemName: "xmark.circle")
-                    Text("Close")
+            HStack(spacing: 16) {
+                Button(action: { reconnectStream() }) {
+                    HStack {
+                        Image(systemName: "arrow.clockwise")
+                        Text("Retry")
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
                 }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 12)
-                .background(Color.red)
-                .foregroundColor(.white)
-                .cornerRadius(10)
+                
+                Button(action: { presentationMode.wrappedValue.dismiss() }) {
+                    HStack {
+                        Image(systemName: "xmark.circle")
+                        Text("Close")
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
+                    .background(Color.red)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -522,38 +593,6 @@ struct UnifiedCameraPlayerView: View {
         }
     }
     
-    // MARK: - Screenshot Options Sheet
-    
-    private var screenshotOptionsSheet: some View {
-        NavigationView {
-            List {
-                Button(action: {
-                    showScreenshotOptions = false
-                    captureScreenshot()
-                }) {
-                    Label("Capture Screenshot", systemImage: "camera.fill")
-                }
-                
-                Button(action: {
-                    showScreenshotOptions = false
-                    // Future: Start recording
-                }) {
-                    Label("Start Recording", systemImage: "record.circle")
-                }
-                .disabled(true) // Future feature
-            }
-            .navigationTitle("Capture Options")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Cancel") {
-                        showScreenshotOptions = false
-                    }
-                }
-            }
-        }
-    }
-    
     // MARK: - Helper Methods
     
     private var currentTimestamp: String {
@@ -562,24 +601,76 @@ struct UnifiedCameraPlayerView: View {
         return formatter.string(from: Date())
     }
     
+    private func setupHealthMonitoring() {
+        healthMonitor.registerStream(cameraId: camera.id) { [self] in
+            DispatchQueue.main.async {
+                self.shouldReconnect = true
+            }
+        }
+        
+        DebugLogger.shared.log(
+            "✅ Health monitoring enabled for: \(camera.displayName)",
+            emoji: "✅",
+            color: .green
+        )
+    }
+    
+    private func cleanupHealthMonitoring() {
+        healthMonitor.unregisterStream(cameraId: camera.id)
+        
+        DebugLogger.shared.log(
+            "🔚 Health monitoring stopped for: \(camera.displayName)",
+            emoji: "🔚",
+            color: .gray
+        )
+    }
+    
+    private func applyRecommendedQuality() {
+        selectedQuality = bandwidthManager.getRecommendedQuality(forCameraCount: 1)
+        
+        DebugLogger.shared.log(
+            "🎬 Recommended quality: \(selectedQuality.rawValue) (\(bandwidthManager.currentBandwidth.rawValue))",
+            emoji: "🎬",
+            color: .blue
+        )
+    }
+    
+    private func reconnectStream() {
+        let attempts = healthMonitor.streamHealths[camera.id]?.reconnectAttempts ?? 1
+        playerState = .retrying(attempts)
+        
+        DebugLogger.shared.log(
+            "🔄 Reconnecting stream (attempt \(attempts)): \(camera.displayName)",
+            emoji: "🔄",
+            color: .yellow
+        )
+        
+        // Force reload WebView
+        if let webView = webView, let urlString = camera.webrtcStreamURL, let url = URL(string: urlString) {
+            let request = URLRequest(
+                url: url,
+                cachePolicy: .reloadIgnoringLocalAndRemoteCacheData,
+                timeoutInterval: 30
+            )
+            webView.load(request)
+        }
+    }
+    
     private func captureScreenshot() {
         guard let webView = webView else {
             DebugLogger.shared.log("⚠️ WebView not available", emoji: "⚠️", color: .orange)
             return
         }
         
-        // Haptic feedback
         let generator = UIImpactFeedbackGenerator(style: .medium)
         generator.impactOccurred()
         
-        // Flash effect
         withAnimation(.easeInOut(duration: 0.2)) {
             showControls = false
         }
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             screenshotManager.captureScreenshot(from: webView, camera: camera) { _ in
-                // Haptic success feedback
                 let successGenerator = UINotificationFeedbackGenerator()
                 successGenerator.notificationOccurred(.success)
             }
@@ -659,8 +750,6 @@ struct ControlButton: View {
     }
 }
 
-// MARK: - Enhanced WebRTC Player View
-
 struct EnhancedWebRTCPlayerView: UIViewRepresentable {
     let streamURL: URL
     let cameraId: String
@@ -688,7 +777,6 @@ struct EnhancedWebRTCPlayerView: UIViewRepresentable {
         
         webView.load(request)
         
-        // Store webView reference
         DispatchQueue.main.async {
             self.webView = webView
         }
@@ -701,6 +789,7 @@ struct EnhancedWebRTCPlayerView: UIViewRepresentable {
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
         uiView.stopLoading()
         uiView.loadHTMLString("", baseURL: nil)
+        coordinator.stopHealthTracking()
     }
     
     func makeCoordinator() -> Coordinator {
@@ -712,6 +801,7 @@ struct EnhancedWebRTCPlayerView: UIViewRepresentable {
         @Binding var playerState: PlayerState
         @Binding var isLoading: Bool
         private var loadTimeout: Timer?
+        private var healthTrackingTimer: Timer?
         
         init(cameraId: String, playerState: Binding<PlayerState>, isLoading: Binding<Bool>) {
             self.cameraId = cameraId
@@ -741,6 +831,9 @@ struct EnhancedWebRTCPlayerView: UIViewRepresentable {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                 self.playerState = .playing
                 self.isLoading = false
+                
+                // NEW: Start health tracking
+                self.startHealthTracking()
             }
         }
         
@@ -775,8 +868,26 @@ struct EnhancedWebRTCPlayerView: UIViewRepresentable {
             }
         }
         
+        // NEW: Health tracking
+        private func startHealthTracking() {
+            healthTrackingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+                guard let self = self else { return }
+                // Simulate bitrate (in real app, get from WebRTC stats)
+                StreamHealthMonitor.shared.updateStreamPacket(
+                    cameraId: self.cameraId,
+                    bitrateKbps: Double.random(in: 1200...1800)
+                )
+            }
+        }
+        
+        func stopHealthTracking() {
+            healthTrackingTimer?.invalidate()
+            healthTrackingTimer = nil
+        }
+        
         deinit {
             loadTimeout?.invalidate()
+            stopHealthTracking()
         }
     }
 }
