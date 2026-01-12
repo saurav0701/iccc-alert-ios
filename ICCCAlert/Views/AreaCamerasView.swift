@@ -544,7 +544,7 @@ struct AreaCameraMapView: View {
     
     var body: some View {
         ZStack {
-            EnhancedCameraMapView(
+            EnhancedClusteredMapView(
                 region: $region,
                 cameras: filteredCameras,
                 selectedCamera: $selectedCamera,

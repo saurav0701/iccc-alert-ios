@@ -1,7 +1,7 @@
 import SwiftUI
 import MapKit
 
-// MARK: - Camera Map View (Google Hybrid Tiles)
+// MARK: - Camera Map View (Using Enhanced Components)
 
 struct CameraMapView: View {
     @StateObject private var cameraManager = CameraManager.shared
@@ -14,6 +14,8 @@ struct CameraMapView: View {
     @State private var showFullScreenPlayer = false
     @State private var showFilterSheet = false
     @State private var mapStyle: MapDisplayStyle = .hybrid
+    @State private var configuration = MapConfiguration()
+    @State private var showSettings = false
     
     init() {
         _region = State(initialValue: MKCoordinateRegion(
@@ -48,32 +50,22 @@ struct CameraMapView: View {
     
     var body: some View {
         ZStack {
-            // Map View
-            EnhancedCameraMapView(
+            // Enhanced Map with Clustering
+            EnhancedClusteredMapView(
                 region: $region,
                 cameras: filteredCameras,
                 selectedCamera: $selectedCamera,
-                mapStyle: mapStyle
+                mapStyle: mapStyle,
+                configuration: configuration
             )
             .ignoresSafeArea()
             
             // Top Controls
             VStack {
-                HStack {
+                HStack(spacing: 12) {
                     // Back Button
-                    Button(action: { presentationMode.wrappedValue.dismiss() }) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundColor(.white)
-                            .frame(width: 44, height: 44)
-                            .background(
-                                ZStack {
-                                    Color.black.opacity(0.3)
-                                    BlurView(style: .systemUltraThinMaterialDark)
-                                }
-                            )
-                            .clipShape(Circle())
-                            .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 4)
+                    MapControlButton(icon: "chevron.left") {
+                        presentationMode.wrappedValue.dismiss()
                     }
                     
                     Spacer()
@@ -95,24 +87,18 @@ struct CameraMapView: View {
                         }
                     )
                     .clipShape(Capsule())
-                    .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 4)
+                    .shadow(color: .black.opacity(0.3), radius: 10)
                     
                     Spacer()
                     
+                    // Settings Button
+                    MapControlButton(icon: "gearshape.fill") {
+                        showSettings = true
+                    }
+                    
                     // Filter Button
-                    Button(action: { showFilterSheet = true }) {
-                        Image(systemName: selectedArea != nil ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
-                            .font(.system(size: 22))
-                            .foregroundColor(.white)
-                            .frame(width: 44, height: 44)
-                            .background(
-                                ZStack {
-                                    Color.black.opacity(0.3)
-                                    BlurView(style: .systemUltraThinMaterialDark)
-                                }
-                            )
-                            .clipShape(Circle())
-                            .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 4)
+                    MapControlButton(icon: selectedArea != nil ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle") {
+                        showFilterSheet = true
                     }
                 }
                 .padding(.horizontal, 20)
@@ -120,21 +106,25 @@ struct CameraMapView: View {
                 
                 Spacer()
                 
-                // Legend at Bottom
+                // Enhanced Legend
                 HStack {
-                    legendView
+                    enhancedLegendView
                     Spacer()
                 }
                 .padding()
             }
             
-            // Camera Info Card (when camera selected)
+            // Camera Info Card
             if let camera = selectedCamera {
                 VStack {
                     Spacer()
                     ModernCameraInfoCard(
                         camera: camera,
-                        onClose: { selectedCamera = nil },
+                        onClose: {
+                            withAnimation(.spring()) {
+                                selectedCamera = nil
+                            }
+                        },
                         onView: {
                             if camera.isOnline && camera.webrtcStreamURL != nil {
                                 showFullScreenPlayer = true
@@ -150,6 +140,9 @@ struct CameraMapView: View {
         .sheet(isPresented: $showFilterSheet) {
             filterSheet
         }
+        .sheet(isPresented: $showSettings) {
+            mapSettingsSheet
+        }
         .fullScreenCover(isPresented: $showFullScreenPlayer) {
             if let camera = selectedCamera {
                 UnifiedCameraPlayerView(camera: camera)
@@ -160,8 +153,8 @@ struct CameraMapView: View {
         }
     }
     
-    private var legendView: some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private var enhancedLegendView: some View {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Circle()
                     .fill(Color.green)
@@ -181,11 +174,27 @@ struct CameraMapView: View {
                         .fontWeight(.medium)
                 }
             }
+            
+            if configuration.showClustering {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(Color.blue)
+                        .frame(width: 12, height: 12)
+                    Text("Cluster")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                }
+            }
         }
         .padding(12)
-        .background(Color(.systemBackground).opacity(0.95))
-        .cornerRadius(10)
-        .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 2)
+        .background(
+            ZStack {
+                Color(.systemBackground).opacity(0.95)
+                BlurView(style: .systemMaterial)
+            }
+        )
+        .cornerRadius(12)
+        .shadow(color: .black.opacity(0.15), radius: 10)
     }
     
     private var filterSheet: some View {
@@ -249,20 +258,65 @@ struct CameraMapView: View {
         }
     }
     
+    private var mapSettingsSheet: some View {
+        NavigationView {
+            List {
+                Section(header: Text("Map Style")) {
+                    ForEach(MapDisplayStyle.allCases, id: \.self) { style in
+                        Button(action: { 
+                            withAnimation {
+                                mapStyle = style
+                            }
+                        }) {
+                            HStack {
+                                Image(systemName: style.icon)
+                                Text(style.rawValue)
+                                Spacer()
+                                if mapStyle == style {
+                                    Image(systemName: "checkmark")
+                                        .foregroundColor(.blue)
+                                }
+                            }
+                        }
+                        .foregroundColor(.primary)
+                    }
+                }
+                
+                Section(header: Text("Display Options")) {
+                    Toggle("Show Clustering", isOn: $configuration.showClustering)
+                    Toggle("Animate Markers", isOn: $configuration.animateMarkers)
+                }
+                
+                if configuration.showClustering {
+                    Section(header: Text("Cluster Radius")) {
+                        HStack {
+                            Text("Radius: \(Int(configuration.clusterRadius))px")
+                            Spacer()
+                            Slider(value: $configuration.clusterRadius, in: 30...100, step: 10)
+                                .frame(width: 150)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Map Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { showSettings = false }
+                }
+            }
+        }
+    }
+    
     private func adjustMapToShowAllCameras() {
         guard !filteredCameras.isEmpty else { return }
         
-        var minLat = 90.0
-        var maxLat = -90.0
-        var minLng = 180.0
-        var maxLng = -180.0
+        var minLat = 90.0, maxLat = -90.0
+        var minLng = 180.0, maxLng = -180.0
         
         for camera in filteredCameras {
             guard let lat = Double(camera.latitude),
-                  let lng = Double(camera.longitude) else {
-                continue
-            }
-            
+                  let lng = Double(camera.longitude) else { continue }
             minLat = min(minLat, lat)
             maxLat = max(maxLat, lat)
             minLng = min(minLng, lng)
@@ -289,17 +343,12 @@ struct CameraMapView: View {
         
         guard !areaCameras.isEmpty else { return }
         
-        var minLat = 90.0
-        var maxLat = -90.0
-        var minLng = 180.0
-        var maxLng = -180.0
+        var minLat = 90.0, maxLat = -90.0
+        var minLng = 180.0, maxLng = -180.0
         
         for camera in areaCameras {
             guard let lat = Double(camera.latitude),
-                  let lng = Double(camera.longitude) else {
-                continue
-            }
-            
+                  let lng = Double(camera.longitude) else { continue }
             minLat = min(minLat, lat)
             maxLat = max(maxLat, lat)
             minLng = min(minLng, lng)
