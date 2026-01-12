@@ -25,54 +25,101 @@ struct RegistrationView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                // Background gradient
+                // Modern gradient background
                 LinearGradient(
                     gradient: Gradient(colors: [
-                        Color(red: 0.05, green: 0.4, blue: 0.95),
-                        Color(red: 0.1, green: 0.5, blue: 1.0)
+                        Color(red: 0.1, green: 0.2, blue: 0.45),
+                        Color(red: 0.05, green: 0.35, blue: 0.85)
                     ]),
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
                 .ignoresSafeArea()
                 
-                ScrollView {
+                // Background decoration
+                GeometryReader { geometry in
+                    Circle()
+                        .fill(Color.white.opacity(0.05))
+                        .frame(width: 280, height: 280)
+                        .offset(x: -80, y: -50)
+                        .blur(radius: 40)
+                    
+                    Circle()
+                        .fill(Color.cyan.opacity(0.08))
+                        .frame(width: 220, height: 220)
+                        .offset(x: geometry.size.width - 100, y: geometry.size.height - 120)
+                        .blur(radius: 50)
+                }
+                
+                ScrollView(showsIndicators: false) {
                     VStack(spacing: 0) {
-                        // Header
+                        // Header Section
                         VStack(spacing: 16) {
                             ZStack {
                                 Circle()
-                                    .fill(Color.white.opacity(0.2))
-                                    .frame(width: 80, height: 80)
+                                    .fill(
+                                        LinearGradient(
+                                            gradient: Gradient(colors: [
+                                                Color.white.opacity(0.25),
+                                                Color.white.opacity(0.1)
+                                            ]),
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                                    .frame(width: 90, height: 90)
+                                    .shadow(color: Color.black.opacity(0.1), radius: 15, x: 0, y: 8)
                                 
-                                Image(systemName: "person.badge.plus")
-                                    .font(.system(size: 40))
-                                    .foregroundColor(.white)
+                                Image(systemName: "person.crop.circle.badge.plus")
+                                    .font(.system(size: 44))
+                                    .foregroundStyle(
+                                        LinearGradient(
+                                            colors: [.white, .white.opacity(0.9)],
+                                            startPoint: .top,
+                                            endPoint: .bottom
+                                        )
+                                    )
                             }
                             
-                            Text("Create Account")
-                                .font(.system(size: 28, weight: .bold))
-                                .foregroundColor(.white)
-                            
-                            Text("Join ICCC Alert System")
-                                .font(.subheadline)
-                                .foregroundColor(.white.opacity(0.9))
+                            VStack(spacing: 6) {
+                                Text(step == .details ? "Join ICCC Alert" : "Verify Account")
+                                    .font(.system(size: 32, weight: .bold, design: .rounded))
+                                    .foregroundColor(.white)
+                                
+                                Text(step == .details ? "Create your account" : "Confirm your number")
+                                    .font(.system(size: 15, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.85))
+                            }
                         }
                         .padding(.top, 40)
-                        .padding(.bottom, 30)
+                        .padding(.bottom, 32)
                         
                         // Main Card
-                        VStack(spacing: 24) {
-                            // Progress Indicator
-                            HStack(spacing: 12) {
+                        VStack(spacing: 0) {
+                            // Progress Bar
+                            HStack(spacing: 10) {
                                 ForEach(0..<2) { index in
                                     Capsule()
-                                        .fill(index == 0 && step == .details || index == 1 && step == .otp ? 
-                                            Color.blue : Color.gray.opacity(0.3))
+                                        .fill(
+                                            index == 0 && step == .details || index == 1 && step == .otp ?
+                                            LinearGradient(
+                                                colors: [Color.blue, Color.blue.opacity(0.8)],
+                                                startPoint: .leading,
+                                                endPoint: .trailing
+                                            ) :
+                                            LinearGradient(
+                                                colors: [Color.gray.opacity(0.3), Color.gray.opacity(0.3)],
+                                                startPoint: .leading,
+                                                endPoint: .trailing
+                                            )
+                                        )
                                         .frame(height: 4)
+                                        .animation(.spring(response: 0.4), value: step)
                                 }
                             }
-                            .padding(.horizontal)
+                            .padding(.horizontal, 28)
+                            .padding(.top, 24)
+                            .padding(.bottom, 32)
                             
                             if step == .details {
                                 registrationForm
@@ -80,336 +127,479 @@ struct RegistrationView: View {
                                 otpVerificationForm
                             }
                             
+                            // Error Message
                             if !errorMessage.isEmpty {
-                                HStack(spacing: 8) {
-                                    Image(systemName: "exclamationmark.triangle.fill")
-                                        .font(.caption)
+                                HStack(spacing: 10) {
+                                    Image(systemName: "exclamationmark.circle.fill")
+                                        .font(.system(size: 16))
                                     Text(errorMessage)
-                                        .font(.caption)
+                                        .font(.system(size: 14, weight: .medium))
                                 }
                                 .foregroundColor(.red)
-                                .padding(.horizontal)
-                                .padding(.vertical, 12)
-                                .frame(maxWidth: .infinity)
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 14)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                                 .background(
-                                    RoundedRectangle(cornerRadius: 10)
+                                    RoundedRectangle(cornerRadius: 12)
                                         .fill(Color.red.opacity(0.1))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .strokeBorder(Color.red.opacity(0.3), lineWidth: 1)
+                                        )
                                 )
+                                .padding(.horizontal, 28)
+                                .padding(.bottom, 20)
+                                .transition(.move(edge: .top).combined(with: .opacity))
                             }
                         }
-                        .padding(28)
                         .background(
-                            RoundedRectangle(cornerRadius: 24)
+                            RoundedRectangle(cornerRadius: 30)
                                 .fill(Color(.systemBackground))
-                                .shadow(color: Color.black.opacity(0.1), radius: 20, x: 0, y: 10)
+                                .shadow(color: Color.black.opacity(0.15), radius: 30, x: 0, y: 15)
                         )
-                        .padding(.horizontal, 24)
-                        .padding(.bottom, 40)
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 50)
                     }
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
-            .navigationBarItems(
-                leading: Button(action: {
-                    presentationMode.wrappedValue.dismiss()
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 14, weight: .semibold))
-                        Text("Cancel")
-                            .fontWeight(.medium)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: {
+                        presentationMode.wrappedValue.dismiss()
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 20))
+                            Text("Close")
+                                .font(.system(size: 16, weight: .semibold))
+                        }
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(
+                            Capsule()
+                                .fill(Color.white.opacity(0.2))
+                        )
                     }
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(
-                        Capsule()
-                            .fill(Color.white.opacity(0.2))
-                    )
                 }
-            )
+            }
         }
     }
     
     var registrationForm: some View {
-        VStack(spacing: 20) {
-            Text("Personal Information")
-                .font(.headline)
-                .foregroundColor(.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            
-            // Name Field
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    Image(systemName: "person.fill")
-                        .font(.caption)
-                    Text("Full Name")
-                        .font(.subheadline)
-                        .bold()
+        VStack(spacing: 24) {
+            // Section: Personal Information
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(spacing: 8) {
+                    Image(systemName: "person.text.rectangle")
+                        .font(.system(size: 16))
+                        .foregroundColor(.blue)
+                    Text("Personal Information")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundColor(.primary)
                 }
-                .foregroundColor(.secondary)
+                .padding(.horizontal, 28)
                 
-                TextField("Enter your full name", text: $name)
-                    .textContentType(.name)
-                    .padding()
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(Color(.systemGray6))
-                    )
+                // Name Field
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("FULL NAME")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.secondary)
+                        .tracking(0.5)
+                    
+                    HStack(spacing: 14) {
+                        Image(systemName: "person.fill")
+                            .font(.system(size: 18))
+                            .foregroundColor(.blue.opacity(0.7))
+                            .frame(width: 24)
+                        
+                        TextField("", text: $name)
+                            .placeholder(when: name.isEmpty) {
+                                Text("Enter your full name")
+                                    .foregroundColor(.secondary.opacity(0.5))
+                            }
+                            .font(.system(size: 16))
+                            .textContentType(.name)
+                    }
+                    .padding(.vertical, 16)
+                    .padding(.horizontal, 18)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(14)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(!name.isEmpty ? Color.blue.opacity(0.5) : Color.clear, lineWidth: 1.5)
                     )
+                }
+                .padding(.horizontal, 28)
+                
+                // Phone Field
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("MOBILE NUMBER")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.secondary)
+                        .tracking(0.5)
+                    
+                    HStack(spacing: 14) {
+                        HStack(spacing: 6) {
+                            Text("🇮🇳")
+                                .font(.system(size: 18))
+                            Text("+91")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundColor(.primary)
+                        }
+                        .padding(.vertical, 12)
+                        .padding(.horizontal, 12)
+                        .background(Color(.systemGray5))
+                        .cornerRadius(10)
+                        
+                        TextField("", text: $phone)
+                            .placeholder(when: phone.isEmpty) {
+                                Text("10-digit number")
+                                    .foregroundColor(.secondary.opacity(0.5))
+                            }
+                            .keyboardType(.phonePad)
+                            .font(.system(size: 16, weight: .medium))
+                            .textContentType(.telephoneNumber)
+                            .onChange(of: phone) { newValue in
+                                if newValue.count > 10 {
+                                    phone = String(newValue.prefix(10))
+                                }
+                            }
+                    }
+                    .padding(.vertical, 16)
+                    .padding(.horizontal, 18)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(14)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(phone.count == 10 ? Color.blue.opacity(0.5) : Color.clear, lineWidth: 1.5)
+                    )
+                }
+                .padding(.horizontal, 28)
             }
             
-            // Phone Field
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    Image(systemName: "phone.fill")
-                        .font(.caption)
-                    Text("Phone Number")
-                        .font(.subheadline)
-                        .bold()
-                }
-                .foregroundColor(.secondary)
-                
-                HStack(spacing: 12) {
-                    Text("+91")
+            // Divider
+            Rectangle()
+                .fill(Color.gray.opacity(0.2))
+                .frame(height: 1)
+                .padding(.horizontal, 28)
+                .padding(.vertical, 8)
+            
+            // Section: Work Information
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(spacing: 8) {
+                    Image(systemName: "building.2")
+                        .font(.system(size: 16))
+                        .foregroundColor(.blue)
+                    Text("Work Information")
+                        .font(.system(size: 18, weight: .bold))
                         .foregroundColor(.primary)
-                        .padding(.leading, 4)
+                }
+                .padding(.horizontal, 28)
+                
+                // Area Field
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("AREA / LOCATION")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.secondary)
+                        .tracking(0.5)
                     
-                    Divider()
-                        .frame(height: 24)
+                    HStack(spacing: 14) {
+                        Image(systemName: "location.fill")
+                            .font(.system(size: 18))
+                            .foregroundColor(.blue.opacity(0.7))
+                            .frame(width: 24)
+                        
+                        TextField("", text: $area)
+                            .placeholder(when: area.isEmpty) {
+                                Text("Work area or location")
+                                    .foregroundColor(.secondary.opacity(0.5))
+                            }
+                            .font(.system(size: 16))
+                    }
+                    .padding(.vertical, 16)
+                    .padding(.horizontal, 18)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(14)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(!area.isEmpty ? Color.blue.opacity(0.5) : Color.clear, lineWidth: 1.5)
+                    )
+                }
+                .padding(.horizontal, 28)
+                
+                // Designation Field
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("DESIGNATION")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.secondary)
+                        .tracking(0.5)
                     
-                    TextField("10-digit mobile number", text: $phone)
-                        .keyboardType(.phonePad)
-                        .textContentType(.telephoneNumber)
-                        .onChange(of: phone) { newValue in
-                            if newValue.count > 10 {
-                                phone = String(newValue.prefix(10))
+                    HStack(spacing: 14) {
+                        Image(systemName: "briefcase.fill")
+                            .font(.system(size: 18))
+                            .foregroundColor(.blue.opacity(0.7))
+                            .frame(width: 24)
+                        
+                        TextField("", text: $designation)
+                            .placeholder(when: designation.isEmpty) {
+                                Text("Your job title")
+                                    .foregroundColor(.secondary.opacity(0.5))
+                            }
+                            .font(.system(size: 16))
+                    }
+                    .padding(.vertical, 16)
+                    .padding(.horizontal, 18)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(14)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(!designation.isEmpty ? Color.blue.opacity(0.5) : Color.clear, lineWidth: 1.5)
+                    )
+                }
+                .padding(.horizontal, 28)
+                
+                // Organisation Picker
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("ORGANISATION")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.secondary)
+                        .tracking(0.5)
+                    
+                    HStack(spacing: 0) {
+                        ForEach(organisations, id: \.self) { org in
+                            Button(action: {
+                                withAnimation(.spring(response: 0.3)) {
+                                    organisation = org
+                                }
+                            }) {
+                                Text(org)
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(organisation == org ? .white : .primary)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 14)
+                                    .background(
+                                        organisation == org ?
+                                        LinearGradient(
+                                            colors: [Color.blue, Color.blue.opacity(0.8)],
+                                            startPoint: .leading,
+                                            endPoint: .trailing
+                                        ) :
+                                        LinearGradient(
+                                            colors: [Color(.systemGray6), Color(.systemGray6)],
+                                            startPoint: .leading,
+                                            endPoint: .trailing
+                                        )
+                                    )
+                                    .cornerRadius(org == organisations.first ? 12 : 0, corners: [.topLeft, .bottomLeft])
+                                    .cornerRadius(org == organisations.last ? 12 : 0, corners: [.topRight, .bottomRight])
                             }
                         }
-                }
-                .padding()
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color(.systemGray6))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color.blue.opacity(0.3), lineWidth: 1)
-                )
-            }
-            
-            Divider()
-                .padding(.vertical, 4)
-            
-            Text("Work Information")
-                .font(.headline)
-                .foregroundColor(.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            
-            // Area Field
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    Image(systemName: "location.fill")
-                        .font(.caption)
-                    Text("Area")
-                        .font(.subheadline)
-                        .bold()
-                }
-                .foregroundColor(.secondary)
-                
-                TextField("Work area/location", text: $area)
-                    .padding()
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(Color(.systemGray6))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.blue.opacity(0.3), lineWidth: 1)
-                    )
-            }
-            
-            // Designation Field
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    Image(systemName: "briefcase.fill")
-                        .font(.caption)
-                    Text("Designation")
-                        .font(.subheadline)
-                        .bold()
-                }
-                .foregroundColor(.secondary)
-                
-                TextField("Your job title", text: $designation)
-                    .padding()
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(Color(.systemGray6))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.blue.opacity(0.3), lineWidth: 1)
-                    )
-            }
-            
-            // Organisation Picker
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    Image(systemName: "building.2.fill")
-                        .font(.caption)
-                    Text("Organisation")
-                        .font(.subheadline)
-                        .bold()
-                }
-                .foregroundColor(.secondary)
-                
-                Picker("Organisation", selection: $organisation) {
-                    ForEach(organisations, id: \.self) { org in
-                        Text(org).tag(org)
                     }
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.gray.opacity(0.2), lineWidth: 1)
+                    )
                 }
-                .pickerStyle(SegmentedPickerStyle())
-                .padding(.vertical, 4)
+                .padding(.horizontal, 28)
             }
             
             // Continue Button
             Button(action: register) {
-                HStack {
+                ZStack {
                     if isLoading {
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
                     } else {
-                        Text("Continue")
-                            .fontWeight(.semibold)
-                        Image(systemName: "arrow.right")
-                            .font(.system(size: 14, weight: .semibold))
+                        HStack(spacing: 10) {
+                            Text("Continue")
+                                .font(.system(size: 17, weight: .semibold))
+                            Image(systemName: "arrow.right.circle.fill")
+                                .font(.system(size: 20))
+                        }
                     }
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 16)
-                .background(
-                    LinearGradient(
-                        gradient: Gradient(colors: isFormValid && !isLoading ?
-                            [Color(red: 0.05, green: 0.4, blue: 0.95), Color(red: 0.1, green: 0.5, blue: 1.0)] :
-                            [Color.gray, Color.gray]
-                        ),
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
                 .foregroundColor(.white)
-                .cornerRadius(12)
-                .shadow(color: isFormValid && !isLoading ? Color.blue.opacity(0.3) : .clear, radius: 8, x: 0, y: 4)
+                .frame(maxWidth: .infinity)
+                .frame(height: 56)
+                .background(
+                    Group {
+                        if !isFormValid || isLoading {
+                            Color.gray.opacity(0.5)
+                        } else {
+                            LinearGradient(
+                                gradient: Gradient(colors: [
+                                    Color(red: 0.05, green: 0.35, blue: 0.85),
+                                    Color(red: 0.1, green: 0.45, blue: 0.95)
+                                ]),
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        }
+                    }
+                )
+                .cornerRadius(16)
+                .shadow(
+                    color: isFormValid && !isLoading ? Color.blue.opacity(0.4) : .clear,
+                    radius: 12,
+                    x: 0,
+                    y: 6
+                )
             }
             .disabled(!isFormValid || isLoading)
-            .padding(.top, 8)
+            .padding(.horizontal, 28)
+            .padding(.top, 12)
+            .padding(.bottom, 32)
         }
     }
     
     var otpVerificationForm: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 28) {
             // Success Icon
             ZStack {
                 Circle()
-                    .fill(Color.green.opacity(0.1))
-                    .frame(width: 80, height: 80)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color.green.opacity(0.15), Color.green.opacity(0.05)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 100, height: 100)
                 
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 50))
-                    .foregroundColor(.green)
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: 52))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [Color.green, Color.green.opacity(0.8)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .shadow(color: Color.green.opacity(0.3), radius: 8, x: 0, y: 4)
             }
+            .padding(.top, 20)
             
-            VStack(spacing: 8) {
+            VStack(spacing: 10) {
                 Text("Verify Your Number")
-                    .font(.title3)
-                    .fontWeight(.bold)
+                    .font(.system(size: 26, weight: .bold))
+                    .foregroundColor(.primary)
                 
-                Text("OTP sent to +91 \(phone)")
-                    .font(.subheadline)
+                Text("We've sent a code to")
+                    .font(.system(size: 15))
                     .foregroundColor(.secondary)
+                
+                Text("+91 \(phone)")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(.blue)
             }
             
             // OTP Input
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    Image(systemName: "lock.shield.fill")
-                        .font(.caption)
-                    Text("One-Time Password")
-                        .font(.subheadline)
-                        .bold()
-                }
-                .foregroundColor(.secondary)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("VERIFICATION CODE")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(.secondary)
+                    .tracking(0.5)
                 
-                TextField("Enter 6-digit OTP", text: $otp)
-                    .keyboardType(.numberPad)
-                    .textContentType(.oneTimeCode)
-                    .multilineTextAlignment(.center)
-                    .font(.system(size: 24, weight: .semibold))
-                    .padding()
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(Color(.systemGray6))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.blue.opacity(0.5), lineWidth: 2)
-                    )
-                    .onChange(of: otp) { newValue in
-                        if newValue.count > 6 {
-                            otp = String(newValue.prefix(6))
+                HStack(spacing: 14) {
+                    Image(systemName: "lock.shield.fill")
+                        .font(.system(size: 20))
+                        .foregroundColor(.blue)
+                        .frame(width: 24)
+                    
+                    TextField("", text: $otp)
+                        .placeholder(when: otp.isEmpty) {
+                            Text("Enter 6-digit code")
+                                .foregroundColor(.secondary.opacity(0.5))
                         }
-                    }
+                        .keyboardType(.numberPad)
+                        .textContentType(.oneTimeCode)
+                        .font(.system(size: 22, weight: .semibold))
+                        .tracking(4)
+                        .multilineTextAlignment(.center)
+                        .onChange(of: otp) { newValue in
+                            if newValue.count > 6 {
+                                otp = String(newValue.prefix(6))
+                            }
+                        }
+                }
+                .padding(.vertical, 18)
+                .padding(.horizontal, 18)
+                .background(Color(.systemGray6))
+                .cornerRadius(14)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(otp.count == 6 ? Color.green : Color.blue.opacity(0.3), lineWidth: 2)
+                )
             }
+            .padding(.horizontal, 28)
             
             // Verify Button
             Button(action: verifyOTP) {
-                HStack {
+                ZStack {
                     if isLoading {
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
                     } else {
-                        Image(systemName: "checkmark.shield.fill")
-                        Text("Verify & Complete")
-                            .fontWeight(.semibold)
+                        HStack(spacing: 10) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 20))
+                            Text("Verify & Complete")
+                                .font(.system(size: 17, weight: .semibold))
+                        }
                     }
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 16)
-                .background(
-                    LinearGradient(
-                        gradient: Gradient(colors: otp.count == 6 && !isLoading ?
-                            [Color(red: 0.05, green: 0.4, blue: 0.95), Color(red: 0.1, green: 0.5, blue: 1.0)] :
-                            [Color.gray, Color.gray]
-                        ),
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
                 .foregroundColor(.white)
-                .cornerRadius(12)
-                .shadow(color: otp.count == 6 && !isLoading ? Color.blue.opacity(0.3) : .clear, radius: 8, x: 0, y: 4)
+                .frame(maxWidth: .infinity)
+                .frame(height: 56)
+                .background(
+                    Group {
+                        if otp.count != 6 || isLoading {
+                            Color.gray.opacity(0.5)
+                        } else {
+                            LinearGradient(
+                                gradient: Gradient(colors: [
+                                    Color(red: 0.05, green: 0.35, blue: 0.85),
+                                    Color(red: 0.1, green: 0.45, blue: 0.95)
+                                ]),
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        }
+                    }
+                )
+                .cornerRadius(16)
+                .shadow(
+                    color: otp.count == 6 && !isLoading ? Color.blue.opacity(0.4) : .clear,
+                    radius: 12,
+                    x: 0,
+                    y: 6
+                )
             }
             .disabled(otp.count != 6 || isLoading)
+            .padding(.horizontal, 28)
             
             // Change Details Button
             Button(action: {
-                withAnimation(.spring()) {
+                withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
                     step = .details
                     otp = ""
                     errorMessage = ""
                 }
             }) {
-                HStack(spacing: 4) {
-                    Image(systemName: "arrow.left")
-                        .font(.caption)
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.counterclockwise")
+                        .font(.system(size: 14, weight: .medium))
                     Text("Change Details")
-                        .fontWeight(.medium)
+                        .font(.system(size: 15, weight: .medium))
                 }
                 .foregroundColor(.blue)
+                .padding(.vertical, 12)
             }
+            
+            Spacer()
+                .frame(height: 20)
         }
     }
     
@@ -433,7 +623,7 @@ struct RegistrationView: View {
         ) { success, message in
             isLoading = false
             if success {
-                withAnimation(.spring()) {
+                withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
                     step = .otp
                 }
             } else {
@@ -454,6 +644,27 @@ struct RegistrationView: View {
                 errorMessage = message
             }
         }
+    }
+}
+
+// Helper for selective corner radius
+extension View {
+    func cornerRadius(_ radius: CGFloat, corners: UIRectCorner) -> some View {
+        clipShape(RoundedCorner(radius: radius, corners: corners))
+    }
+}
+
+struct RoundedCorner: Shape {
+    var radius: CGFloat = .infinity
+    var corners: UIRectCorner = .allCorners
+    
+    func path(in rect: CGRect) -> Path {
+        let path = UIBezierPath(
+            roundedRect: rect,
+            byRoundingCorners: corners,
+            cornerRadii: CGSize(width: radius, height: radius)
+        )
+        return Path(path.cgPath)
     }
 }
 
