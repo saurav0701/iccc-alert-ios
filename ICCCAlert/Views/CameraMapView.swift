@@ -1,7 +1,7 @@
 import SwiftUI
 import MapKit
 
-// MARK: - Camera Map View (Using Enhanced Components)
+// MARK: - Camera Map View (Performance Optimized with Default Area Filter)
 
 struct CameraMapView: View {
     @StateObject private var cameraManager = CameraManager.shared
@@ -10,7 +10,7 @@ struct CameraMapView: View {
     @State private var region: MKCoordinateRegion
     @State private var selectedCamera: Camera? = nil
     @State private var showOnlineOnly = true
-    @State private var selectedArea: String? = nil
+    @State private var selectedArea: String? = nil // Start with first area selected
     @State private var showFullScreenPlayer = false
     @State private var showFilterSheet = false
     @State private var mapStyle: MapDisplayStyle = .hybrid
@@ -22,6 +22,10 @@ struct CameraMapView: View {
             center: CLLocationCoordinate2D(latitude: 23.6102, longitude: 85.2799),
             span: MKCoordinateSpan(latitudeDelta: 2.0, longitudeDelta: 2.0)
         ))
+    }
+    
+    var availableAreas: [String] {
+        Array(Set(cameraManager.cameras.map { $0.area })).sorted()
     }
     
     var filteredCameras: [Camera] {
@@ -42,10 +46,6 @@ struct CameraMapView: View {
             }
             return lat != 0 && lng != 0
         }
-    }
-    
-    var availableAreas: [String] {
-        Array(Set(cameraManager.cameras.map { $0.area })).sorted()
     }
     
     var body: some View {
@@ -70,13 +70,25 @@ struct CameraMapView: View {
                     
                     Spacer()
                     
-                    // Stats Badge
-                    HStack(spacing: 8) {
-                        Image(systemName: "video.fill")
-                            .foregroundColor(.white)
-                        Text("\(filteredCameras.count)")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundColor(.white)
+                    // Stats Badge with Area Info
+                    VStack(spacing: 4) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "video.fill")
+                                .foregroundColor(.white)
+                            Text("\(filteredCameras.count)")
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundColor(.white)
+                        }
+                        
+                        if let area = selectedArea {
+                            Text(area)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(.white.opacity(0.9))
+                        } else {
+                            Text("All Areas")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(.white.opacity(0.9))
+                        }
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
@@ -149,6 +161,10 @@ struct CameraMapView: View {
             }
         }
         .onAppear {
+            // Set first area by default for better performance
+            if selectedArea == nil && !availableAreas.isEmpty {
+                selectedArea = availableAreas.first
+            }
             adjustMapToShowAllCameras()
         }
     }
@@ -200,6 +216,16 @@ struct CameraMapView: View {
     private var filterSheet: some View {
         NavigationView {
             List {
+                Section(header: Text("Performance Tip")) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "info.circle.fill")
+                            .foregroundColor(.blue)
+                        Text("Filter by area for better performance with large camera counts")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
                 Section(header: Text("Camera Status")) {
                     Toggle(isOn: $showOnlineOnly) {
                         HStack(spacing: 8) {
@@ -218,7 +244,17 @@ struct CameraMapView: View {
                         showFilterSheet = false
                     }) {
                         HStack {
-                            Text("All Areas")
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("All Areas")
+                                    .font(.body)
+                                Text("\(cameraManager.cameras.filter { camera in
+                                    guard let lat = Double(camera.latitude),
+                                          let lng = Double(camera.longitude) else { return false }
+                                    return lat != 0 && lng != 0
+                                }.count) cameras")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
                             Spacer()
                             if selectedArea == nil {
                                 Image(systemName: "checkmark")
@@ -226,6 +262,7 @@ struct CameraMapView: View {
                             }
                         }
                     }
+                    .foregroundColor(.primary)
                     
                     ForEach(availableAreas, id: \.self) { area in
                         Button(action: {
@@ -234,7 +271,18 @@ struct CameraMapView: View {
                             showFilterSheet = false
                         }) {
                             HStack {
-                                Text(area)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(area)
+                                        .font(.body)
+                                    let areaCount = cameraManager.getCameras(forArea: area).filter { camera in
+                                        guard let lat = Double(camera.latitude),
+                                              let lng = Double(camera.longitude) else { return false }
+                                        return lat != 0 && lng != 0
+                                    }.count
+                                    Text("\(areaCount) cameras")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
                                 Spacer()
                                 if selectedArea == area {
                                     Image(systemName: "checkmark")

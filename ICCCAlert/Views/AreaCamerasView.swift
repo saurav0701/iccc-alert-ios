@@ -509,15 +509,19 @@ struct CameraThumbnailView: View {
     }
 }
 
-// MARK: - Area Camera Map View
+// MARK: - Area Camera Map View (WITH SETTINGS)
 struct AreaCameraMapView: View {
     let area: String
     @StateObject private var cameraManager = CameraManager.shared
+    @Environment(\.presentationMode) var presentationMode
+    
     @State private var region: MKCoordinateRegion
     @State private var selectedCamera: Camera? = nil
     @State private var showOnlineOnly = true
     @State private var showFullScreenPlayer = false
     @State private var configuration = MapConfiguration()
+    @State private var mapStyle: MapDisplayStyle = .hybrid
+    @State private var showSettings = false
     
     init(area: String) {
         self.area = area
@@ -545,37 +549,52 @@ struct AreaCameraMapView: View {
     
     var body: some View {
         ZStack {
-            // Use EnhancedClusteredMapView instead of EnhancedCameraMapView
             EnhancedClusteredMapView(
                 region: $region,
                 cameras: filteredCameras,
                 selectedCamera: $selectedCamera,
-                mapStyle: .hybrid,
+                mapStyle: mapStyle,
                 configuration: configuration
             )
             .ignoresSafeArea()
             
+            // Top Controls
             VStack {
-                HStack {
+                HStack(spacing: 12) {
                     Spacer()
                     
+                    // Camera Count Badge
                     HStack(spacing: 8) {
                         Image(systemName: "video.fill")
-                            .foregroundColor(.blue)
+                            .foregroundColor(.white)
                         Text("\(filteredCameras.count)")
                             .fontWeight(.bold)
+                            .foregroundColor(.white)
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(Color(.systemBackground).opacity(0.95))
-                    .cornerRadius(20)
-                    .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 2)
+                    .background(
+                        ZStack {
+                            Color.black.opacity(0.4)
+                            BlurView(style: .systemUltraThinMaterialDark)
+                        }
+                    )
+                    .clipShape(Capsule())
+                    .shadow(color: .black.opacity(0.3), radius: 10)
+                    
+                    Spacer()
+                    
+                    // Settings Button
+                    MapControlButton(icon: "gearshape.fill") {
+                        showSettings = true
+                    }
                 }
-                .padding(.horizontal)
+                .padding(.horizontal, 20)
                 .padding(.top, 16)
                 
                 Spacer()
                 
+                // Legend
                 HStack {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 8) {
@@ -610,15 +629,21 @@ struct AreaCameraMapView: View {
                         }
                     }
                     .padding(12)
-                    .background(Color(.systemBackground).opacity(0.95))
-                    .cornerRadius(10)
-                    .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 2)
+                    .background(
+                        ZStack {
+                            Color(.systemBackground).opacity(0.95)
+                            BlurView(style: .systemMaterial)
+                        }
+                    )
+                    .cornerRadius(12)
+                    .shadow(color: .black.opacity(0.15), radius: 10)
                     
                     Spacer()
                 }
                 .padding()
             }
             
+            // Camera Info Card
             if let camera = selectedCamera {
                 VStack {
                     Spacer()
@@ -641,6 +666,9 @@ struct AreaCameraMapView: View {
             }
         }
         .navigationTitle(area)
+        .sheet(isPresented: $showSettings) {
+            mapSettingsSheet
+        }
         .fullScreenCover(isPresented: $showFullScreenPlayer) {
             if let camera = selectedCamera {
                 UnifiedCameraPlayerView(camera: camera)
@@ -648,6 +676,60 @@ struct AreaCameraMapView: View {
         }
         .onAppear {
             adjustMapToShowCameras()
+        }
+    }
+    
+    private var mapSettingsSheet: some View {
+        NavigationView {
+            List {
+                Section(header: Text("Map Style")) {
+                    ForEach(MapDisplayStyle.allCases, id: \.self) { style in
+                        Button(action: { 
+                            withAnimation {
+                                mapStyle = style
+                            }
+                        }) {
+                            HStack {
+                                Image(systemName: style.icon)
+                                Text(style.rawValue)
+                                Spacer()
+                                if mapStyle == style {
+                                    Image(systemName: "checkmark")
+                                        .foregroundColor(.blue)
+                                }
+                            }
+                        }
+                        .foregroundColor(.primary)
+                    }
+                }
+                
+                Section(header: Text("Camera Filter")) {
+                    Toggle("Show Online Only", isOn: $showOnlineOnly)
+                }
+                
+                Section(header: Text("Display Options")) {
+                    Toggle("Show Clustering", isOn: $configuration.showClustering)
+                    Toggle("Animate Markers", isOn: $configuration.animateMarkers)
+                }
+                
+                if configuration.showClustering {
+                    Section(header: Text("Cluster Radius")) {
+                        HStack {
+                            Text("Radius: \(Int(configuration.clusterRadius))px")
+                            Spacer()
+                            Slider(value: $configuration.clusterRadius, in: 30...100, step: 10)
+                                .frame(width: 150)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Map Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { showSettings = false }
+                }
+            }
         }
     }
     
