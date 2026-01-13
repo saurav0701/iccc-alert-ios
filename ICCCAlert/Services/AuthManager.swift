@@ -9,6 +9,10 @@ class AuthManager: ObservableObject {
     
     private let baseURL = "http://103.208.173.227:8890"
     
+    // ✅ FIXED: Configurable timeouts
+    private let requestTimeout: TimeInterval = 30
+    private let resourceTimeout: TimeInterval = 60
+    
     var token: String? {
         return UserDefaults.standard.string(forKey: "auth_token")
     }
@@ -35,32 +39,42 @@ class AuthManager: ObservableObject {
         }
     }
     
+    // ✅ FIXED: Added timeout configuration
+    private func createRequest(url: URL, method: String = "GET") -> URLRequest {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.timeoutInterval = requestTimeout
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        return request
+    }
+    
     func requestOTP(phone: String, completion: @escaping (Bool, String) -> Void) {
         guard let url = URL(string: "\(baseURL)/auth/login/request") else {
             completion(false, "Invalid URL")
             return
         }
         
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var request = createRequest(url: url, method: "POST")
         
         let body = LoginRequest(phone: phone, purpose: "login")
         request.httpBody = try? JSONEncoder().encode(body)
         
         print("📤 Requesting OTP for phone: \(phone)")
         
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
             DispatchQueue.main.async {
+                // ✅ FIXED: Better error handling
                 if let error = error {
-                    print("❌ OTP request error: \(error.localizedDescription)")
-                    completion(false, error.localizedDescription)
+                    let errorMessage = self.handleNetworkError(error)
+                    print("❌ OTP request error: \(errorMessage)")
+                    completion(false, errorMessage)
                     return
                 }
                 
                 guard let httpResponse = response as? HTTPURLResponse else {
                     print("❌ Invalid HTTP response")
-                    completion(false, "Invalid response")
+                    completion(false, "Invalid response from server")
                     return
                 }
                 
@@ -79,10 +93,12 @@ class AuthManager: ObservableObject {
                     }
                 } else {
                     print("❌ Failed to parse OTP response")
-                    completion(false, "Failed to send OTP")
+                    completion(false, "Failed to send OTP. Please try again.")
                 }
             }
-        }.resume()
+        }
+        
+        task.resume()
     }
     
     func verifyOTP(phone: String, otp: String, completion: @escaping (Bool, String) -> Void) {
@@ -91,9 +107,7 @@ class AuthManager: ObservableObject {
             return
         }
         
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var request = createRequest(url: url, method: "POST")
         
         let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? "unknown-ios"
         let body = OTPVerificationRequest(phone: phone, otp: otp, deviceId: deviceId)
@@ -101,11 +115,13 @@ class AuthManager: ObservableObject {
         
         print("📤 Verifying OTP for phone: \(phone)")
         
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
             DispatchQueue.main.async {
+                // ✅ FIXED: Better error handling
                 if let error = error {
-                    print("❌ OTP verify error: \(error.localizedDescription)")
-                    completion(false, error.localizedDescription)
+                    let errorMessage = self.handleNetworkError(error)
+                    print("❌ OTP verify error: \(errorMessage)")
+                    completion(false, errorMessage)
                     return
                 }
                 
@@ -117,7 +133,7 @@ class AuthManager: ObservableObject {
                 
                 guard let httpResponse = response as? HTTPURLResponse else {
                     print("❌ Invalid HTTP response")
-                    completion(false, "Invalid response")
+                    completion(false, "Invalid response from server")
                     return
                 }
                 
@@ -149,7 +165,7 @@ class AuthManager: ObservableObject {
                                     completion(true, "Login successful")
                                 } catch {
                                     print("❌ Decoding error: \(error)")
-                                    completion(false, "Invalid response format: \(error.localizedDescription)")
+                                    completion(false, "Invalid response format. Please try again.")
                                 }
                             } else {
                                 print("❌ Failed to convert dataDict to Data")
@@ -170,23 +186,22 @@ class AuthManager: ObservableObject {
                         completion(false, errorMsg)
                     } else {
                         print("❌ Invalid credentials")
-                        completion(false, "Invalid credentials")
+                        completion(false, "Invalid OTP. Please try again.")
                     }
                 }
             }
-        }.resume()
+        }
+        
+        task.resume()
     }
 
-    
     func registerUser(name: String, phone: String, area: String, designation: String, organisation: String, completion: @escaping (Bool, String) -> Void) {
         guard let url = URL(string: "\(baseURL)/auth/register/request") else {
             completion(false, "Invalid URL")
             return
         }
         
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var request = createRequest(url: url, method: "POST")
         
         let body: [String: String] = [
             "name": name,
@@ -199,16 +214,17 @@ class AuthManager: ObservableObject {
         
         print("📤 Registering user: \(name), phone: \(phone)")
         
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
             DispatchQueue.main.async {
                 if let error = error {
-                    print("❌ Registration error: \(error.localizedDescription)")
-                    completion(false, error.localizedDescription)
+                    let errorMessage = self.handleNetworkError(error)
+                    print("❌ Registration error: \(errorMessage)")
+                    completion(false, errorMessage)
                     return
                 }
                 
                 guard let httpResponse = response as? HTTPURLResponse else {
-                    completion(false, "Invalid response")
+                    completion(false, "Invalid response from server")
                     return
                 }
                 
@@ -227,10 +243,12 @@ class AuthManager: ObservableObject {
                     }
                 } else {
                     print("❌ Failed to parse registration response")
-                    completion(false, "Failed to register")
+                    completion(false, "Registration failed. Please try again.")
                 }
             }
-        }.resume()
+        }
+        
+        task.resume()
     }
     
     func verifyRegistrationOTP(phone: String, otp: String, completion: @escaping (Bool, String) -> Void) {
@@ -239,9 +257,7 @@ class AuthManager: ObservableObject {
             return
         }
         
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var request = createRequest(url: url, method: "POST")
         
         let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? "unknown-ios"
         let body = OTPVerificationRequest(phone: phone, otp: otp, deviceId: deviceId)
@@ -249,11 +265,12 @@ class AuthManager: ObservableObject {
         
         print("📤 Verifying registration OTP for phone: \(phone)")
         
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
             DispatchQueue.main.async {
                 if let error = error {
-                    print("❌ Registration verify error: \(error.localizedDescription)")
-                    completion(false, error.localizedDescription)
+                    let errorMessage = self.handleNetworkError(error)
+                    print("❌ Registration verify error: \(errorMessage)")
+                    completion(false, errorMessage)
                     return
                 }
                 
@@ -263,7 +280,7 @@ class AuthManager: ObservableObject {
                 }
                 
                 guard let httpResponse = response as? HTTPURLResponse else {
-                    completion(false, "Invalid response")
+                    completion(false, "Invalid response from server")
                     return
                 }
                 
@@ -287,11 +304,13 @@ class AuthManager: ObservableObject {
                         print("❌ Registration verify failed: \(errorMsg)")
                         completion(false, errorMsg)
                     } else {
-                        completion(false, "Verification failed")
+                        completion(false, "Verification failed. Please try again.")
                     }
                 }
             }
-        }.resume()
+        }
+        
+        task.resume()
     }
 
     private func saveAuthData(_ response: AuthResponse) {
@@ -325,19 +344,16 @@ class AuthManager: ObservableObject {
         }
     }
     
-    // ✅ FIXED: Logout - disconnect WebSocket, keep all data intact
     func logout(completion: ((Bool) -> Void)? = nil) {
         print("🚪 Logging out...")
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         print("LOGOUT PROCESS:")
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         
-        // Step 1: Save current state
         SubscriptionManager.shared.forceSave()
         ChannelSyncState.shared.forceSave()
         print("✓ Saved current state")
         
-        // Step 2: Log current stats
         let subscriptions = SubscriptionManager.shared.subscribedChannels.count
         let events = SubscriptionManager.shared.getTotalEventCount()
         let saved = SubscriptionManager.shared.getSavedEvents().count
@@ -346,14 +362,11 @@ class AuthManager: ObservableObject {
         print("  - Events: \(events)")
         print("  - Saved messages: \(saved)")
         
-        // Step 3: Disconnect WebSocket (CRITICAL - stops receiving events)
         WebSocketService.shared.disconnect()
         print("✓ WebSocket disconnected")
         
-        // Step 4: Optional backend logout (but keep local data)
         if let token = token, let url = URL(string: "\(baseURL)/auth/logout") {
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
+            var request = createRequest(url: url, method: "POST")
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             
             URLSession.shared.dataTask(with: request) { _, _, _ in
@@ -403,8 +416,7 @@ class AuthManager: ObservableObject {
             return
         }
         
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
+        var request = createRequest(url: url, method: "GET")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         
         URLSession.shared.dataTask(with: request) { data, response, error in
@@ -427,5 +439,24 @@ class AuthManager: ObservableObject {
         isAuthenticated = false
         currentUser = nil
         print("✅ Full logout - token expired, all data cleared")
+    }
+    
+    // ✅ NEW: User-friendly error messages
+    private func handleNetworkError(_ error: Error) -> String {
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .notConnectedToInternet:
+                return "No internet connection. Please check your network and try again."
+            case .timedOut:
+                return "Request timed out. Please check your connection and try again."
+            case .cannotFindHost, .cannotConnectToHost:
+                return "Cannot reach server. Please try again later."
+            case .networkConnectionLost:
+                return "Network connection lost. Please try again."
+            default:
+                return "Network error. Please check your connection and try again."
+            }
+        }
+        return "An error occurred. Please try again."
     }
 }

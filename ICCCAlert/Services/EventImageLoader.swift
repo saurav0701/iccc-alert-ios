@@ -8,9 +8,52 @@ class EventImageLoader {
     // Image cache to avoid repeated downloads
     private var imageCache = NSCache<NSString, UIImage>()
     
+    // ✅ NEW: Memory pressure tracking
+    private var memoryWarningObserver: NSObjectProtocol?
+    private var lowMemoryMode = false
+    
     private init() {
+        setupCache()
+        setupMemoryWarningHandler()
+    }
+    
+    private func setupCache() {
         imageCache.countLimit = 100 // Cache up to 100 images
         imageCache.totalCostLimit = 50 * 1024 * 1024 // 50MB cache limit
+        
+        // ✅ NEW: Set eviction policy
+        imageCache.evictsObjectsWithDiscardedContent = true
+    }
+    
+    // ✅ FIXED: Aggressive memory warning handling
+    private func setupMemoryWarningHandler() {
+        memoryWarningObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            
+            print("⚠️ MEMORY WARNING - Clearing image cache")
+            
+            // Enter low memory mode
+            self.lowMemoryMode = true
+            
+            // Clear all cached images
+            self.imageCache.removeAllObjects()
+            
+            // Reduce cache limits temporarily
+            self.imageCache.countLimit = 20
+            self.imageCache.totalCostLimit = 10 * 1024 * 1024 // 10MB
+            
+            // Reset to normal after 5 minutes
+            DispatchQueue.main.asyncAfter(deadline: .now() + 300) {
+                self.lowMemoryMode = false
+                self.imageCache.countLimit = 100
+                self.imageCache.totalCostLimit = 50 * 1024 * 1024
+                print("✅ Memory pressure relieved - cache limits restored")
+            }
+        }
     }
     
     /// Get the API URL for a specific area
@@ -20,48 +63,34 @@ class EventImageLoader {
             .replacingOccurrences(of: "_", with: "")
         
         switch normalizedArea {
-
-case "sijua", "katras":
-    return "http://a5va.bccliccc.in:10050"
-
-case "kusunda":
-    return "http://a6va.bccliccc.in:5050"
-
-case "bastacolla":
-    return "http://a9va.bccliccc.in:5050"
-
-case "lodna":
-    return "http://a10va.bccliccc.in:5050"
-
-case "govindpur":
-    return "http://103.208.173.163:5050"
-
-case "barora":
-    return "http://103.208.173.131:5050"
-
-case "block2":
-    return "http://103.208.173.147:5050"
-
-case "pbarea":
-    return "http://103.208.173.195:5050"
-
-case "wjarea":
-    return "http://103.208.173.211:5050"
-
-case "ccwo":
-    return "http://103.208.173.179:5050"
-
-case "cvarea":
-    return "http://103.210.88.211:5050"
-
-case "ej":
-    return "http://103.210.88.194:5050"
-
-default:
-    print("⚠️ Unknown area: \(area), using Barora as default")
-    return "http://103.208.173.131:5050"
-}
-
+        case "sijua", "katras":
+            return "http://a5va.bccliccc.in:10050"
+        case "kusunda":
+            return "http://a6va.bccliccc.in:5050"
+        case "bastacolla":
+            return "http://a9va.bccliccc.in:5050"
+        case "lodna":
+            return "http://a10va.bccliccc.in:5050"
+        case "govindpur":
+            return "http://103.208.173.163:5050"
+        case "barora":
+            return "http://103.208.173.131:5050"
+        case "block2":
+            return "http://103.208.173.147:5050"
+        case "pbarea":
+            return "http://103.208.173.195:5050"
+        case "wjarea":
+            return "http://103.208.173.211:5050"
+        case "ccwo":
+            return "http://103.208.173.179:5050"
+        case "cvarea":
+            return "http://103.210.88.211:5050"
+        case "ej":
+            return "http://103.210.88.194:5050"
+        default:
+            print("⚠️ Unknown area: \(area), using Barora as default")
+            return "http://103.208.173.131:5050"
+        }
     }
     
     /// Build the full image URL for an event
@@ -92,28 +121,84 @@ default:
         
         print("🖼️ Loading image from: \(imageUrl)")
         
-        // Download image
-        let (data, response) = try await URLSession.shared.data(from: url)
+        // ✅ FIXED: Configure URLSession with timeout
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForResource = 60
+        configuration.requestCachePolicy = .returnCacheDataElseLoad
         
-        // Check HTTP response
-        if let httpResponse = response as? HTTPURLResponse {
-            print("📥 Image response status: \(httpResponse.statusCode)")
+        let session = URLSession(configuration: configuration)
+        
+        do {
+            // Download image with timeout
+            let (data, response) = try await session.data(from: url)
             
-            guard (200...299).contains(httpResponse.statusCode) else {
-                throw ImageLoadError.httpError(httpResponse.statusCode)
+            // Check HTTP response
+            if let httpResponse = response as? HTTPURLResponse {
+                print("📥 Image response status: \(httpResponse.statusCode)")
+                
+                guard (200...299).contains(httpResponse.statusCode) else {
+                    throw ImageLoadError.httpError(httpResponse.statusCode)
+                }
             }
+            
+            // Decode image
+            guard let image = UIImage(data: data) else {
+                throw ImageLoadError.invalidImageData
+            }
+            
+            // ✅ NEW: Compress large images to save memory
+            let optimizedImage = optimizeImage(image)
+            
+            // Cache the image only if not in low memory mode
+            if !lowMemoryMode {
+                // Calculate image size for cache cost
+                let cost = data.count
+                imageCache.setObject(optimizedImage, forKey: cacheKey, cost: cost)
+            } else {
+                print("⚠️ Low memory mode - skipping cache")
+            }
+            
+            print("✅ Image loaded successfully for event: \(eventId)")
+            return optimizedImage
+            
+        } catch let error as URLError {
+            // Handle specific URL errors
+            if error.code == .timedOut {
+                throw ImageLoadError.timeout
+            } else if error.code == .notConnectedToInternet {
+                throw ImageLoadError.noInternet
+            } else {
+                throw ImageLoadError.networkError(error.localizedDescription)
+            }
+        } catch {
+            throw error
+        }
+    }
+    
+    // ✅ NEW: Optimize images to reduce memory usage
+    private func optimizeImage(_ image: UIImage) -> UIImage {
+        // If image is already small, return as-is
+        let maxDimension: CGFloat = 1920
+        let size = image.size
+        
+        if size.width <= maxDimension && size.height <= maxDimension {
+            return image
         }
         
-        // Decode image
-        guard let image = UIImage(data: data) else {
-            throw ImageLoadError.invalidImageData
-        }
+        // Calculate new size maintaining aspect ratio
+        let scale = min(maxDimension / size.width, maxDimension / size.height)
+        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
         
-        // Cache the image
-        imageCache.setObject(image, forKey: cacheKey)
+        // Resize image
+        UIGraphicsBeginImageContextWithOptions(newSize, false, 1.0)
+        image.draw(in: CGRect(origin: .zero, size: newSize))
+        let resizedImage = UIGraphicsGetImageFromCurrentImageContext() ?? image
+        UIGraphicsEndImageContext()
         
-        print("✅ Image loaded successfully for event: \(eventId)")
-        return image
+        print("📐 Optimized image from \(size.width)x\(size.height) to \(newSize.width)x\(newSize.height)")
+        
+        return resizedImage
     }
     
     /// Load image with completion handler (for non-async code)
@@ -142,6 +227,17 @@ default:
         let cacheKey = "\(area)_\(eventId)" as NSString
         return imageCache.object(forKey: cacheKey)
     }
+    
+    /// Get cache statistics
+    func getCacheStats() -> (count: Int, totalCost: Int) {
+        return (imageCache.countLimit, imageCache.totalCostLimit)
+    }
+    
+    deinit {
+        if let observer = memoryWarningObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
 }
 
 // MARK: - Image Load Errors
@@ -151,6 +247,9 @@ enum ImageLoadError: LocalizedError {
     case invalidURL(String)
     case httpError(Int)
     case invalidImageData
+    case timeout
+    case noInternet
+    case networkError(String)
     
     var errorDescription: String? {
         switch self {
@@ -159,9 +258,15 @@ enum ImageLoadError: LocalizedError {
         case .invalidURL(let url):
             return "Invalid image URL: \(url)"
         case .httpError(let code):
-            return "HTTP error: \(code)"
+            return "Server error: \(code)"
         case .invalidImageData:
             return "Failed to decode image data"
+        case .timeout:
+            return "Request timed out. Please check your connection."
+        case .noInternet:
+            return "No internet connection. Please check your network."
+        case .networkError(let message):
+            return "Network error: \(message)"
         }
     }
 }
@@ -200,10 +305,12 @@ struct CachedEventImage: View {
                             .font(.system(size: 40))
                             .foregroundColor(.gray)
                         
-                        if let error = error {
-                            Text("Failed to load")
+                        if let error = error as? ImageLoadError {
+                            Text(error.errorDescription ?? "Failed to load")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 8)
                         } else {
                             Text("Image unavailable")
                                 .font(.caption)
@@ -236,4 +343,3 @@ struct CachedEventImage: View {
         }
     }
 }
-
